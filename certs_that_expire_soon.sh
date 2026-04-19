@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Usage: pems_that_will_expire_soon.sh [#months]
+# Usage: certs_that_expire_soon.sh [#months]
 
 EXPMONTHS_DEFAULT=${EXPMONTHS_DEFAULT:-6}
 EXPMONTHS=${EXPMONTHS:-${EXPMONTHS_DEFAULT}}

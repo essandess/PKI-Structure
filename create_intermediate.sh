@@ -94,3 +94,17 @@ openssl pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
 # verify .p12 passphrase
 openssl pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
 	-passin file:"${CERTDIR}"/private/passphrase.txt
+
+# copy certificate with SHA1 name
+CERTSHA1=$(openssl x509 -noout -fingerprint -sha1 -inform pem \
+		   -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
+	       | sed -e 's|^sha1 Fingerprint=||' \
+	       | sed -e 's|:||g' \
+	       | tr '[:upper:]' '[:lower:]' \
+	)
+
+cp "${CERTDIR}"/private/{"${CERTNAME}","${CERTNAME}"."${CERTSHA1}"}.key.pem
+cp "${CERTDIR}"/certs/{"${CERTNAME}","${CERTNAME}"."${CERTSHA1}"}.cert.pem
+cp "${CERTDIR}"/certs/{"${CERTNAME}","${CERTNAME}"."${CERTSHA1}"}.chain.pem
+cp "${CERTDIR}"/certs/{"${CERTNAME}","${CERTNAME}"."${CERTSHA1}"}.cer
+cp "${CERTDIR}"/private/{"${CERTNAME}","${CERTNAME}"."${CERTSHA1}"}.p12

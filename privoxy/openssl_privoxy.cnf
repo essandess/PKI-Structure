@@ -26,12 +26,12 @@ serial            = $dir/serial
 RANDFILE          = $dir/private/.rand
 
 # The root key and root certificate.
-private_key       = $dir/private/ca.key.pem
-certificate       = $dir/certs/ca.cert.pem
+private_key       = $dir/private/privoxy.key.pem
+certificate       = $dir/certs/privoxy.cert.pem
 
 # For certificate revocation lists.
 crlnumber         = $dir/crlnumber
-crl               = $dir/crl/ca.crl.pem
+crl               = $dir/crl/privoxy.crl.pem
 crl_extensions    = crl_ext
 default_crl_days  = 30
 

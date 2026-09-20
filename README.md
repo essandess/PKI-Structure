@@ -13,7 +13,12 @@ The products of the scripts are X509 certificates and keys in both
 CER, PEM, and PKCS12 formats. All keys are passphrase protected.
 
 The branding must be modified for specific PKI deployments using
-the file `identity.env`.
+the file `identity.env`. To copy PKI-Structure into another directory,
+exluding organization-specific `identity.env` and
+`create_organization_smime_pki.sh`:
+```
+rsync -av --exclude='.git/' --exclude='*.env' --exclude='create_organization_smime_pki.sh' --include='*/' --include='*.sh' --include='*.cnf' --include='*.md' --include='LICENSE' --exclude='*' ~/Documents/Source/github/essandess/PKI-Structure/ ./
+```
 
 To create the entire PKI structure:
 ```sh

@@ -1,11 +1,11 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # create_smime.sh
 
 ORGANIZATION=${ORGANIZATION:-MyOrganization}
 
-# 4 years plus leap days
-DAYS=1463
+# 3 years and a month
+DAYS=1126
 
 CATRUE=${CATRUE:-0}
 CERTDIR=${CERTDIR:-smime}
@@ -13,15 +13,32 @@ CERTNAME=${CERTNAME:-}
 ISSUERCADIR=${ISSUERCADIR:-intermediate}
 ISSUERCANAME=${ISSUERCANAME:-intermediate}
 
+EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
+RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-3072}
+
 POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-EMAIL CERTNAME}
 
 . pki_structure.sh
 
+if [ "$#" -ne 2 ]; then
+    echo "Error: expected 2 arguments (EMAIL CERTNAME), got $#." >&2
+    echo "Usage: $(basename "$0") [-a|--algorithm EC|RSA] [-c|--clean|-vc|--veryclean] EMAIL CERTNAME" >&2
+    echo "To regenerate all S/MIME certificates: $0 -vc && ./create_organization_smime_pki.sh" >&2
+    exit 1
+fi
 EMAIL="$1"
-shift
+CERTNAME="$2"
 
-CERTNAME="$1"
-shift
+# pki_structure.sh checked this before CERTNAME was known, so check it here
+for EXTENSION in signature encryption; do
+    for f in "${CERTDIR}/private/${CERTNAME}-${EXTENSION}.key.pem" \
+             "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem"; do
+        if [ -f "${f}" ]; then
+            echo "Error: '${f}' already exists. Clean first with: $0 -vc" >&2
+            exit 1
+        fi
+    done
+done
 
 for EXTENSION in signature encryption; do
     # Certificate encrypted key
@@ -54,7 +71,7 @@ for EXTENSION in signature encryption; do
 		-in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem \
 		-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
 		-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
-		-subj "/CN=${EMAIL} - ${EXTENSION}/emailAddress=${EMAIL}/O=${ORGANIZATION}/OU=${ORGANIZATION} S\\/MIME/L=Boston/ST=Massachusetts/C=US" \
+		-subj "/CN=${EMAIL} - ${EXTENSION}/emailAddress=${EMAIL}/O=${ORGANIZATION}/OU=${ORGANIZATION} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
 		-batch
     then
 	rm "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem

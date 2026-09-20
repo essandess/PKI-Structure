@@ -12,12 +12,8 @@ certificates for `privoxy` and `adblock2privoxy`.
 The products of the scripts are X509 certificates and keys in both
 CER, PEM, and PKCS12 formats. All keys are passphrase protected.
 
-The files must of course be modified for specific PKI deployments. An example
-workflow to accomplish this is:
-```sh
-find . -type f \( -name '*.sh' -o -name '*.cnf' \) -exec egrep -E -l -i -e 'myorganization' {} ';'
-find . -type f \( -name '*.sh' -o -name '*.cnf' \) -exec egrep -E -l -i -e 'myorganization' {} ';' | xargs sed -E -i '' 's|myorganization(\.org)?|NewOrganization|ig'
-```
+The branding must be modified for specific PKI deployments using
+the file `identity.env`.
 
 To create the entire PKI structure:
 ```sh
@@ -26,13 +22,6 @@ sh README.md
 PKI_STRUCTURE
 
 # PKI Structure
-
-printf "These files must be modified to a specific MyOrganization,\nhostname.myorganization.org, etc."
-find . -type f \( -name '*.sh' -o -name '*.cnf' \) -exec egrep -E -l -i -e 'myorganization' {} ';'
-
-# Replacement command:
-# find . -type f \( -name '*.sh' -o -name '*.cnf' \) -exec egrep -E -l -i -e 'myorganization' {} ';' | xargs sed -E -i -e 's|myorganization(\.org)?|NewOrganization|ig'
-
 
 # Set the variable CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY
 export CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1

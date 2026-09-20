@@ -119,6 +119,7 @@
 # Client certificate of the forms
 # @host@.@domain@.@tld@.@CERTIFICATE_SHA1@.{cert,key,chain}.pem
 
+.include ./common_policy.cnf
 
 [ca]
 default_ca        = CA_default
@@ -156,29 +157,7 @@ policy            = policy_strict
 # allow issuing multiple certificates with the same CN 
 unique_subject = no
 
-[ policy_strict ]
-# The root CA should only sign intermediate certificates that match.
-# See the POLICY FORMAT section of `man ca`.
-countryName             = match
-stateOrProvinceName     = match
-localityName            = match
-organizationName        = match
-organizationalUnitName  = optional
-commonName              = supplied
-emailAddress            = optional
-
-[ policy_loose ]
-# Allow the intermediate CA to sign a more diverse range of certificates.
-# See the POLICY FORMAT section of the `ca` man page.
-countryName             = optional
-stateOrProvinceName     = optional
-localityName            = optional
-organizationName        = optional
-organizationalUnitName  = optional
-commonName              = optional
-emailAddress            = optional
-
-[ req ]
+[req]
 # Options for the `req` tool (`man req`).
 default_bits        = 4096
 distinguished_name  = req_distinguished_name
@@ -192,22 +171,22 @@ x509_extensions     = v3_ca
 
 [ req_distinguished_name ]
 # See <https://en.wikipedia.org/wiki/Certificate_signing_request>.
-countryName                     = US
-stateOrProvinceName             = Massachusetts
-localityName                    = Boston
-organizationName                = MyOrganization
-organizationalUnitName          = MyOrganization Certification Authority
-commonName                      = MyOrganization Root CA
-emailAddress                    = admin@myorganization.org
+countryName                     = $ENV::ORG_COUNTRY
+stateOrProvinceName             = $ENV::ORG_STATE
+localityName                    = $ENV::ORG_LOCALITY
+organizationName                = $ENV::ORG_NAME
+organizationalUnitName          = $ENV::ORG_NAME Certification Authority
+commonName                      = $ENV::ORG_NAME Root CA
+emailAddress                    = $ENV::ORG_EMAIL
 
 # Optionally, specify some defaults.
-countryName_default             = US
-stateOrProvinceName_default     = Massachusetts
-localityName_default            = Boston
-organizationName_default        = MyOrganization
-organizationalUnitName_default  = MyOrganization Certification Authority
-commonName_default              = MyOrganization Root CA
-emailAddress_default            = admin@myorganization.org
+countryName_default             = $ENV::ORG_COUNTRY
+stateOrProvinceName_default     = $ENV::ORG_STATE
+localityName_default            = $ENV::ORG_LOCALITY
+organizationName_default        = $ENV::ORG_NAME
+organizationalUnitName_default  = $ENV::ORG_NAME Certification Authority
+commonName_default              = $ENV::ORG_NAME Root CA
+emailAddress_default            = $ENV::ORG_EMAIL
 
 [ v3_ca ]
 # Extensions for a typical CA (`man x509v3_config`).
@@ -220,8 +199,10 @@ keyUsage = critical, digitalSignature, cRLSign, keyCertSign
 # Extensions for a typical intermediate CA (`man x509v3_config`).
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
-basicConstraints = critical, CA:true, pathlen:1
-keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+#basicConstraints = critical, CA:true, pathlen:1
+#keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+basicConstraints = critical, CA:true, pathlen:0
+keyUsage = critical, cRLSign, keyCertSign
 
 [ usr_cert ]
 # Extensions for client certificates (`man x509v3_config`).

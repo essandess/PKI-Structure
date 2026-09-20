@@ -12,6 +12,8 @@
 # commonName                      = MacPorts Intermediate CA Surrogate
 # commonName_default              = MacPorts Intermediate CA Surrogate
 
+.include ./common_policy.cnf
+
 [ca]
 default_ca        = CA_default
 
@@ -30,7 +32,7 @@ private_key       = $dir/private/intermediate.key.pem
 certificate       = $dir/certs/intermediate.cert.pem
 
 # For certificate revocation lists.
-crlnumber         = $dir/crlnumber_intermediate
+crlnumber         = $dir/crlnumber
 crl               = $dir/crl/intermediate.crl.pem
 crl_extensions    = crl_ext
 default_crl_days  = 30
@@ -40,37 +42,15 @@ default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-# 12 years less a day
-default_days      = 4379
+# https://support.apple.com/en-us/HT210176
+default_days      = 825
 preserve          = no
 policy            = policy_loose
 
 # allow issuing multiple certificates with the same CN 
 unique_subject = no
 
-[ policy_strict ]
-# The root CA should only sign intermediate certificates that match.
-# See the POLICY FORMAT section of `man ca`.
-countryName             = match
-stateOrProvinceName     = match
-localityName            = match
-organizationName        = match
-organizationalUnitName  = optional
-commonName              = supplied
-emailAddress            = optional
-
-[ policy_loose ]
-# Allow the intermediate CA to sign a more diverse range of certificates.
-# See the POLICY FORMAT section of the `ca` man page.
-countryName             = optional
-stateOrProvinceName     = optional
-localityName            = optional
-organizationName        = optional
-organizationalUnitName  = optional
-commonName              = optional
-emailAddress            = optional
-
-[ req ]
+[req]
 # Options for the `req` tool (`man req`).
 default_bits        = 4096
 distinguished_name  = req_distinguished_name
@@ -84,22 +64,22 @@ x509_extensions     = v3_ca
 
 [ req_distinguished_name ]
 # See <https://en.wikipedia.org/wiki/Certificate_signing_request>.
-countryName                     = US
-stateOrProvinceName             = Massachusetts
-localityName                    = Boston
-organizationName                = MyOrganization
-organizationalUnitName          = MyOrganization Server Certificate
-commonName                      = MyOrganization
-emailAddress                    = admin@myorganization.org
+countryName                     = $ENV::ORG_COUNTRY
+stateOrProvinceName             = $ENV::ORG_STATE
+localityName                    = $ENV::ORG_LOCALITY
+organizationName                = $ENV::ORG_NAME
+organizationalUnitName          = $ENV::ORG_NAME Server Certificate
+commonName                      = $ENV::SERVER_FQDN
+emailAddress                    = $ENV::ORG_EMAIL
 
 # Optionally, specify some defaults.
-countryName_default             = US
-stateOrProvinceName_default     = Massachusetts
-localityName_default            = Boston
-organizationName_default        = MyOrganization
-organizationalUnitName_default  = MyOrganization Server Certificate
-commonName_default              = hostname.myorganization.org
-emailAddress_default            = admin@myorganization.org
+countryName_default             = $ENV::ORG_COUNTRY
+stateOrProvinceName_default     = $ENV::ORG_STATE
+localityName_default            = $ENV::ORG_LOCALITY
+organizationName_default        = $ENV::ORG_NAME
+organizationalUnitName_default  = $ENV::ORG_NAME Server Certificate
+commonName_default              = $ENV::SERVER_FQDN
+emailAddress_default            = $ENV::ORG_EMAIL
 
 [ v3_ca ]
 # Extensions for a typical CA (`man x509v3_config`).

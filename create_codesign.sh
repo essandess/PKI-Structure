@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # create_codesign.sh
 
@@ -10,6 +10,8 @@ CERTDIR=${CERTDIR:-codesign}
 CERTNAME=${CERTNAME:-${CERTDIR}}
 ISSUERCADIR=${ISSUERCADIR:-intermediate}
 ISSUERCANAME=${ISSUERCANAME:-intermediate}
+
+ALGORITHM=${ALGORITHM:-EC}
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
 RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-2048}
 

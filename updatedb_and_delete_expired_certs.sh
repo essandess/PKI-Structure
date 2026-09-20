@@ -1,6 +1,8 @@
-#!/usr/bin/env bash -x
+#!/usr/bin/env bash
 
 # Usage: updatedb_and_delete_expired_certs.sh
+
+set -x
 
 POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-}
 POSITIONAL_ARGS=()

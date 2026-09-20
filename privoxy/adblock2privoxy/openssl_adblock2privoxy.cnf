@@ -8,95 +8,7 @@
 # CA
 ##################
 
-# Privoxy Root CA
-
-# mkdir certs && cd certs
-# touch index.txt
-# echo 1000 > serial
-
-# CA certificate encrypted key passphrase, both -passin and -passout
-# sf-pwgen --algorithm memorable --count 2 --length 24 2>/dev/null | paste -s -d -- '-' \
-#     1>passphrase.txt || true
-# if [ $(head -1 passphrase.txt | wc -c) < 20 ]; then openssl rand -base64 23 1>passphrase.txt 2>/dev/null; fi
-# cat passphrase.txt passphrase.txt > passphrase-dbl.txt \
-#     && mv passphrase-dbl.txt passphrase.txt \
-#     || rm -f passphrase-dbl.txt
-# chmod go-rwx passphrase.txt
-
-# CA encrypted key
-# EC
-# openssl genpkey -out ca.key.pem -algorithm EC \
-#     -pkeyopt ec_paramgen_curve:${EC_PARAMGEN_CURVE} -aes256 \
-#     -pass file:passphrase.txt
-#
-# RSA
-# # openssl genpkey -out ca.key.pem -algorithm RSA \
-# #     -pkeyopt rsa_keygen_bits:${RSA_KEYGEN_BITS} -aes256 \
-# #     -pass file:passphrase.txt
-
-# CA certificate
-# openssl req -config openssl.cnf \
-#     -new -x509 -days 3650 -${HASH_DIGEST} -extensions v3_ca -out certs/ca.cert.pem \
-#     -key ca.key.pem -passin file:passphrase.txt -batch
-
-# CA certificate text verification
-# openssl x509 -text -noout -in ca.cert.pem
-
-# CA certificate openssl self-verification
-# openssl verify -CAfile ca.cert.pem ca.cert.pem
-
-# CA convert to PKCS12
-# Note: `man openssl`: "If the same pathname
-#     argument is supplied to -passin and -passout arguments then the
-#     first line will be used for the input password and the next line
-#     for the output password."
-# openssl pkcs12 -export -out ca.p12 \
-#     -inkey ca.key.pem -in ca.cert.pem \
-#     -passin file:passphrase.txt \
-#     -passout file:passphrase.txt
-# verify .p12 passphrase
-# openssl pkcs12 -noout -in ca.p12 -passin file:passphrase.txt
-
-######################
-# Server certificates
-######################
-
-# Clean and prepare directory for new certificates
-# rm serial* 01.pem index.txt ; echo 01 > serial ; touch index.txt
-
-# Server certificate encrypted key and decrypted key
-# openssl genpkey -out adblock2privoxy-nginx.key.pem \
-#     -algorithm EC -pkeyopt ec_paramgen_curve:${EC_PARAMGEN_CURVE} -aes256 \
-#     -pass file:passphrase.txt
-# openssl ec -in adblock2privoxy-nginx.key.pem -passin file:passphrase.txt \
-#     -out adblock2privoxy-nginx.key.pem.decrypted
-# chmod go-rwx adblock2privoxy-nginx.key.pem.decrypted
-
-# Server certificate CSR
-# openssl req -config openssl.cnf -new -${HASH_DIGEST} \
-#     -key adblock2privoxy-nginx.key.pem -passin file:passphrase.txt \
-#     -out adblock2privoxy-nginx.csr.pem -batch
-
-# Server certificate (825 days maximum validity)
-# https://support.apple.com/en-us/HT210176
-# openssl ca -config openssl.cnf -days 825 -notext -md ${HASH_DIGEST} \
-#     -extensions server_cert -in adblock2privoxy-nginx.csr.pem \
-#     -out adblock2privoxy-nginx.cert.pem -passin file:passphrase.txt \
-#     -subj '/CN=adblock2privoxy-nginx' -batch
-
-# Server certificate chain of trust
-# cat adblock2privoxy-nginx.cert.pem ca.cert.pem > adblock2privoxy-nginx.chain.pem
-
-# Server certificate text
-# openssl x509 -in adblock2privoxy-nginx.cert.pem -text -noout
-
-# Server certificate and chain validity
-# openssl verify -CAfile ca.cert.pem adblock2privoxy-nginx.cert.pem
-# openssl verify -CAfile ca.cert.pem adblock2privoxy-nginx.chain.pem
-
-# DH params
-# openssl dhparam -out dhparam.pem 2048
-
+.include ./common_policy.cnf
 
 [ca]
 default_ca        = CA_default
@@ -130,27 +42,8 @@ default_days      = 825
 preserve          = no
 policy            = policy_strict
 
-[ policy_strict ]
-# The root CA should only sign intermediate certificates that match.
-# See the POLICY FORMAT section of `man ca`.
-countryName             = match
-stateOrProvinceName     = match
-localityName            = match
-organizationName        = match
-organizationalUnitName  = optional
-commonName              = supplied
-emailAddress            = optional
-
-[ policy_loose ]
-# Allow the intermediate CA to sign a more diverse range of certificates.
-# See the POLICY FORMAT section of the `ca` man page.
-countryName             = optional
-stateOrProvinceName     = optional
-localityName            = optional
-organizationName        = optional
-organizationalUnitName  = optional
-commonName              = optional
-emailAddress            = optional
+# allow issuing multiple certificates with the same CN
+unique_subject = no
 
 [req]
 # Options for the `req` tool (`man req`).
@@ -163,21 +56,21 @@ string_mask         = utf8only
 default_md          = sha256
 
 [req_distinguished_name]
-countryName = US
-countryName_default = US
+countryName = $ENV::ORG_COUNTRY
+countryName_default = $ENV::ORG_COUNTRY
 countryName_min = 2
 countryName_max = 2
-stateOrProvinceName = Massachusetts
-stateOrProvinceName_default = Massachusetts
-localityName = Boston
-localityName_default = Boston
-organizationName = MyOrganization
-organizationName_default = MyOrganization
+stateOrProvinceName = $ENV::ORG_STATE
+stateOrProvinceName_default = $ENV::ORG_STATE
+localityName = $ENV::ORG_LOCALITY
+localityName_default = $ENV::ORG_LOCALITY
+organizationName = $ENV::ORG_NAME
+organizationName_default = $ENV::ORG_NAME
 organizationalUnitName = adblock2privoxy-nginx
 commonName = adblock2privoxy-nginx
 commonName_default = adblock2privoxy-nginx
 commonName_max = 64
-emailAddress = admin@myorganization.org
+emailAddress = $ENV::ORG_EMAIL
 emailAddress_max = 40
 
 [ v3_ca ]

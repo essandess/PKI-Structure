@@ -1,10 +1,14 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # create_ca.sh
 
 CATRUE=${CATRUE:-1}
 CERTDIR=${CERTDIR:-ca}
 CERTNAME=${CERTNAME:-ca}
+
+ALGORITHM=${ALGORITHM:-EC}
+EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-384}
+RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-3072}
 
 . pki_structure.sh
 

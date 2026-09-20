@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # create_adblock2privoxy.sh
 
@@ -13,6 +13,7 @@ CERTNAME=${CERTNAME:-${SERVERFQDN}}
 ISSUERCADIR=${ISSUERCADIR:-privoxy}
 ISSUERCANAME=${ISSUERCANAME:-privoxy}
 
+ALGORITHM=${ALGORITHM:-EC}
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
 HASH_DIGEST=${HASH_DIGEST:-sha256}
 

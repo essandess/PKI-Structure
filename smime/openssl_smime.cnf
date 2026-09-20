@@ -12,6 +12,8 @@
 # commonName                      = MacPorts Intermediate CA Surrogate
 # commonName_default              = MacPorts Intermediate CA Surrogate
 
+.include ./common_policy.cnf
+
 [ca]
 default_ca        = CA_default
 
@@ -31,7 +33,7 @@ certificate       = $dir/certs/$dir.cert.pem
 
 # For certificate revocation lists.
 crlnumber         = $dir/crlnumber
-crl               = $dir/crl/ca.crl.pem
+crl               = $dir/crl/intermediate.crl.pem
 crl_extensions    = crl_ext
 default_crl_days  = 30
 
@@ -40,34 +42,13 @@ default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-default_days      = 1096
+# 3 years and a month
+default_days      = 1126
 preserve          = no
 policy            = policy_strict
 
 # allow issuing multiple certificates with the same CN 
 unique_subject = no
-
-[ policy_strict ]
-# The root CA should only sign intermediate certificates that match.
-# See the POLICY FORMAT section of `man ca`.
-countryName             = match
-stateOrProvinceName     = match
-localityName            = match
-organizationName        = match
-organizationalUnitName  = optional
-commonName              = supplied
-emailAddress            = optional
-
-[ policy_loose ]
-# Allow the intermediate CA to sign a more diverse range of certificates.
-# See the POLICY FORMAT section of the `ca` man page.
-countryName             = optional
-stateOrProvinceName     = optional
-localityName            = optional
-organizationName        = optional
-organizationalUnitName  = optional
-commonName              = optional
-emailAddress            = optional
 
 [req]
 # Options for the `req` tool (`man req`).
@@ -79,22 +60,23 @@ string_mask         = utf8only
 # SHA-1 is deprecated, so use SHA-2 instead.
 default_md          = sha256
 
+# note: these settings are overridden in the script create_smime.sh
 [req_distinguished_name]
-countryName = US
-countryName_default = US
+countryName = $ENV::ORG_COUNTRY
+countryName_default = $ENV::ORG_COUNTRY
 countryName_min = 2
 countryName_max = 2
-stateOrProvinceName = Massachusetts
-stateOrProvinceName_default = Massachusetts
-localityName = Boston
-localityName_default = Boston
-0.organizationName = MyOrganization
-0.organizationName_default = MyOrganization
-organizationalUnitName = MyOrganization S/MIME
-commonName = MyOrganization Intermediate CA for S/MIME
-commonName_default = MyOrganization Intermediate CA for S/MIME
+stateOrProvinceName = $ENV::ORG_STATE
+stateOrProvinceName_default = $ENV::ORG_STATE
+localityName = $ENV::ORG_LOCALITY
+localityName_default = $ENV::ORG_LOCALITY
+organizationName = $ENV::ORG_NAME
+organizationName_default = $ENV::ORG_NAME S/MIME
+organizationalUnitName = $ENV::ORG_NAME S/MIME
+commonName = $ENV::ORG_NAME S/MIME
+commonName_default = $ENV::ORG_NAME S/MIME
 commonName_max = 64
-emailAddress = admin@myorganization.org
+emailAddress = $ENV::ORG_EMAIL
 emailAddress_max = 40
 
 [ v3_ca ]

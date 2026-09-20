@@ -1,9 +1,12 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
 # pki_structure.sh
 
 # exit when any command fails
 set -e
+
+set -E   # make the ERR trap fire inside functions and subshells
+trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 shopt -s nullglob
 shopt -s nocasematch
@@ -20,6 +23,8 @@ export CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1
 CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY
     exit 1    
 fi
+
+. ./identity.env
 
 CATRUE=${CATRUE:-1}
 CERTDIR=${CERTDIR:-ca}
@@ -130,6 +135,7 @@ if [ "${CLEAN}" == "1" ]; then
     read -p "This will delete existing keys and certificates in '${CERTDIR}'. Are you sure [y/N]? " -r
     echo    # (optional) move to a new line
     if [[ ! "${REPLY}" =~ ^[y]$ ]]; then
+        echo "Aborted." >&2
 	exit 1
     fi
     for f in \
@@ -155,6 +161,7 @@ if [ "${CLEAN}" == "1" ]; then
 	read -p "This will delete the existing passphrase in '${CERTDIR}'. Are you sure [y/N]? " -r
 	echo    # (optional) move to a new line
 	if [[ ! "${REPLY}" =~ ^[y]$ ]]; then
+            echo "Aborted." >&2
 	    exit 1
 	fi
 	for f in \
@@ -223,11 +230,11 @@ for f in "${CERTDIR}"/private/passphrase.txt; do
 		idx=$(( ${idx} + 1 ))
 	    done
 	else
-	    passphrase=$(openssl rand -base64 20 | cut -c 1-24)
+	    newpassphrase=$(openssl rand -base64 20 | cut -c 1-24)
 	fi
 	touch "${f}"
 	chmod go-rwx "${f}"
-	yes "${newpassphrase}" | head -n 2 > "${f}"
+	yes "${newpassphrase:-$passphrase}" | head -n 2 > "${f}"
     fi
 done
 if ! [ "${CATRUE}" == "0" ]; then

@@ -2,8 +2,8 @@
 
 # create_codesign.sh
 
-# https://support.apple.com/en-us/HT210176
-DAYS=825
+# 6 years, same as intermediate cert
+DAYS=2191
 
 CATRUE=${CATRUE:-0}
 CERTDIR=${CERTDIR:-codesign}

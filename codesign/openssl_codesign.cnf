@@ -42,8 +42,8 @@ default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-# 12 years less a day
-default_days      = 4379
+# 6 years, same as intermediate cert
+default_days      = 2191
 preserve          = no
 policy            = policy_loose
 
@@ -69,7 +69,7 @@ stateOrProvinceName             = $ENV::ORG_STATE
 localityName                    = $ENV::ORG_LOCALITY
 organizationName                = $ENV::ORG_NAME
 organizationalUnitName          = $ENV::ORG_NAME Code Signing
-commonName                      = $ENV::SERVER_FQDN Code Signing Certificate
+commonName                      = $ENV::SERVER_FQDN
 emailAddress                    = $ENV::ORG_EMAIL
 
 # Optionally, specify some defaults.
@@ -78,7 +78,7 @@ stateOrProvinceName_default     = $ENV::ORG_STATE
 localityName_default            = $ENV::ORG_LOCALITY
 organizationName_default        = $ENV::ORG_NAME
 organizationalUnitName_default  = $ENV::ORG_NAME Code Signing
-commonName_default              = $ENV::SERVER_FQDN Code Signing Certificate
+commonName_default              = $ENV::SERVER_FQDN
 emailAddress_default            = $ENV::ORG_EMAIL
 
 [ v3_ca ]
@@ -100,8 +100,6 @@ unique_subject = no
 [ usr_cert ]
 # Extensions for client certificates (`man x509v3_config`).
 basicConstraints = CA:FALSE
-nsCertType = client, email
-nsComment = "OpenSSL Generated Client Certificate"
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid
 keyUsage = critical, nonRepudiation, digitalSignature, keyEncipherment
@@ -110,17 +108,17 @@ extendedKeyUsage = clientAuth, emailProtection
 [ server_cert ]
 # Extensions for server certificates (`man x509v3_config`).
 basicConstraints = CA:FALSE
-nsCertType = server
-nsComment = "OpenSSL Generated Server Certificate"
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 keyUsage = critical, digitalSignature, keyEncipherment, dataEncipherment, keyCertSign
 extendedKeyUsage = serverAuth
-subjectAltName = DNS:hostname.myorganization.org
+subjectAltName = DNS:$ENV::SERVER_FQDN
 
 [ codesign_reqext ]
 # Extensions for server certificates (`man x509v3_config`).
+basicConstraints = critical, CA:FALSE
 subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
 keyUsage = critical, digitalSignature
 extendedKeyUsage = critical, codeSigning
 

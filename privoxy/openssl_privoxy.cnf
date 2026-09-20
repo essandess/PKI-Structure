@@ -68,8 +68,8 @@ stateOrProvinceName = $ENV::ORG_STATE
 stateOrProvinceName_default = $ENV::ORG_STATE
 localityName = $ENV::ORG_LOCALITY
 localityName_default = $ENV::ORG_LOCALITY
-organizationName = $ENV::ORG_NAME
-organizationName_default = $ENV::ORG_NAME
+organizationName = $ENV::ORG_NAME Privoxy
+organizationName_default = $ENV::ORG_NAME Privoxy
 organizationalUnitName = $ENV::ORG_NAME Privoxy
 commonName = $ENV::ORG_NAME Privoxy Root CA
 commonName_default = $ENV::ORG_NAME Privoxy Root CA
@@ -94,8 +94,6 @@ keyUsage = critical, digitalSignature, cRLSign, keyCertSign
 [ usr_cert ]
 # Extensions for client certificates (`man x509v3_config`).
 basicConstraints = CA:FALSE
-nsCertType = client, email
-nsComment = "OpenSSL Generated Client Certificate"
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid
 keyUsage = critical, nonRepudiation, digitalSignature, keyEncipherment
@@ -104,8 +102,6 @@ extendedKeyUsage = clientAuth, emailProtection
 [ server_cert ]
 # Extensions for server certificates (`man x509v3_config`).
 basicConstraints = CA:FALSE
-nsCertType = server
-nsComment = "OpenSSL Generated Server Certificate"
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 keyUsage = critical, digitalSignature, keyEncipherment, dataEncipherment, keyCertSign

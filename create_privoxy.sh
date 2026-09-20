@@ -40,6 +40,9 @@ openssl req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 openssl verify -CAfile "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	"${CERTDIR}"/certs/"${CERTNAME}".cert.pem
 
+# cert text
+show_cert_text "${CERTDIR}"/certs/"${CERTNAME}".cert.pem
+
 # Convert to .cer and .p12 for storage
 openssl x509 -outform der -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cer

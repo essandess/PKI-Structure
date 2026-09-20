@@ -64,8 +64,8 @@ stateOrProvinceName = $ENV::ORG_STATE
 stateOrProvinceName_default = $ENV::ORG_STATE
 localityName = $ENV::ORG_LOCALITY
 localityName_default = $ENV::ORG_LOCALITY
-organizationName = $ENV::ORG_NAME
-organizationName_default = $ENV::ORG_NAME
+organizationName = $ENV::ORG_NAME Privoxy
+organizationName_default = $ENV::ORG_NAME Privoxy
 organizationalUnitName = adblock2privoxy-nginx
 commonName = adblock2privoxy-nginx
 commonName_default = adblock2privoxy-nginx
@@ -98,12 +98,12 @@ extendedKeyUsage = clientAuth, emailProtection
 [ server_cert ]
 # Extensions for server certificates (`man x509v3_config`).
 basicConstraints = CA:FALSE
-keyUsage = critical, digitalSignature, keyEncipherment
-extendedKeyUsage = critical, serverAuth
 subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid, issuer:always
+authorityKeyIdentifier = keyid:always
+keyUsage = critical, digitalSignature
+extendedKeyUsage = serverAuth
 # subjectAltName = DNS:myorganization.org, DNS:hostname.myorganization.org, DNS:proxy.myorganization.private, IP:10.0.1.3
-subjectAltName = DNS:localhost, IP:127.0.0.1
+subjectAltName = $ENV::SUBJECTALTNAME_ADBLOCK2PRIVOXY
 
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).

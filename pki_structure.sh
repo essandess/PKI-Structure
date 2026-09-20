@@ -26,6 +26,14 @@ fi
 
 . ./identity.env
 
+SHOW_CERT_TEXT=${SHOW_CERT_TEXT:-1}
+
+show_cert_text() {
+    if [ "${SHOW_CERT_TEXT}" != "0" ]; then
+        openssl x509 -noout -text -certopt ca_default -nameopt ca_default -in "$1"
+    fi
+}
+
 CATRUE=${CATRUE:-1}
 CERTDIR=${CERTDIR:-ca}
 CERTNAME=${CERTNAME:-ca}

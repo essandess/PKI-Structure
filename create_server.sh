@@ -2,14 +2,12 @@
 
 # create_server.sh
 
-SERVERFQDN=${SERVERFQDN:-hostname.myorganization.org}
-
 # https://support.apple.com/en-us/HT210176
 DAYS=825
 
 CATRUE=${CATRUE:-0}
 CERTDIR=${CERTDIR:-server}
-CERTNAME=${CERTNAME:-${SERVERFQDN}}
+CERTNAME=${CERTNAME:-${SERVER_FQDN}}
 ISSUERCADIR=${ISSUERCADIR:-intermediate}
 ISSUERCANAME=${ISSUERCANAME:-intermediate}
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
@@ -122,9 +120,9 @@ CERTSHA1=$(openssl x509 -noout -fingerprint -sha1 -inform pem \
 	       | tr '[:upper:]' '[:lower:]' \
 	)
 
-mv "${CERTDIR}"/private/{"${CERTNAME}","${SERVERFQDN}"."${CERTSHA1}"}.key.pem
-mv "${CERTDIR}"/private/{"${CERTNAME}","${SERVERFQDN}"."${CERTSHA1}"}.key.pem.decrypted
-mv "${CERTDIR}"/private/{"${CERTNAME}","${SERVERFQDN}"."${CERTSHA1}"}.p12
-mv "${CERTDIR}"/certs/{"${CERTNAME}","${SERVERFQDN}"."${CERTSHA1}"}.cer
-mv "${CERTDIR}"/certs/{"${CERTNAME}","${SERVERFQDN}"."${CERTSHA1}"}.cert.pem
-mv "${CERTDIR}"/certs/{"${CERTNAME}","${SERVERFQDN}"."${CERTSHA1}"}.chain.pem
+mv "${CERTDIR}"/private/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.key.pem
+mv "${CERTDIR}"/private/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.key.pem.decrypted
+mv "${CERTDIR}"/private/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.p12
+mv "${CERTDIR}"/certs/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.cer
+mv "${CERTDIR}"/certs/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.cert.pem
+mv "${CERTDIR}"/certs/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.chain.pem

@@ -9,8 +9,6 @@
 # SHA1-named files, ${CERTNAME}-{signature,encryption}.${CERTSHA1}.{key,cert,chain}.pem,
 # .cer, and .p12, and new certificates are issued in their place.
 
-ORGANIZATION=${ORGANIZATION:-MyOrganization}
-
 # 3 years and a month
 DAYS=1126
 
@@ -146,7 +144,7 @@ for EXTENSION in signature encryption; do
 		-in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem \
 		-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
 		-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
-		-subj "/CN=${EMAIL} - ${EXTENSION}/emailAddress=${EMAIL}/O=${ORGANIZATION}/OU=${ORGANIZATION} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
+		-subj "/CN=${EMAIL} - ${EXTENSION}/emailAddress=${EMAIL}/O=${ORG_NAME}/OU=${ORG_NAME} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
 		-batch
     then
 	rm "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem

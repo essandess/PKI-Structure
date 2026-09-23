@@ -83,15 +83,15 @@ emailAddress_max = 40
 # Extensions for a typical CA (`man x509v3_config`).
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
-basicConstraints = critical, CA:true
-keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+basicConstraints = critical, CA:true, pathlen:1
+keyUsage = critical, cRLSign, keyCertSign
 
 [ v3_intermediate_ca ]
 # Extensions for a typical intermediate CA (`man x509v3_config`).
 subjectKeyIdentifier = hash
 #authorityKeyIdentifier = keyid:always
-basicConstraints = critical, CA:true, pathlen:1
-keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+basicConstraints = critical, CA:true, pathlen:0
+keyUsage = critical, cRLSign, keyCertSign
 
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).
@@ -111,29 +111,23 @@ extendedKeyUsage = critical, OCSPSigning
 
 [ smime ]
 basicConstraints = CA:FALSE
-# works on macOS, not iOS
-# keyUsage = critical, keyEncipherment
-# extendedKeyUsage = emailProtection
-# works on macOS, iOS
 keyUsage = nonRepudiation, digitalSignature, keyEncipherment
 extendedKeyUsage = emailProtection
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy
+crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cert.pem
 
 [ smime_encryption ]
 basicConstraints = CA:FALSE
-# works on macOS, not iOS
-# keyUsage = critical, keyEncipherment
-# extendedKeyUsage = emailProtection
-# works on macOS, iOS a both signature and encryption certificate
-# keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-# this should not be critical
 keyUsage = keyEncipherment
 extendedKeyUsage = emailProtection
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy
+crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cert.pem
 
 [ smime_signature ]
 basicConstraints = CA:FALSE
@@ -142,3 +136,5 @@ extendedKeyUsage = critical, emailProtection
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy
+crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cert.pem

@@ -56,20 +56,33 @@ EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-384}
 RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-3072}
 
 case ${EC_PARAMGEN_CURVE} in
-    P-256)
+    P-256|prime256v1)
 	EC_HASH_DIGEST=${EC_HASH_DIGEST:-sha256}
 	;;
-    P-384)
+    P-384|secp384r1)
 	EC_HASH_DIGEST=${EC_HASH_DIGEST:-sha384}
 	;;
-    P-521)
+    P-521|secp521r1)
 	EC_HASH_DIGEST=${EC_HASH_DIGEST:-sha512}
 	;;
     *)
 	echo "Unknown curve '${EC_PARAMGEN_CURVE}'"
 	exit 1
 esac
-RSA_HASH_DIGEST=${RSA_HASH_DIGEST:-sha256}
+case ${RSA_KEYGEN_BITS} in
+    2048)
+	RSA_HASH_DIGEST=${RSA_HASH_DIGEST:-sha256}
+	;;
+    3072)
+	RSA_HASH_DIGEST=${RSA_HASH_DIGEST:-sha384}
+	;;
+    4096)
+	RSA_HASH_DIGEST=${RSA_HASH_DIGEST:-sha512}
+	;;
+    *)
+	echo "Nonstandard RSA bits '${RSA_KEYGEN_BITS}'"
+	RSA_HASH_DIGEST=${RSA_HASH_DIGEST:-sha384}
+esac
 if [ "${ALGORITHM}" == "EC" ]; then
 	HASH_DIGEST=${HASH_DIGEST:-${EC_HASH_DIGEST}}
 elif [ "${ALGORITHM}" == "RSA" ]; then

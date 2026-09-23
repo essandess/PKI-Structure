@@ -6,6 +6,8 @@
 set -e
 
 set -E   # make the ERR trap fire inside functions and subshells
+set -o pipefail
+shopt -s inherit_errexit
 trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 shopt -s nullglob
@@ -35,12 +37,12 @@ show_cert_text() {
 }
 
 CATRUE=${CATRUE:-1}
-CERTDIR=${CERTDIR:-ca}
-CERTNAME=${CERTNAME:-ca}
-ISSUERCADIR=${ISSUERCADIR:-ca}
-ISSUERCANAME=${ISSUERCANAME:-ca}
+CERTDIR=${CERTDIR:-root}
+CERTNAME=${CERTNAME:-root}
+ISSUERCADIR=${ISSUERCADIR:-root}
+ISSUERCANAME=${ISSUERCANAME:-root}
 
-# # run creata_ca.sh if no Root CA exists
+# # run creata_root.sh if no Root CA exists
 # if [ $(basename $0) != "create_${ISSUERCANAME}.sh" ] \
 # 	&& [ "${CERTDIR}" != "${ISSUERCADIR}" ] \
 #        && ! [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem ]; then
@@ -255,7 +257,7 @@ for f in "${CERTDIR}"/private/passphrase.txt; do
 	fi
 	touch "${f}"
 	chmod go-rwx "${f}"
-	yes "${newpassphrase:-$passphrase}" | head -n 2 > "${f}"
+	printf '%s\n%s\n' "${newpassphrase:-$passphrase}" "${newpassphrase:-$passphrase}" > "${f}"
     fi
 done
 if ! [ "${CATRUE}" == "0" ]; then

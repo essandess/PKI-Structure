@@ -33,7 +33,7 @@ certificate       = $dir/certs/$dir.cert.pem
 
 # For certificate revocation lists.
 crlnumber         = $dir/crlnumber
-crl               = $dir/crl/intermediate.crl.pem
+crl               = $dir/crl/$dir.crl.pem
 crl_extensions    = crl_ext
 default_crl_days  = 30
 
@@ -116,8 +116,8 @@ extendedKeyUsage = emailProtection
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy
-crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cert.pem
+crlDistributionPoints = URI:http://$ENV::PKI_FQDN/intermediate.crl
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cert.pem
 
 [ smime_encryption ]
 basicConstraints = CA:FALSE
@@ -126,8 +126,8 @@ extendedKeyUsage = emailProtection
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy
-crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cert.pem
+crlDistributionPoints = URI:http://$ENV::PKI_FQDN/intermediate.crl
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cert.pem
 
 [ smime_signature ]
 basicConstraints = CA:FALSE
@@ -136,5 +136,5 @@ extendedKeyUsage = critical, emailProtection
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy
-crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cert.pem
+crlDistributionPoints = URI:http://$ENV::PKI_FQDN/intermediate.crl
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cert.pem

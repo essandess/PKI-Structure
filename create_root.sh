@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-# create_ca.sh
+# create_root.sh
 
 CATRUE=${CATRUE:-1}
-CERTDIR=${CERTDIR:-ca}
-CERTNAME=${CERTNAME:-ca}
+CERTDIR=${CERTDIR:-root}
+CERTNAME=${CERTNAME:-root}
 
 ALGORITHM=${ALGORITHM:-EC}
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-384}

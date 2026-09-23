@@ -28,12 +28,12 @@ serial            = $dir/serial
 RANDFILE          = $dir/private/.rand
 
 # The root key and root certificate.
-private_key       = $dir/private/intermediate.key.pem
-certificate       = $dir/certs/intermediate.cert.pem
+private_key       = $dir/private/$dir.key.pem
+certificate       = $dir/certs/$dir.cert.pem
 
 # For certificate revocation lists.
 crlnumber         = $dir/crlnumber
-crl               = $dir/crl/intermediate.crl.pem
+crl               = $dir/crl/$dir.crl.pem
 crl_extensions    = crl_ext
 default_crl_days  = 30
 
@@ -105,8 +105,8 @@ authorityKeyIdentifier = keyid:always
 keyUsage = critical, digitalSignature
 extendedKeyUsage = serverAuth
 subjectAltName = DNS:$ENV::SERVER_FQDN
-crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cert.pem
+crlDistributionPoints = URI:http://$ENV::PKI_FQDN/intermediate.crl
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cert.pem
 
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).

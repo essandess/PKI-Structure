@@ -37,6 +37,6 @@ for PERSONALIZED in identity.env create_organization_smime_pki.sh; do
         cp -p "${BASELINE}" "${DEST}/${PERSONALIZED}"
         echo "Seeded ${DEST}/${PERSONALIZED} from $(basename "${BASELINE}") - edit it for this deployment."
     else
-        echo "Warning: no baseline ${PERSONALIZED} found in ${SRC}; none created in ${DEST}." >&2
+        echo "Warning: no baseline ${PERSONALIZED} found in '${SRC}'; none created in '${DEST}'." >&2
     fi
 done

@@ -19,7 +19,7 @@ generic scripts and OpenSSL configs, but never touching an existing
 ```
 `SRC` defaults to this repository's own location; `DEST` defaults to
 the current directory. Only `.sh`, `.cnf`, `.md`, and `LICENSE` files
-are copied — `.git/`, any `.env` file, and `create_organization_smime_pki.sh`
+are copied — `.git/`, any `.env` file, and `bin/create_organization_smime_pki.sh`
 (which contains this deployment's actual cert-issuance list) are never
 copied to a new deployment.
 

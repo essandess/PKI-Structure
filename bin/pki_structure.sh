@@ -26,6 +26,10 @@ CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY
     exit 1    
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}"
+
 . ./identity.env
 
 SHOW_CERT_TEXT=${SHOW_CERT_TEXT:-1}
@@ -231,10 +235,11 @@ done
 # N.b. passphrase must be repeated on two lines in passphrase.txt
 for f in "${CERTDIR}"/private/passphrase.txt; do
     if ! [ -f "${f}" ]; then
-        if command -v sf-pwgen; then
+        if command -v sf-pwgen >/dev/null 2>&1; then
 	    # no comment metacharacters in the passphrase
 	    passphrase=$(sf-pwgen --algorithm memorable --count 2 --length 16 | paste -s -d -- '-' | tr '#' '&' | tr '\' '/')
 	    # RanDoM caPitAlizaTioN
+            idx=0
 	    while [[ ${idx} -lt "${#passphrase}" ]]; do
 		char="${passphrase:${idx}:1}"
 		doit=$(( ${RANDOM} % 10 ))

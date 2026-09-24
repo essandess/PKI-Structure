@@ -104,10 +104,10 @@ openssl pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
 case ${ALGORITHM} in
     EC)
         openssl ec -in "${CERTDIR}"/private/"${CERTNAME}".key.pem -out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted -passin file:"${CERTDIR}"/private/passphrase.txt
-        ;;
+        chmod 0600 "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted        ;;
     RSA)
         openssl rsa -in "${CERTDIR}"/private/"${CERTNAME}".key.pem -out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted -passin file:"${CERTDIR}"/private/passphrase.txt
-        ;;
+        chmod 0600 "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted        ;;
     *)
 	echo "Unknown algorithm '${ALGORITHM}'"
 	exit 1

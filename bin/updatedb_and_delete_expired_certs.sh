@@ -10,7 +10,6 @@ DEBUG=${DEBUG:-0}
 [ "${DEBUG}" != "0" ] && set -x
 
 CERTDIR=${CERTDIR:-root}
-CERTNAME=${CERTNAME:-root}
 
 POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-}
 POSITIONAL_ARGS=()
@@ -65,6 +64,9 @@ delete_expired_certs() {
 export -f delete_expired_certs
 
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}"
 # update databases
 if [ -f "./${CERTDIR}/private/passphrase.txt" -a -f "./${CERTDIR}/index.txt" ]; then
     openssl ca -config ./openssl.cnf -passin "file:./${CERTDIR}/private/passphrase.txt" -updatedb

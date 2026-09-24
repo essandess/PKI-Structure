@@ -29,7 +29,7 @@ case ${ALGORITHM} in
 	openssl ec -in "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 		-passin file:"${CERTDIR}"/private/passphrase.txt \
 		-out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted
-	;;
+chmod 0600 "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted	;;
     RSA)
 	openssl genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 		-algorithm RSA -pkeyopt rsa_keygen_bits:"${RSA_KEYGEN_BITS}" -aes256 \
@@ -37,7 +37,7 @@ case ${ALGORITHM} in
 	openssl rsa -in "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 		-passin file:"${CERTDIR}"/private/passphrase.txt \
 		-out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted
-	;;
+chmod 0600 "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted	;;
     *)
 	echo "Unknown algorithm '${ALGORITHM}'"
 	exit 1

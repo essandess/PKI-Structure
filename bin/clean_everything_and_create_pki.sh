@@ -38,6 +38,9 @@ if [ "${REPLY}" != "yes" ]; then
     exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}"
 # Set the variable CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY
 export CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1
 

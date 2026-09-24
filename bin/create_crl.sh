@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
-# create_organization_crl.sh
+# create_crl.sh
 #
-# Usage: create_organization_crl.sh root|intermediate|privoxy
+# Usage: create_crl.sh root|intermediate|privoxy
 #
 # Generates (or refreshes) the CRL for the named CA, at a stable
 # filename suitable for publishing at the CRL Distribution Point

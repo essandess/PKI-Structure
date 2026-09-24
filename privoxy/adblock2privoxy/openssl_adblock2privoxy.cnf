@@ -67,10 +67,12 @@ localityName_default = $ENV::ORG_LOCALITY
 organizationName = $ENV::ORG_NAME Privoxy
 organizationName_default = $ENV::ORG_NAME Privoxy
 organizationalUnitName = adblock2privoxy-nginx
+organizationalUnitName_default = adblock2privoxy-nginx
 commonName = adblock2privoxy-nginx
 commonName_default = adblock2privoxy-nginx
 commonName_max = 64
 emailAddress = $ENV::ORG_EMAIL
+emailAddress_default = $ENV::ORG_EMAIL
 emailAddress_max = 40
 
 [ v3_ca ]

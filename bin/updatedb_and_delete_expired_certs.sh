@@ -2,7 +2,15 @@
 
 # Usage: updatedb_and_delete_expired_certs.sh
 
-set -x
+set -e
+set -E
+trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
+
+DEBUG=${DEBUG:-0}
+[ "${DEBUG}" != "0" ] && set -x
+
+CERTDIR=${CERTDIR:-root}
+CERTNAME=${CERTNAME:-root}
 
 POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-}
 POSITIONAL_ARGS=()
@@ -23,10 +31,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "${#POSITIONAL_ARGS[@]}" -gt 0 ]; then
-	if [ "${#POSITIONAL_ARGS[@]}" -gt 0 ]; then
-	    echo "Number of arguments '${#POSITIONAL_ARGS[@]}' more than 1."
-	    exit 1
-	fi
+    echo "This script takes no positional arguments (got ${#POSITIONAL_ARGS[@]})." >&2
+    exit 1
 fi
 
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
@@ -40,18 +46,17 @@ USEAGE
     exit 0
 fi
 
-
 delete_expired_certs() {
     local PEM="$1"
-    local PEMBASE="$(basename ${PEM} .cert.pem)"
-    local PEMDIR="$(dirname ${PEM})"
+    local PEMBASE="$(basename "${PEM}" .cert.pem)"
+    local PEMDIR="$(dirname "${PEM}")"
     if ! openssl x509 -checkend "0" -noout -in "${PEM}" 1> /dev/null 2>&1
     then \
         for p in "${PEMDIR}/${PEMBASE}"{.cert.pem,.chain.pem,.cer} \
             "${PEMDIR}/../private/${PEMBASE}"{.key.pem,.key.pem.decrypted,.p12}
         do
             if [ -f "${p}" ]; then
-                rm ${p}
+                rm "${p}"
             fi
         done
     fi
@@ -61,8 +66,8 @@ export -f delete_expired_certs
 
 
 # update databases
-if [ -f "./ca/private/passphrase.txt" -a -f "./ca/index.txt" ]; then
-    openssl ca -config ./openssl.cnf -passin "file:./ca/private/passphrase.txt" -updatedb
+if [ -f "./${CERTDIR}/private/passphrase.txt" -a -f "./${CERTDIR}/index.txt" ]; then
+    openssl ca -config ./openssl.cnf -passin "file:./${CERTDIR}/private/passphrase.txt" -updatedb
 fi
 if [ -f "./intermediate/private/passphrase.txt" -a -f "./intermediate/index.txt" ]; then
     openssl ca -config ./intermediate/openssl_intermediate.cnf -passin "file:./intermediate/private/passphrase.txt" -updatedb

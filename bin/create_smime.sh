@@ -84,7 +84,8 @@ restore_archived_smime() {
     done
 }
 
-. pki_structure.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/pki_structure.sh"
 
 # pki_structure.sh has consumed the option flags; EMAIL and CERTNAME remain.
 if [ "$#" -ne 2 ]; then
@@ -114,7 +115,9 @@ for EXTENSION in signature encryption; do
 done
 
 for EXTENSION in signature encryption; do
-    # Certificate encrypted key
+    # Encryption cert is always RSA: Apple Mail (macOS/iOS) does not support
+    # ECDH-based S/MIME encryption certificates, only ECDSA signing. Do not
+    # change this to honor ${ALGORITHM}=EC for the encryption cert.
     if [ "${ALGORITHM}" == "EC" ] && [ ${EXTENSION} != "encryption" ]; then
 	openssl genpkey \
 		-out "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \

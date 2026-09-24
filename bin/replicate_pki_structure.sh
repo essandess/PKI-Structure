@@ -26,15 +26,17 @@ rsync -av \
     --exclude='*' \
     "${SRC}" "${DEST}/"
 
-# Seed identity.env only if DEST doesn't already have one.
-BASELINE_IDENTITY="${SRC}identity.env.sample"
-[ -f "${BASELINE_IDENTITY}" ] || BASELINE_IDENTITY="${SRC}identity.env"
+# Seed personalized files only if DEST doesn't already have them.
+for PERSONALIZED in identity.env create_organization_smime_pki.sh; do
+    BASELINE="${SRC}${PERSONALIZED}.sample"
+    [ -f "${BASELINE}" ] || BASELINE="${SRC}${PERSONALIZED}"
 
-if [ -f "${DEST}/identity.env" ]; then
-    echo "Existing ${DEST}/identity.env left untouched."
-elif [ -f "${BASELINE_IDENTITY}" ]; then
-    cp -p "${BASELINE_IDENTITY}" "${DEST}/identity.env"
-    echo "Seeded ${DEST}/identity.env from $(basename "${BASELINE_IDENTITY}") - edit it for this deployment."
-else
-    echo "Warning: no baseline identity.env found in ${SRC}; none created in ${DEST}." >&2
-fi
+    if [ -f "${DEST}/${PERSONALIZED}" ]; then
+        echo "Existing ${DEST}/${PERSONALIZED} left untouched."
+    elif [ -f "${BASELINE}" ]; then
+        cp -p "${BASELINE}" "${DEST}/${PERSONALIZED}"
+        echo "Seeded ${DEST}/${PERSONALIZED} from $(basename "${BASELINE}") - edit it for this deployment."
+    else
+        echo "Warning: no baseline ${PERSONALIZED} found in ${SRC}; none created in ${DEST}." >&2
+    fi
+done

@@ -9,7 +9,8 @@ ISSUERCADIR=${ISSUERCADIR:-privoxy}
 ISSUERCANAME=${ISSUERCANAME:-privoxy}
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
 
-. pki_structure.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/pki_structure.sh"
 
 # CA encrypted key
 case ${ALGORITHM} in

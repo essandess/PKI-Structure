@@ -71,10 +71,12 @@ localityName_default = $ENV::ORG_LOCALITY
 organizationName = $ENV::ORG_NAME Privoxy
 organizationName_default = $ENV::ORG_NAME Privoxy
 organizationalUnitName = $ENV::ORG_NAME Privoxy
+organizationalUnitName_default = $ENV::ORG_NAME Privoxy
 commonName = $ENV::ORG_NAME Privoxy Root CA
 commonName_default = $ENV::ORG_NAME Privoxy Root CA
 commonName_max = 64
 emailAddress = $ENV::ORG_EMAIL
+emailAddress_default = $ENV::ORG_EMAIL
 emailAddress_max = 40
 
 [ v3_ca ]
@@ -110,7 +112,7 @@ extendedKeyUsage = critical, OCSPSigning
 [ smime_encryption ]
 basicConstraints = CA:FALSE
 keyUsage = critical, keyEncipherment
-extendedKeyUsage = anyExtendedKeyUsage, emailProtection
+extendedKeyUsage = critical, emailProtection
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy

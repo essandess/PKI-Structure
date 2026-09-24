@@ -89,7 +89,8 @@ if [ "${ARCHIVE}" = "1" ] \
     archive_existing_intermediate
 fi
 
-. pki_structure.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/pki_structure.sh"
 
 # 6 years, half of CA
 DAYS=2191

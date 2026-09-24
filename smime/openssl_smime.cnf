@@ -121,8 +121,8 @@ authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cert.pem
 
 [ smime_encryption ]
 basicConstraints = CA:FALSE
-keyUsage = keyEncipherment
-extendedKeyUsage = emailProtection
+keyUsage = critical, keyEncipherment
+extendedKeyUsage = critical, emailProtection
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy

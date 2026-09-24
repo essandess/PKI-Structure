@@ -15,7 +15,8 @@ ALGORITHM=${ALGORITHM:-EC}
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
 RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-2048}
 
-. pki_structure.sh
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/pki_structure.sh"
 
 # Certificate encrypted key
 case ${ALGORITHM} in

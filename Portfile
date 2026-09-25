@@ -18,7 +18,8 @@ long_description    {*}${description}. Creates a root and intermediate \
                     generation, publishing, and hosting daemons.
 
 depends_run-append  port:nginx \
-                    path:bin/openssl:openssl
+                    path:bin/openssl:openssl \
+                    port:sf-pwgen
 
 post-extract {
     reinplace "s|@PREFIX@|${prefix}|g" \

@@ -182,10 +182,10 @@ startupitems \
                     {echo "CRL update started on $(${DATE[@]})…" >> "${LOGFILE}"}
                     {"${PKI_ROOT}/bin/create_crl.sh" root         >> "${LOGFILE}" 2>&1}
                     {"${PKI_ROOT}/bin/create_crl.sh" intermediate >> "${LOGFILE}" 2>&1}
-                    {[ -f "${PKI_SITE_DIR}/root.cert.pem" ] || /bin/cp -p "${PKI_ROOT}/root/certs/root.cert.pem" "${PKI_SITE_DIR}/root.cert.pem"}
-                    {[ -f "${PKI_SITE_DIR}/intermediate.cert.pem" ] || /bin/cp -p "${PKI_ROOT}/intermediate/certs/intermediate.cert.pem" "${PKI_SITE_DIR}/intermediate.cert.pem"}
-                    {/bin/cp -p "${PKI_ROOT}/root/crl/root.crl.pem" "${PKI_SITE_DIR}/root.crl.tmp" && /bin/mv -f "${PKI_SITE_DIR}/root.crl.tmp" "${PKI_SITE_DIR}/root.crl"}
-                    {/bin/cp -p "${PKI_ROOT}/intermediate/crl/intermediate.crl.pem" "${PKI_SITE_DIR}/intermediate.crl.tmp" && /bin/mv -f "${PKI_SITE_DIR}/intermediate.crl.tmp" "${PKI_SITE_DIR}/intermediate.crl"}
+                    {[ -f "${PKI_SITE_DIR}/root.cer" ] || /bin/cp -p "${PKI_ROOT}/root/certs/root.cer" "${PKI_SITE_DIR}/root.cer"}
+                    {[ -f "${PKI_SITE_DIR}/intermediate.cer" ] || /bin/cp -p "${PKI_ROOT}/intermediate/certs/intermediate.cer" "${PKI_SITE_DIR}/intermediate.cer"}
+                    {/bin/cp -p "${PKI_ROOT}/root/crl/root.crl" "${PKI_SITE_DIR}/root.crl.tmp" && /bin/mv -f "${PKI_SITE_DIR}/root.crl.tmp" "${PKI_SITE_DIR}/root.crl"}
+                    {/bin/cp -p "${PKI_ROOT}/intermediate/crl/intermediate.crl" "${PKI_SITE_DIR}/intermediate.crl.tmp" && /bin/mv -f "${PKI_SITE_DIR}/intermediate.crl.tmp" "${PKI_SITE_DIR}/intermediate.crl"}
                     {echo "CRL update completed on $(${DATE[@]})." >> "${LOGFILE}"}
     } \
     stop            "\"/usr/bin/kill -SIGUSR1 \\\"\$(/usr/bin/pgrep -u root ${name}-crlupdate.wrapper)\\\" 2>/dev/null\"" \

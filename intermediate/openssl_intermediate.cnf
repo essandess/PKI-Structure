@@ -95,7 +95,7 @@ authorityKeyIdentifier = keyid:always
 basicConstraints = critical, CA:true, pathlen:0
 keyUsage = critical, cRLSign, keyCertSign
 crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cert.pem
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cer
 
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).

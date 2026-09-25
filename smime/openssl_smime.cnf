@@ -117,7 +117,7 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy
 crlDistributionPoints = URI:http://$ENV::PKI_FQDN/intermediate.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cert.pem
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer
 
 [ smime_encryption ]
 basicConstraints = CA:FALSE
@@ -127,7 +127,7 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy
 crlDistributionPoints = URI:http://$ENV::PKI_FQDN/intermediate.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cert.pem
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer
 
 [ smime_signature ]
 basicConstraints = CA:FALSE
@@ -137,4 +137,4 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 subjectAltName = email:copy
 crlDistributionPoints = URI:http://$ENV::PKI_FQDN/intermediate.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cert.pem
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer

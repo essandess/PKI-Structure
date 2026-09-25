@@ -100,8 +100,12 @@ openssl ca -config "${CONFIG}" \
 	-passin file:"${PASSPHRASE}" \
 	-out "${CRLOUT}"
 
+# CRL DP fields reference this bare name (no .pem) - openssl ca -gencrl
+# has no -outform, so PEM->DER conversion is a separate step.
+CRLDER="${CERTDIR}/crl/${CERTDIR}.crl"
+openssl crl -in "${CRLOUT}" -outform DER -out "${CRLDER}.tmp" && mv -f "${CRLDER}.tmp" "${CRLDER}"
 if [ "${SHOW_CRL_TEXT}" != "0" ]; then
     openssl crl -noout -text -in "${CRLOUT}"
 fi
 
-echo "Wrote ${CRLOUT}"
+echo "Wrote ${CRLOUT} and ${CRLDER}"

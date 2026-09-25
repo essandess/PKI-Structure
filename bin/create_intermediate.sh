@@ -122,7 +122,8 @@ openssl req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 # Intermediate CA certificate
 if \
     openssl ca -config openssl.cnf \
-	-days ${DAYS} -notext -md ${HASH_DIGEST} -extensions v3_intermediate_ca \
+	-days ${DAYS} -notext -md ${HASH_DIGEST} \
+	-extfile "${CERTDIR}"/openssl_"${CERTDIR}".cnf -extensions v3_intermediate_ca \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt -batch

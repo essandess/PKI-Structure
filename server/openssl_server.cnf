@@ -81,22 +81,6 @@ organizationalUnitName_default  = $ENV::ORG_NAME Server Certificate
 commonName_default              = $ENV::SERVER_FQDN
 emailAddress_default            = $ENV::ORG_EMAIL
 
-[ v3_ca ]
-# Extensions for a typical CA (`man x509v3_config`).
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-basicConstraints = critical, CA:true, pathlen:1
-keyUsage = critical, cRLSign, keyCertSign
-
-[ v3_intermediate_ca ]
-# Extensions for a typical intermediate CA (`man x509v3_config`).
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-basicConstraints = critical, CA:true, pathlen:0
-keyUsage = critical, cRLSign, keyCertSign
-crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer
-
 [ server_cert ]
 # Extensions for server certificates (`man x509v3_config`).
 basicConstraints = CA:FALSE

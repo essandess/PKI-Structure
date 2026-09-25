@@ -191,7 +191,8 @@ for EXTENSION in signature encryption; do
 	    -in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
 	    -out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cer
 
-    # N.b. passphrase must be repeated on two lines in passphrase.txt
+    # N.b. passphrase.txt holds two independent secrets: line 1 (-passin)
+# unlocks the private key, line 2 (-passout) is the .p12 export password.
     # https://developer.apple.com/forums/thread/697030
     openssl pkcs12 -legacy -export \
 		-out "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12 \
@@ -201,7 +202,7 @@ for EXTENSION in signature encryption; do
 		-passout file:"${CERTDIR}"/private/passphrase.txt
     # verify .p12 passphrase
     openssl pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12 \
-	    -passin file:"${CERTDIR}"/private/passphrase.txt
+	    -passin "pass:$(sed -n 2p "${CERTDIR}"/private/passphrase.txt)"
 done
 
 # Both certificates were issued; the previous pair no longer needs restoring.

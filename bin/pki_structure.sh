@@ -142,8 +142,8 @@ Useage:
 $(basename "$0") [-a|--algorithm [EC (default)|RSA]] [-h|--help] [-c|--clean] ${POSITIONAL_ARGS_USAGE}
 
 Note that the file ./${CERTDIR}/private/passphrase.txt will be created,
-if it doesn't exist, with a strong passphrase repeated on two lines. See:
-
+if it does not exist, with two independent strong passphrases, one per
+line: line 1 protects the private key, line 2 protects .p12 exports. See:
 * man openssl-passphrase-options
 * sf-pwgen --algorithm memorable --count 2 --length 16 | paste -s -d -- '-'
 USEAGE
@@ -232,39 +232,53 @@ for d in "${CERTDIR}"/certs "${CERTDIR}"/private; do
 	mkdir -p "${d}"
     fi
 done
-# N.b. passphrase must be repeated on two lines in passphrase.txt
+
 for f in "${CERTDIR}"/private/passphrase.txt; do
     if ! [ -f "${f}" ]; then
-        if command -v sf-pwgen >/dev/null 2>&1; then
-	    # no comment metacharacters in the passphrase
-	    passphrase=$(sf-pwgen --algorithm memorable --count 2 --length 16 | paste -s -d -- '-' | tr '#' '&' | tr '\' '/')
-	    # RanDoM caPitAlizaTioN
-            idx=0
-	    while [[ ${idx} -lt "${#passphrase}" ]]; do
-		char="${passphrase:${idx}:1}"
-		doit=$(( ${RANDOM} % 10 ))
-		if [ -z "$(echo "${char}" | sed -E 's|[[:lower:]]||')" ]; then
-		    # 20% chance flip lowercase
-		    if [ ${doit} -lt 2 ] ; then
-			char="$(echo ${char} | tr '[[:lower:]]' '[[:upper:]]')"
-		    fi
-		elif [ -z "$(echo '${char}' | sed -E 's|[[:upper:]]||')" ]; then
-		    # 50% chance flip uppercase
-		    if [ ${doit} -lt 5 ]; then
-			char="$(echo '${char}' | tr '[[:upper:]]' '[[:lower:]]')"
-		    fi
-		fi
-		newpassphrase="${newpassphrase}${char}"
-		idx=$(( ${idx} + 1 ))
-	    done
-	else
-	    newpassphrase=$(openssl rand -base64 20 | cut -c 1-24)
-	fi
-	touch "${f}"
-	chmod go-rwx "${f}"
-	printf '%s\n%s\n' "${newpassphrase:-$passphrase}" "${newpassphrase:-$passphrase}" > "${f}"
+        # passphrase generation function created/destroyed every time
+        _pki_generate_passphrase() {
+            local newpassphrase="" passphrase="" char doit idx=0
+            if command -v sf-pwgen >/dev/null 2>&1; then
+                # no comment metacharacters in the passphrase
+                passphrase=$(sf-pwgen --algorithm memorable --count 2 --length 16 | paste -s -d -- '-' | tr '#' '&' | tr '\' '/')
+                # RanDoM caPitAlizaTioN
+                while [[ ${idx} -lt "${#passphrase}" ]]; do
+                    char="${passphrase:${idx}:1}"
+                    doit=$(( RANDOM % 10 ))
+                    if [ -z "$(echo "${char}" | sed -E 's|[[:lower:]]||')" ]; then
+                        # 30% chance flip lowercase
+                        if [ ${doit} -lt 3 ] ; then
+                            char="$(echo "${char}" | tr '[[:lower:]]' '[[:upper:]]')"
+                        fi
+                    elif [ -z "$(echo "${char}" | sed -E 's|[[:upper:]]||')" ]; then
+                        # 50% chance flip uppercase
+                        if [ ${doit} -lt 5 ]; then
+                            char="$(echo "${char}" | tr '[[:upper:]]' '[[:lower:]]')"
+                        fi
+                    fi
+                    newpassphrase="${newpassphrase}${char}"
+                    idx=$(( idx + 1 ))
+                done
+            else
+                newpassphrase=$(openssl rand -base64 20 | cut -c 1-24)
+            fi
+            echo "${newpassphrase:-$passphrase}"
+        }
+
+        # Two independent secrets, one per line: line 1 protects the
+        # private key (-passin), line 2 protects .p12 exports (-passout).
+        # See openssl-passphrase-options(1) on file:pathname passed to
+        # both -passin and -passout.
+        PASSIN=$(_pki_generate_passphrase)
+        PASSOUT=$(_pki_generate_passphrase)
+        unset -f _pki_generate_passphrase
+        touch "${f}"
+        chmod go-rwx "${f}"
+        printf '%s\n%s\n' "${PASSIN}" "${PASSOUT}" > "${f}"
+        unset PASSIN PASSOUT
     fi
 done
+
 if ! [ "${CATRUE}" == "0" ]; then
     # create necessary directory/file structure
     for d in "${CERTDIR}"/certs "${CERTDIR}"/crl "${CERTDIR}"/newcerts; do

@@ -48,23 +48,21 @@ USEAGE
 fi
 
 if [ "${#POSITIONAL_ARGS[@]}" -ne 1 ]; then
-    echo "Usage: $(basename "$0") root|intermediate|privoxy" >&2
+    echo "Usage: $(basename "$0") ${POSITIONAL_ARGS_USAGE}" >&2
     exit 1
 fi
 CANAME="${POSITIONAL_ARGS[0]}"
 
+CERTDIR="${CANAME}"
 case "${CANAME}" in
     root)
-	CERTDIR="root"
 	CONFIG="${PKI_ROOT}/openssl.cnf"
 	;;
     intermediate)
-	CERTDIR="intermediate"
-	CONFIG="${PKI_ROOT}/intermediate/openssl_intermediate.cnf"
+	CONFIG="${PKI_ROOT}/${CERTDIR}/openssl_${CERTDIR}.cnf"
 	;;
     privoxy)
-	CERTDIR="privoxy"
-	CONFIG="${PKI_ROOT}/privoxy/openssl_privoxy.cnf"
+	CONFIG="${PKI_ROOT}/${CERTDIR}/openssl_${CERTDIR}.cnf"
 	;;
     *)
 	echo "Unknown CA name '${CANAME}'; expected root, intermediate, or privoxy." >&2

@@ -169,8 +169,9 @@ fi
 openssl x509 -outform der -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cer
 
-# N.b. passphrase must be repeated on two lines in passphrase.txt
-# https://developer.apple.com/forums/thread/697030
+# N.b. passphrase.txt holds two independent secrets: line 1 (-passin)
+# unlocks the private key, line 2 (-passout) is the .p12 export password.
+# man openssl-passphrase-options
 openssl pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
 	-inkey "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
@@ -178,7 +179,7 @@ openssl pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
 	-passout file:"${CERTDIR}"/private/passphrase.txt
 # verify .p12 passphrase
 openssl pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
-	-passin file:"${CERTDIR}"/private/passphrase.txt
+	-passin "pass:$(sed -n 2p "${CERTDIR}"/private/passphrase.txt)"
 
 # Copy the new certificate to SHA1-named files. The un-suffixed files stay in
 # place because the server, codesign, and S/MIME scripts and

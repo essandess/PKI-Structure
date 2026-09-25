@@ -5,6 +5,12 @@
 # https://support.apple.com/en-us/HT210176
 DAYS=825
 
+# get SERVER_FQDN from ./identity.env
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}"
+. ./identity.env
+
 CATRUE=${CATRUE:-0}
 CERTDIR=${CERTDIR:-server}
 CERTNAME=${CERTNAME:-${SERVER_FQDN}}
@@ -89,8 +95,9 @@ fi
 openssl x509 -outform der -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cer
 
-# N.b. passphrase must be repeated on two lines in passphrase.txt
-# https://developer.apple.com/forums/thread/697030
+# N.b. passphrase.txt holds two independent secrets: line 1 (-passin)
+# unlocks the private key, line 2 (-passout) is the .p12 export password.
+# man openssl-passphrase-options
 openssl pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
 	-inkey "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
@@ -98,15 +105,15 @@ openssl pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
 	-passout file:"${CERTDIR}"/private/passphrase.txt
 # verify .p12 passphrase
 openssl pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
-	-passin file:"${CERTDIR}"/private/passphrase.txt
+	-passin "pass:$(sed -n 2p "${CERTDIR}"/private/passphrase.txt)"
 
 # decrypt private key
 case ${ALGORITHM} in
     EC)
-        openssl ec -in "${CERTDIR}"/private/"${CERTNAME}".key.pem -out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted -passin file:"${CERTDIR}"/private/passphrase.txt
+        openssl ec -in "${CERTDIR}"/private/"${CERTNAME}".key.pem -out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted -passin "file:${CERTDIR}"/private/passphrase.txt
         chmod 0600 "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted        ;;
     RSA)
-        openssl rsa -in "${CERTDIR}"/private/"${CERTNAME}".key.pem -out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted -passin file:"${CERTDIR}"/private/passphrase.txt
+        openssl rsa -in "${CERTDIR}"/private/"${CERTNAME}".key.pem -out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted -passin "file:${CERTDIR}"/private/passphrase.txt
         chmod 0600 "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted        ;;
     *)
 	echo "Unknown algorithm '${ALGORITHM}'"

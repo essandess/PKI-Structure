@@ -6,6 +6,10 @@ set -e
 set -E
 trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+
 DEBUG=${DEBUG:-0}
 [ "${DEBUG}" != "0" ] && set -x
 
@@ -45,6 +49,10 @@ USEAGE
     exit 0
 fi
 
+cd "${PKI_ROOT}"
+
+. ./identity.env
+
 delete_expired_certs() {
     local PEM="$1"
     local PEMBASE="$(basename "${PEM}" .cert.pem)"
@@ -68,24 +76,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}"
 # update databases
-if [ -f "./${CERTDIR}/private/passphrase.txt" -a -f "./${CERTDIR}/index.txt" ]; then
-    openssl ca -config ./openssl.cnf -passin "file:./${CERTDIR}/private/passphrase.txt" -updatedb
+if [ -f "${CERTDIR}/private/passphrase.txt" -a -f "${CERTDIR}/index.txt" ]; then
+    openssl ca -config openssl.cnf -passin "file:${CERTDIR}/private/passphrase.txt" -updatedb
 fi
-if [ -f "./intermediate/private/passphrase.txt" -a -f "./intermediate/index.txt" ]; then
-    openssl ca -config ./intermediate/openssl_intermediate.cnf -passin "file:./intermediate/private/passphrase.txt" -updatedb
+if [ -f "intermediate/private/passphrase.txt" -a -f "intermediate/index.txt" ]; then
+    openssl ca -config intermediate/openssl_intermediate.cnf -passin "file:intermediate/private/passphrase.txt" -updatedb
 fi
-if [ -f "./privoxy/private/passphrase.txt" -a -f "./privoxy/index.txt" ]; then
-    openssl ca -config ./privoxy/openssl_privoxy.cnf -passin "file:./privoxy/private/passphrase.txt" -updatedb
+if [ -f "privoxy/private/passphrase.txt" -a -f "privoxy/index.txt" ]; then
+    openssl ca -config privoxy/openssl_privoxy.cnf -passin "file:privoxy/private/passphrase.txt" -updatedb
 fi
 
 # do NOT delete S/MIME and intermediate CA's
 
 # codesign and server certs issued by intermediate
-for d in ./codesign ./server; do
+for d in codesign server; do
     find . -type f -path "${d}/certs/*.cert.pem" -exec bash -c \
         'delete_expired_certs "$1"' bash {} ';'
 done
 
 # adblock2privoxy server certs issued by privoxy
-find . -type f -path "./privoxy/adblock2privoxy/certs/*.cert.pem" -exec bash -c \
+find . -type f -path "privoxy/adblock2privoxy/certs/*.cert.pem" -exec bash -c \
     'delete_expired_certs "$1"' bash {} ';'

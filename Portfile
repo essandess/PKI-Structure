@@ -128,7 +128,12 @@ destroot {
         ${destroot}${prefix}/etc/nginx-pki.conf.macports
 
     xinstall -d ${destroot}${pki_log_dir}
-}
+
+    # nginx docroots: world-readable static content, not part of the
+    # root:wheel-locked-down pki_var_dir - nginx worker must be able
+    # to read these regardless of which unprivileged user it runs as.
+    xinstall -m 0755 -d ${destroot}${prefix}/var/www/pki.myorganization.org
+    xinstall -m 0755 -d ${destroot}${prefix}/var/www/proxy.myorganization.private}
 
 # ensure that installed scripts are
 post-destroot {
@@ -152,6 +157,7 @@ post-destroot {
 # only populates it with the replicated scripts/configs
 destroot.keepdirs-append ${destroot}${pki_var_dir}
 destroot.keepdirs-append ${destroot}${pki_log_dir}
+destroot.keepdirs-append ${destroot}${prefix}/var/www/pki.myorganization.org
 
 # A dedicated launchd job for the PKI's nginx instance, parallel to the
 # nginx port's own startupitem but pointed at nginx-pki.conf and a
@@ -177,7 +183,7 @@ startupitems \
     start {
                     {[ -f "${PKI_ROOT}/identity.env" ] || { echo "identity.env not found in ${PKI_ROOT}; skipping." ; exit 0 ; }}
                     {. "${PKI_ROOT}/identity.env"}
-                    {PKI_SITE_DIR="${prefix}/share/nginx/html/${PKI_FQDN}"}
+                    {PKI_SITE_DIR="${prefix}/var/www/${PKI_FQDN}"}
                     {/bin/mkdir -p "${PKI_SITE_DIR}"}
                     {echo "CRL update started on $(${DATE[@]})…" >> "${LOGFILE}"}
                     {"${PKI_ROOT}/bin/create_crl.sh" root         >> "${LOGFILE}" 2>&1}

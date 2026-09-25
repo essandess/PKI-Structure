@@ -2,6 +2,8 @@
 
 # Usage: certs_that_expire_soon.sh [#months]
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/.."
 EXPMONTHS_DEFAULT=${EXPMONTHS_DEFAULT:-6}
 EXPMONTHS=${EXPMONTHS:-${EXPMONTHS_DEFAULT}}
 

@@ -1,0 +1,297 @@
+# -*- coding: utf-8; mode: tcl; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 4 -*- vim:fenc=utf-8:ft=tcl:et:sw=4:ts=4:sts=4
+
+PortSystem          1.0
+PortGroup           github 1.0
+PortGroup           openssl 1.0
+
+github.setup        essandess PKI-Structure 1.0.0 v
+revision            0
+categories          security
+license             MIT
+maintainers         {ieee.org:s.t.smith @essandess}
+platforms-append    any
+
+description         Shell-script toolkit for a small-scale private PKI
+long_description    {*}${description}. Creates a root and intermediate \
+                    certificate authority, server, S/MIME, code-signing, \
+                    and privoxy/adblock2privoxy certificates, with CRL \
+                    generation, publishing, and hosting daemons.
+
+depends_run-append  port:nginx \
+                    path:bin/openssl:openssl
+
+post-extract {
+    reinplace "s|@PREFIX@|${prefix}|g" \
+                    ${worksrcpath}/etc/nginx.conf
+}
+
+proc pki_lockdown {path {is_private 0}} {
+    if {[file isdirectory $path]} {
+        if {[file tail $path] eq "private"} {
+            set is_private 1
+        }
+        if {$is_private} {
+            file attributes $path -permissions 0700
+        } else {
+            file attributes $path -permissions 0750
+        }
+        foreach child [glob -nocomplain -directory $path *] {
+            pki_lockdown $child $is_private
+        }
+    } else {
+        if {[file extension $path] eq ".sh"} {
+            file attributes $path -permissions 0750
+        } elseif {$is_private} {
+            file attributes $path -permissions 0600
+        } else {
+            file attributes $path -permissions 0640
+        }
+    }
+}
+
+proc pki_chown_root_wheel {path} {
+    file attributes $path -owner root -group wheel
+    if {[file isdirectory $path]} {
+        foreach child [glob -nocomplain -directory $path *] {
+            pki_chown_root_wheel $child
+        }
+    }
+}
+
+proc pki_lockdown_check {path {is_private 0} {failed_var {}}} {
+    upvar 1 $failed_var failed
+    if {[file tail $path] eq "private"} {
+        set is_private 1
+    }
+
+    array set st [file attributes $path]
+    set owner $st(-owner)
+    set group $st(-group)
+    set perms $st(-permissions)
+
+    if {[file isdirectory $path]} {
+        set want_perms [expr {$is_private ? "0700" : "0750"}]
+    } elseif {[file extension $path] eq ".sh"} {
+        set want_perms "0750"
+    } else {
+        set want_perms [expr {$is_private ? "0600" : "0640"}]
+    }
+
+    if {$owner ne "root" || $group ne "wheel" || $perms ne $want_perms} {
+        ui_warn "pki-structure: unexpected permissions on $path (owner=$owner group=$group mode=$perms, expected root:wheel $want_perms)"
+        set failed 1
+    }
+
+    if {[file isdirectory $path]} {
+        foreach child [glob -nocomplain -directory $path *] {
+            pki_lockdown_check $child $is_private failed
+        }
+    }
+}
+
+use_configure       no
+
+build {}
+
+set pki_share_dir   ${prefix}/share/pki-structure
+set pki_var_dir     ${prefix}/var/pki/pki-structure
+set pki_log_dir     ${prefix}/var/log/pki-structure
+
+destroot {
+    # reference scripts and configurations in share
+    xinstall -d ${destroot}${pki_share_dir}
+    system -W ${worksrcpath} \
+        "${worksrcpath}/bin/replicate_pki_structure.sh \
+            ${destroot}${pki_share_dir}"
+
+    # deployment scripts and configurations in pki
+    xinstall -d ${destroot}${pki_var_dir}
+    system -W ${worksrcpath} \
+        "${worksrcpath}/bin/replicate_pki_structure.sh \
+            ${destroot}${pki_var_dir}"
+    pki_lockdown ${destroot}${prefix}/var/pki
+
+    # Personalized-file templates: always installed under a .macports
+    # suffix in the tracked share dir, so upgrades keep them current.
+    # The live, editable copies (identity.env, create_organization_smime_pki.sh)
+    # are seeded from these in post-activate, once, only if not already present
+    xinstall -m 644 \
+        ${worksrcpath}/identity.env.sample \
+        ${destroot}${pki_share_dir}/identity.env.macports
+    xinstall -m 755 \
+        ${worksrcpath}/bin/create_organization_smime_pki.sh.sample \
+        ${destroot}${pki_share_dir}/bin/create_organization_smime_pki.sh.macports
+
+    # nginx.conf template: same pattern, tracked under ${prefix}/etc
+    xinstall -m 644 \
+        ${worksrcpath}/etc/nginx.conf \
+        ${destroot}${prefix}/etc/nginx-pki.conf.macports
+
+    xinstall -d ${destroot}${pki_log_dir}
+}
+
+# ensure that installed scripts are
+post-destroot {
+    foreach script [glob -nocomplain ${destroot}${pki_share_dir}/bin/*.sh] {
+        set base [file tail $script]
+        if {$base eq "pki_structure.sh" || $base eq "replicate_pki_structure.sh"} {
+            continue
+        }
+        set fh [open $script r]
+        set content [read $fh]
+        close $fh
+        if {![regexp {cd "\$\{SCRIPT_DIR\}/\.\."} $content] \
+                && ![regexp {PKI_ROOT="\$\(cd "\$\{SCRIPT_DIR\}/\.\." && pwd\)"} $content]} {
+            error "pki-structure: $base does not resolve PKI_ROOT relative to its own location - cwd-dependent script would break under a daemon"
+        }
+    }
+}
+
+# The deployment directory is where the user's actual PKI (keys, certs,
+# index files) will be created - keep it even though destroot itself
+# only populates it with the replicated scripts/configs
+destroot.keepdirs-append ${destroot}${pki_var_dir}
+destroot.keepdirs-append ${destroot}${pki_log_dir}
+
+# A dedicated launchd job for the PKI's nginx instance, parallel to the
+# nginx port's own startupitem but pointed at nginx-pki.conf and a
+# separate pidfile, so it runs as an independent daemon alongside (not
+# instead of) any other nginx configuration on this system.
+
+# consistent with ${prefix}/etc/nginx-pki.conf
+set nginx_pki_pidfile  ${prefix}/var/run/nginx/nginx-pki.pid
+
+# Startup items: the nginx launcher (long-running foreground daemon)
+# and the periodic CRL-refresh job (short-lived, no persistent pid)
+
+startupitem.create  yes
+
+startupitems \
+    name            ${name}-crlupdate \
+    init {
+                    {set -e}
+                    {PKI_ROOT="${prefix}/var/pki/pki-structure"}
+                    {LOGFILE="${prefix}/var/log/pki-structure/crlupdate.log"}
+                    {DATE=(/bin/date "+%FT%T")}
+    } \
+    start {
+                    {[ -f "${PKI_ROOT}/identity.env" ] || { echo "identity.env not found in ${PKI_ROOT}; skipping." ; exit 0 ; }}
+                    {. "${PKI_ROOT}/identity.env"}
+                    {PKI_SITE_DIR="${prefix}/share/nginx/html/${PKI_FQDN}"}
+                    {/bin/mkdir -p "${PKI_SITE_DIR}"}
+                    {echo "CRL update started on $(${DATE[@]})…" >> "${LOGFILE}"}
+                    {"${PKI_ROOT}/bin/create_crl.sh" root         >> "${LOGFILE}" 2>&1}
+                    {"${PKI_ROOT}/bin/create_crl.sh" intermediate >> "${LOGFILE}" 2>&1}
+                    {[ -f "${PKI_SITE_DIR}/root.cert.pem" ] || /bin/cp -p "${PKI_ROOT}/root/certs/root.cert.pem" "${PKI_SITE_DIR}/root.cert.pem"}
+                    {[ -f "${PKI_SITE_DIR}/intermediate.cert.pem" ] || /bin/cp -p "${PKI_ROOT}/intermediate/certs/intermediate.cert.pem" "${PKI_SITE_DIR}/intermediate.cert.pem"}
+                    {/bin/cp -p "${PKI_ROOT}/root/crl/root.crl.pem" "${PKI_SITE_DIR}/root.crl.tmp" && /bin/mv -f "${PKI_SITE_DIR}/root.crl.tmp" "${PKI_SITE_DIR}/root.crl"}
+                    {/bin/cp -p "${PKI_ROOT}/intermediate/crl/intermediate.crl.pem" "${PKI_SITE_DIR}/intermediate.crl.tmp" && /bin/mv -f "${PKI_SITE_DIR}/intermediate.crl.tmp" "${PKI_SITE_DIR}/intermediate.crl"}
+                    {echo "CRL update completed on $(${DATE[@]})." >> "${LOGFILE}"}
+    } \
+    stop            "\"/usr/bin/kill -SIGUSR1 \\\"\$(/usr/bin/pgrep -u root ${name}-crlupdate.wrapper)\\\" 2>/dev/null\"" \
+    pidfile             none
+
+startupitems-append \
+    name            ${name}-nginx \
+    init            "pidfile=\"\${prefix}/var/run/nginx/nginx-pki.pid\"" \
+    start [list     "\"\${prefix}/sbin/nginx\" \\" \
+                    "\t-c \\" \
+                    "\t\"\${prefix}/etc/${name}/nginx-pki.conf\" \\" \
+                    "\t-g \"daemon off;\"" \
+    ] \
+    stop [list      "if \[ -f \"\${pidfile}\" \]; then" \
+                    "\t/usr/bin/kill \"\$(cat \"\${pidfile}\")\" \\" \
+                    "\t\t&& /bin/rm -f \"\${pidfile}\" ;" \
+                    "else" \
+                    "\t/usr/bin/kill -SIGUSR1 \"\$(/usr/bin/pgrep -u root nginx)\" 2>/dev/null ;" \
+                    "fi" \
+    ]
+
+post-destroot {
+    # org.macports.pki-structure-crlupdate
+    reinplace -E \
+        "1s|^(#!\[\[:space:]]*)/bin/sh|\\1/usr/bin/env bash|" \
+        ${destroot}${prefix}/etc/${startupitem.location}/org.macports.${name}-crlupdate/${name}-crlupdate.wrapper
+
+    reinplace \
+        "s|^<key>ProgramArguments</key>|<key>StartCalendarInterval</key>\\
+	<array>\\
+		<dict>\\
+			<key>Weekday</key>\\
+			<integer>7</integer>\\
+			<key>Hour</key>\\
+			<integer>2</integer>\\
+			<key>Minute</key>\\
+			<integer>30</integer>\\
+		</dict>\\
+	</array>\\
+	<key>StandardErrorPath</key>\\
+	<string>${prefix}/var/log/${name}/${name}.log</string>\\
+	<key>StandardOutPath</key>\\
+	<string>${prefix}/var/log/${name}/${name}.log</string>\\
+&|" \
+        ${destroot}${prefix}/etc/${startupitem.location}/org.macports.${name}-crlupdate/org.macports.${name}-crlupdate.plist
+}
+
+post-activate {
+    # Seed identity.env once, on the live filesystem, only if the user
+    # doesn't already have one - never overwrite an existing deployment's
+    # branding on upgrade.
+    if {![file exists ${pki_var_dir}/identity.env]} {
+        ui_msg "--->  Seeding ${pki_var_dir}/identity.env from the baseline template"
+        file copy -force \
+            ${pki_share_dir}/identity.env.macports \
+            ${pki_var_dir}/identity.env
+    }
+
+    # Same pattern for the org-specific S/MIME issuance script.
+    if {![file exists ${pki_var_dir}/create_organization_smime_pki.sh]} {
+        ui_msg "--->  Seeding ${pki_var_dir}/create_organization_smime_pki.sh from the baseline template"
+        file copy -force \
+            ${pki_share_dir}/create_organization_smime_pki.sh.macports \
+            ${pki_var_dir}/create_organization_smime_pki.sh
+        file attributes ${pki_var_dir}/create_organization_smime_pki.sh -permissions 0755
+    }
+
+    # Same pattern for the PKI-serving nginx.conf.
+    if {![file exists ${prefix}/etc/nginx-pki.conf]} {
+        ui_msg "--->  Seeding ${prefix}/etc/nginx-pki.conf from the baseline template"
+        file copy -force \
+            ${prefix}/etc/nginx-pki.conf.macports \
+            ${prefix}/etc/nginx-pki.conf
+    }
+
+    pki_chown_root_wheel ${prefix}/var/pki
+    pki_lockdown ${prefix}/var/pki
+
+    set pki_lockdown_failed 0
+    pki_lockdown_check ${prefix}/var/pki 0 pki_lockdown_failed
+    if {$pki_lockdown_failed} {
+        ui_error "pki-structure: ${prefix}/var/pki failed its permissions check after lockdown - see warnings above."
+        error "pki-structure permissions verification failed"
+    } else {
+        ui_msg "--->  ${prefix}/var/pki permissions verified: root:wheel, 0750/0640 (0700/0600 under private/)"
+    }
+}
+
+notes "
+    ${pki_share_dir}
+        Pristine reference copy of the scripts and openssl configs.
+        Replaced on every upgrade; do not edit in place.
+
+    ${pki_var_dir}
+        Live PKI deployment. identity.env and
+        create_organization_smime_pki.sh are seeded here once and
+        never overwritten. Edit identity.env, then run the
+        create_*.sh scripts from this directory.
+
+    ${prefix}/etc/nginx-pki.conf.macports
+        Pristine nginx template for CRL/cert distribution over HTTP.
+
+    ${prefix}/etc/nginx-pki.conf
+        Live nginx config, seeded once, not overwritten thereafter.
+
+    Permissions: everything under ${prefix}/var/pki is owned by
+    root:wheel, mode 0750/0640 (0700/0600 under any 'private'
+    subdirectory). sudo is required to read or run anything here.
+"

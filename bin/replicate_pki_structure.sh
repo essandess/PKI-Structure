@@ -2,19 +2,21 @@
 # replicate_pki_structure.sh
 #
 # Copies PKI-Structure's scripts and openssl configs to a new deployment
-# directory. Never overwrites an existing identity.env there; if the
-# destination has none yet, seeds it from the baseline template.
+# directory. Never overwrites an existing identity.env or
+# create_organization_smime_pki.sh, seeds them from the baseline template.
 #
-# Usage: replicate_pki_structure.sh [SRC] [DEST]
+# Usage: replicate_pki_structure.sh [DEST]
 
 set -euo pipefail
 
-SRC="${1:-$HOME/Documents/Source/github/essandess/PKI-Structure}/"
-DEST="${2:-.}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_STRUCTURE_SRC="${PKI_STRUCTURE_SRC:-$(cd "${SCRIPT_DIR}/.." && pwd)/}"
+SRC="${PKI_STRUCTURE_SRC}"
+DEST="${1:-.}"
 
 mkdir -p "${DEST}"
 
-rsync -av \
+rsync -am \
     --exclude='.git/' \
     --exclude='*.env' \
     --exclude='create_organization_smime_pki.sh' \
@@ -27,7 +29,7 @@ rsync -av \
     "${SRC}" "${DEST}/"
 
 # Seed personalized files only if DEST doesn't already have them.
-for PERSONALIZED in identity.env create_organization_smime_pki.sh; do
+for PERSONALIZED in identity.env bin/create_organization_smime_pki.sh; do
     BASELINE="${SRC}${PERSONALIZED}.sample"
     [ -f "${BASELINE}" ] || BASELINE="${SRC}${PERSONALIZED}"
 

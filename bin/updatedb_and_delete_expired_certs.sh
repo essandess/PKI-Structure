@@ -49,7 +49,7 @@ USEAGE
     exit 0
 fi
 
-cd "${PKI_ROOT}"
+cd "${PKI_ROOT}" || exit
 
 . ./identity.env
 

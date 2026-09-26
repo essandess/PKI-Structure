@@ -8,7 +8,7 @@ DAYS=825
 # get SERVER_FQDN from ./identity.env
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "${PKI_ROOT}"
+cd "${PKI_ROOT}" || exit
 . ./identity.env
 
 CATRUE=${CATRUE:-0}

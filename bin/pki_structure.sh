@@ -13,6 +13,7 @@ trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[
 shopt -s nullglob
 shopt -s nocasematch
 
+umask 077
 # Precaution to avoid overwriting/clearing an existing PKI structure
 if [ -z ${CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY+x} ] \
        || [ "${CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY}" == "0" ] \
@@ -28,7 +29,7 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "${PKI_ROOT}"
+cd "${PKI_ROOT}" || exit
 
 . ./identity.env
 

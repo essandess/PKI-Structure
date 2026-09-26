@@ -16,6 +16,9 @@ ALGORITHM=${ALGORITHM:-EC}
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-384}
 RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-3072}
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}" || exit
 # Files that make up the intermediate CA, as <subdirectory>/<suffix>
 INTERMEDIATE_FILES="private/key.pem private/p12 certs/cert.pem certs/chain.pem certs/cer"
 
@@ -33,7 +36,6 @@ cert_sha1() {
 archive_existing_intermediate() {
     local old_cert="${CERTDIR}/certs/${CERTNAME}.cert.pem"
     [ -f "${old_cert}" ] || return 0
-
     local sha1
     sha1=$(cert_sha1 "${old_cert}")
     if [ -z "${sha1}" ]; then
@@ -129,6 +131,14 @@ if \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt -batch
 then
     REISSUED=1
+    if [ -n "${ARCHIVED_SHA1}" ]; then
+        echo "Revoking superseded ${CERTNAME} CA (was ${CERTNAME}.${ARCHIVED_SHA1}.cert.pem)..." >&2
+        openssl ca -config openssl.cnf \
+                -revoke "${CERTDIR}/certs/${CERTNAME}.${ARCHIVED_SHA1}.cert.pem" \
+                -crl_reason superseded \
+                -passin file:"${ISSUERCADIR}"/private/passphrase.txt
+        "${PKI_ROOT}"/bin/create_crl.sh root
+    fi
     rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem
 else
     rm "${CERTDIR}"/private/"${CERTNAME}".key.pem

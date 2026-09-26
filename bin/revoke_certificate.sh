@@ -47,19 +47,47 @@ fi
 
 CERTFILE="${POSITIONAL_ARGS[0]}"
 CANAME="${POSITIONAL_ARGS[1]}"
-CRLREASON="${POSITIONAL_ARGS[2]:-keyCompromise}"
+CRLREASON="${POSITIONAL_ARGS[2]:-unspecified}"
 
-ISSUERCADIR="${CANAME}"
+if [ ! -f "${CERTFILE}" ]; then
+    echo "Certificate file '${CERTFILE}' doesn't exist." >&2
+    exit 1
+fi
+
+VALID_CRL_REASONS="unspecified keyCompromise CACompromise affiliationChanged superseded cessationOfOperation certificateHold removeFromCRL"
+
+case " ${VALID_CRL_REASONS} " in
+    *" ${CRLREASON} "*)
+	;;
+    *)
+	echo "Unknown crlReason '${CRLREASON}'." >&2
+	echo "Valid values: ${VALID_CRL_REASONS}" >&2
+	echo "See man opensll-ca, -crl_reason." >&2
+	exit 1
+	;;
+esac
+
+echo "About to revoke:"
+echo "  Certificate: ${CERTFILE}"
+echo "  CA:          ${CANAME}"
+echo "  Reason:      ${CRLREASON}"
+read -p "Proceed? Type 'yes' to confirm: " -r
+echo
+if [ "${REPLY}" != "yes" ]; then
+    echo "Aborted." >&2
+    exit 1
+fi
+
 ISSUERCANAME="${CANAME}"
 case "${CANAME}" in
     root)
 	CONFIG="${PKI_ROOT}/openssl.cnf"
 	;;
     intermediate)
-	CONFIG="${PKI_ROOT}/${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf"
+	CONFIG="${PKI_ROOT}/${ISSUERCANAME}/openssl_${ISSUERCANAME}.cnf"
 	;;
     privoxy)
-	CONFIG="${PKI_ROOT}/${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf"
+	CONFIG="${PKI_ROOT}/${ISSUERCANAME}/openssl_${ISSUERCANAME}.cnf"
 	;;
     *)
 	echo "Unknown CA name '${CANAME}'; expected root, intermediate, or privoxy." >&2
@@ -67,28 +95,28 @@ case "${CANAME}" in
 	;;
 esac
 
-cd "${PKI_ROOT}"
+cd "${PKI_ROOT}" || exit
 
 . ./identity.env
 
-PASSPHRASE="${ISSUERCADIR}/private/passphrase.txt"
+PASSPHRASE="${ISSUERCANAME}/private/passphrase.txt"
 if [ ! -f "${PASSPHRASE}" ]; then
     echo "Passphrase file '${PASSPHRASE}' doesn't exist." >&2
     exit 1
 fi
-if [ ! -f "${ISSUERCADIR}/index.txt" ]; then
-    echo "Index file '${ISSUERCADIR}/index.txt' doesn't exist; is '${ISSUERCADIR}' an initialized CA?" >&2
+if [ ! -f "${ISSUERCANAME}/index.txt" ]; then
+    echo "Index file '${ISSUERCANAME}/index.txt' doesn't exist; is '${ISSUERCANAME}' an initialized CA?" >&2
     exit 1
 fi
 
 # crlnumber isn't created by pki_structure.sh, so seed it on first run
 # the same way pki_structure.sh seeds serial.
-if [ ! -f "${ISSUERCADIR}/crlnumber" ]; then
-    echo '01' > "${ISSUERCADIR}/crlnumber"
+if [ ! -f "${ISSUERCANAME}/crlnumber" ]; then
+    echo '01' > "${ISSUERCANAME}/crlnumber"
 fi
-mkdir -p "${ISSUERCADIR}/crl"
+mkdir -p "${ISSUERCANAME}/crl"
 
-CRLOUT="${ISSUERCADIR}/crl/${ISSUERCANAME}.crl.pem"
+CRLOUT="${ISSUERCANAME}/crl/${ISSUERCANAME}.crl.pem"
 
 openssl ca \
         -config "${CONFIG}" \

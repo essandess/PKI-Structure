@@ -70,7 +70,7 @@ case "${CANAME}" in
 	;;
 esac
 
-cd "${PKI_ROOT}"
+cd "${PKI_ROOT}" || exit
 
 . ./identity.env
 

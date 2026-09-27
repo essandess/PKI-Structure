@@ -7,7 +7,10 @@
 # Creates a signature and an encryption S/MIME certificate for EMAIL. If
 # certificates named CERTNAME already exist, they are first moved to
 # SHA1-named files, ${CERTNAME}-{signature,encryption}.${CERTSHA1}.{key,cert,chain}.pem,
-# .cer, and .p12, and new certificates are issued in their place.
+# .cer, and .p12, and new certificates are issued in their place. Any
+# other still-valid certificate the intermediate CA has on record under
+# the same CommonName (EMAIL - signature / EMAIL - encryption) is
+# revoked as superseded once the replacement is confirmed issued.
 
 # 3 years and a month
 DAYS=1126
@@ -85,6 +88,7 @@ restore_archived_smime() {
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "${SCRIPT_DIR}/pki_common.sh"
 . "${SCRIPT_DIR}/pki_structure.sh"
 
 # pki_structure.sh has consumed the option flags; EMAIL and CERTNAME remain.
@@ -150,6 +154,8 @@ for EXTENSION in signature encryption; do
 		-subj "/CN=${EMAIL} - ${EXTENSION}/emailAddress=${EMAIL}/O=${ORG_NAME}/OU=${ORG_NAME} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
 		-batch
     then
+	NEW_SERIAL=$(openssl x509 -in "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem" -noout -serial | sed 's|^serial=||')
+	pki_revoke_matching_cn "${ISSUERCADIR}" "${CERTDIR}/openssl_${CERTDIR}.cnf" "${EMAIL} - ${EXTENSION}" "${NEW_SERIAL}" intermediate
 	rm "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem
     else
 	rm "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem
@@ -192,8 +198,8 @@ for EXTENSION in signature encryption; do
 	    -out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cer
 
     # N.b. passphrase.txt holds two independent secrets: line 1 (-passin)
-# unlocks the private key, line 2 (-passout) is the .p12 export password.
-    # https://developer.apple.com/forums/thread/697030
+    # unlocks the private key, line 2 (-passout) is the .p12 export password.
+    # man openssl-passphrase-options
     openssl pkcs12 -legacy -export \
 		-out "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12 \
 		-inkey "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \

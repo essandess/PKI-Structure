@@ -10,6 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}" || exit
 . ./identity.env
+. "${SCRIPT_DIR}/pki_common.sh"
 
 CATRUE=${CATRUE:-0}
 CERTDIR=${CERTDIR:-server}
@@ -55,6 +56,8 @@ if \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
 	-batch
 then
+    NEW_SERIAL=$(openssl x509 -in "${CERTDIR}/certs/${CERTNAME}.cert.pem" -noout -serial | sed 's|^serial=||')
+    pki_revoke_matching_cn "${ISSUERCADIR}" "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${CERTNAME}" "${NEW_SERIAL}" intermediate
     rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem
 else
     rm "${CERTDIR}"/private/"${CERTNAME}".key.pem

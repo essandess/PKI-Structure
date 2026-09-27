@@ -161,11 +161,14 @@ fi
 
 # clean everything if `--clean` set
 if [ "${CLEAN}" == "1" ]; then
-    read -p "This will delete existing keys and certificates in '${CERTDIR}'. Are you sure [y/N]? " -r
-    echo    # (optional) move to a new line
-    if [[ ! "${REPLY}" =~ ^[y]$ ]]; then
-        echo "Aborted." >&2
-	exit 1
+    if [ "${PKI_ASSUME_YES:-0}" == "0" ]; then
+	echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
+	read -p "This will delete existing keys and certificates in '${CERTDIR}'. Are you sure [y/N]? " -r < /dev/tty
+	echo    # (optional) move to a new line
+	if [[ ! "${REPLY}" =~ ^[y]$ ]]; then
+	    echo "Aborted." >&2
+	    exit 1
+	fi
     fi
     for f in \
 	"${CERTDIR}"/private/*.key.pem \
@@ -187,11 +190,14 @@ if [ "${CLEAN}" == "1" ]; then
 	done
     done
     if [ "${VERYCLEAN}" == "1" ]; then
-	read -p "This will delete the existing passphrase in '${CERTDIR}'. Are you sure [y/N]? " -r
-	echo    # (optional) move to a new line
-	if [[ ! "${REPLY}" =~ ^[y]$ ]]; then
-            echo "Aborted." >&2
-	    exit 1
+	if [ "${PKI_ASSUME_YES:-0}" == "0" ]; then
+	    echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
+	    read -p "This will delete the existing passphrase in '${CERTDIR}'. Are you sure [y/N]? " -r < /dev/tty
+	    echo    # (optional) move to a new line
+	    if [[ ! "${REPLY}" =~ ^[y]$ ]]; then
+		echo "Aborted." >&2
+		exit 1
+	    fi
 	fi
 	for f in \
 	    "${CERTDIR}"/private/passphrase.txt \

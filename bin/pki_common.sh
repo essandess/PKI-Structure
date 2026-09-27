@@ -12,14 +12,16 @@
 pki_confirm() {
     local msg="$1"
     if [ "${PKI_ASSUME_YES:-0}" != "0" ]; then
-        return 0
+	return 0
     fi
     echo "${msg}" >&2
-    read -p "Type 'yes' to proceed, anything else to abort: " -r
+    echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
+    read -p "Proceed? [y/N] " -r < /dev/tty
     echo
-    if [ "${REPLY}" != "yes" ]; then
-        echo "Aborted." >&2
-        exit 1
+    if [[ ! "${REPLY}" =~ ^[Yy]$ ]]; then
+	echo "Aborted: declined to revoke/supersede the existing certificate." >&2
+	echo "Re-run and answer 'y', or set PKI_ASSUME_YES=1, to proceed automatically." >&2
+	exit 1
     fi
 }
 

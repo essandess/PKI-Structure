@@ -1,0 +1,25 @@
+# Source description for: Trust Profile for MyOrganization
+# Converter fills in: PayloadType (Configuration), PayloadVersion, all UUIDs,
+# per-payload identifiers, payload types (root vs pkcs1), payload descriptions,
+# display names (from each certificate's CN), and the base64 <data> blobs
+# (from the DER files below).
+
+identifier: org.myorganization.mdm.myorganization-trust
+name: Trust Profile for MyOrganization
+description: Configures your device to trust the Profile Manager server MyOrganization.
+scope: System        # optional; System (default) or User
+
+# Directories searched, in order, for each certificate below.
+cert_dirs:
+  - $PKI_ROOT/root/certs
+  - $PKI_ROOT/intermediate/certs
+  - $PKI_ROOT/server/certs
+  - $PKI_ROOT/privoxy/certs
+  - certs
+
+# Order here becomes the order in PayloadContent.
+# Each entry is a path to a DER (or PEM) certificate.
+certificates:
+  - root.cer
+  - intermediate.cer
+  - privoxy.cer

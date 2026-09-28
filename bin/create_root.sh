@@ -60,3 +60,7 @@ openssl pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
 # verify .p12 passphrase
 openssl pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
 	-passin "pass:$(sed -n 2p "${CERTDIR}"/private/passphrase.txt)"
+
+# Generate the CA's CRL as soon as the CA exists, so the
+# crlDistributionPoints URL in every cert it signs resolves immediately.
+"${PKI_ROOT}"/bin/create_crl.sh root

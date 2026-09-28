@@ -20,7 +20,10 @@ Environment overrides (same names/defaults as create_codesign.sh):
     CERTDIR       default "codesign"    (signing identity directory)
     CERTNAME      default $CERTDIR
     HASH_DIGEST   default "sha256"
-    CERTSHA1      optional: pick a specific signer when several exist
+    ISSUERCADIR   default "intermediate"  (its certs/<ISSUERCANAME>.chain.pem and index.txt
+    ISSUERCANAME  default $ISSUERCADIR     are used to vet signing certs: revoked/expired are skipped;
+                                           every CRL in */crl/ is also checked, see collect_crls)
+    CERTSHA1      optional: pick a specific signer when several usable ones exist
     UNSIGNED_DIR  default "mdm/mobfileconfigs-unsigned"
     SIGNED_DIR    default "mdm/mobfileconfigs-signed"
 """
@@ -34,6 +37,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -268,27 +272,135 @@ def validate_profile(profile):
 # --------------------------------------------------------------------------
 # Signing (same layout/conventions as create_codesign.sh)
 # --------------------------------------------------------------------------
+def _validity(c):
+    nb = getattr(c, "not_valid_before_utc", None) or c.not_valid_before.replace(tzinfo=timezone.utc)
+    na = getattr(c, "not_valid_after_utc", None) or c.not_valid_after.replace(tzinfo=timezone.utc)
+    return nb, na
+
+
+def load_ca_index(index_file):
+    """Parse an OpenSSL CA database (index.txt): {serial_int: (status, revocation_field)}.
+    Columns are tab-separated: status, expiry, revocation[,reason], serial(hex), filename, subject."""
+    db = {}
+    for line in index_file.read_text().splitlines():
+        f = line.split("\t")
+        if len(f) >= 4:
+            try:
+                db[int(f[3], 16)] = (f[0], f[2])
+            except ValueError:
+                pass
+    return db
+
+
+def collect_crls():
+    """Load every CRL under PKI_ROOT/*/crl/.  In each directory prefer '*.crl.pem'; if there is
+    none, use '*.crl' (DER or PEM).  Returns [(path, crl_object)]."""
+    found = []
+    for d in sorted(PKI_ROOT.glob("*/crl")):
+        files = sorted(d.glob("*.crl.pem")) or sorted(d.glob("*.crl"))
+        for f in files:
+            raw = f.read_bytes()
+            try:
+                crl = (x509.load_pem_x509_crl(raw) if b"-----BEGIN" in raw
+                       else x509.load_der_x509_crl(raw))
+            except ValueError as e:
+                die(f"cannot parse CRL {f}: {e}")
+            found.append((f, crl))
+    return found
+
+
+def signer_problems(cert, cert_file, ca_db, ca_bundle, crl_bundle, now):
+    """Return a list of reasons this certificate must not be used to sign (empty = usable)."""
+    nb, na = _validity(cert)
+    if now < nb:
+        return [f"not valid until {nb:%Y-%m-%d %H:%M}Z"]
+    if now > na:
+        return [f"expired {na:%Y-%m-%d %H:%M}Z"]
+
+    entry = ca_db.get(cert.serial_number)
+    if entry is None:
+        return [f"serial {cert.serial_number:X} not in the issuer's index.txt (cannot confirm it is not revoked)"]
+    status, rev = entry
+    if status == "R":
+        return [f"revoked ({rev})"]
+    if status != "V":
+        return [f"index.txt status '{status}' (expected V)"]
+
+    try:  # if an EKU is present it must allow code signing
+        eku = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+        if x509.oid.ExtendedKeyUsageOID.CODE_SIGNING not in eku:
+            return ["ExtendedKeyUsage does not include codeSigning"]
+    except x509.ExtensionNotFound:
+        pass
+
+    # Chain + CRL check: -crl_check_all needs a current, correctly signed CRL for the signer
+    # (from the intermediate) and for every CA below the root (from the root).
+    r = subprocess.run(["openssl", "verify", "-CAfile", str(ca_bundle),
+                        "-crl_check_all", "-CRLfile", str(crl_bundle), str(cert_file)],
+                       capture_output=True, text=True)
+    if r.returncode:
+        lines = (r.stdout + r.stderr).strip().splitlines()
+        err = next((l for l in lines if "error" in l.lower()), lines[-1] if lines else "")
+        hint = " (missing or expired CRL?)" if "CRL" in err else ""
+        return [f"failed chain/CRL verification against {ca_bundle.name}: {err}{hint}"]
+    return []
+
+
 def find_signer():
+    """Pick the newest signing cert that is in date, not revoked (per the issuer's index.txt),
+    and chains to the issuer CA bundle.  Layout follows create_codesign.sh."""
     certdir_name = os.environ.get("CERTDIR", "codesign")
     certname = os.environ.get("CERTNAME", certdir_name)
     certdir = under_root(certdir_name)
+    issuer_dir = under_root(os.environ.get("ISSUERCADIR", "intermediate"))
+    issuer_name = os.environ.get("ISSUERCANAME", os.environ.get("ISSUERCADIR", "intermediate"))
     want = os.environ.get("CERTSHA1", "").lower()
 
+    ca_bundle = issuer_dir / "certs" / f"{issuer_name}.chain.pem"
+    if not ca_bundle.is_file():  # same fallback as create_codesign.sh
+        ca_bundle = issuer_dir / "certs" / f"{issuer_name}.cert.pem"
+    if not ca_bundle.is_file():
+        die(f"issuer CA chain not found: {issuer_dir / 'certs' / (issuer_name + '.chain.pem')}")
+    index_file = issuer_dir / "index.txt"
+    if not index_file.is_file():
+        die(f"{index_file} not found; cannot check revocation status of signing certs")
+    ca_db = load_ca_index(index_file)
+
+    crls = collect_crls()
+    if not crls:
+        die(f"no CRLs found in {PKI_ROOT}/*/crl/ (looked for *.crl.pem, then *.crl); "
+            f"cannot check revocation")
+    print("  CRLs: " + ", ".join(f"{f.parent.parent.name}/crl/{f.name}" for f, _ in crls), file=sys.stderr)
+
+    now = datetime.now(timezone.utc)
     pat = re.compile(rf"^{re.escape(certname)}\.([0-9a-f]{{40}})\.cert\.pem$")
-    found = []
-    for f in (certdir / "certs").glob(f"{glob.escape(certname)}.*.cert.pem"):
-        m = pat.match(f.name)
-        if m and (not want or m.group(1) == want):
+    usable, rejected = [], []
+    with tempfile.TemporaryDirectory() as td:
+        crl_bundle = Path(td) / "crls.pem"
+        crl_bundle.write_bytes(b"".join(c.public_bytes(serialization.Encoding.PEM) for _, c in crls))
+        for f in sorted((certdir / "certs").glob(f"{glob.escape(certname)}.*.cert.pem")):
+            m = pat.match(f.name)
+            if not m or (want and m.group(1) != want):
+                continue
             c = load_cert(f)
-            found.append((getattr(c, "not_valid_before_utc", None) or c.not_valid_before, m.group(1), f, c))
-    if not found:
-        die(f"no signer '{certname}.<sha1>.cert.pem' in {certdir / 'certs'}"
-            + (f" with sha1 {want}" if want else ""))
-    found.sort(key=lambda t: t[0])
-    _, sha, cert_file, cert = found[-1]  # newest
-    if len(found) > 1:
-        print(f"  note: {len(found)} signer certs found, using newest ({sha}); set CERTSHA1 to override",
-              file=sys.stderr)
+            problems = signer_problems(c, f, ca_db, ca_bundle, crl_bundle, now)
+            if problems:
+                rejected.append((f, problems[0]))
+            else:
+                usable.append((_validity(c)[0], m.group(1), f, c))
+
+    for f, why in rejected:
+        print(f"  skipping signer {f.name}: {why}", file=sys.stderr)
+    if not usable:
+        die(f"no usable signing certificate '{certname}.<sha1>.cert.pem' in {certdir / 'certs'}"
+            + (f" with sha1 {want}" if want else "")
+            + (" (all candidates rejected, see above)" if rejected else " (none found)"))
+
+    usable.sort(key=lambda t: t[0])
+    _, sha, cert_file, cert = usable[-1]  # newest usable
+    if len(usable) > 1:
+        print(f"  note: {len(usable)} usable signer certs found, using newest ({sha}); "
+              f"set CERTSHA1 to override", file=sys.stderr)
 
     key = certdir / "private" / f"{certname}.{sha}.key.pem"
     chain = certdir / "certs" / f"{certname}.{sha}.chain.pem"
@@ -300,6 +412,7 @@ def find_signer():
 
 
 def sign(unsigned, signed):
+    signed.unlink(missing_ok=True)  # never leave a stale signed profile behind if signing fails
     digest = os.environ.get("HASH_DIGEST", "sha256")
     cert_file, cert, key, chain, pw = find_signer()
 

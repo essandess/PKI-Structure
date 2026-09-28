@@ -148,3 +148,7 @@ cp "${CERTDIR}"/certs/{"${CERTNAME}","${CERTNAME}"."${CERTSHA1}"}.cert.pem
 cp "${CERTDIR}"/certs/{"${CERTNAME}","${CERTNAME}"."${CERTSHA1}"}.chain.pem
 cp "${CERTDIR}"/certs/{"${CERTNAME}","${CERTNAME}"."${CERTSHA1}"}.cer
 cp "${CERTDIR}"/private/{"${CERTNAME}","${CERTNAME}"."${CERTSHA1}"}.p12
+
+# Generate the CA's CRL as soon as the CA exists, so the
+# crlDistributionPoints URL in every cert it signs resolves immediately.
+"${PKI_ROOT}"/bin/create_crl.sh intermediate

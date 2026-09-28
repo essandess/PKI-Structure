@@ -50,7 +50,7 @@ openssl req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 # Server certificate
 if \
     openssl ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
-	-days ${DAYS} -notext -md ${HASH_DIGEST} -extensions server_cert \
+	-days ${DAYS} -notext -md "${HASH_DIGEST}" -extensions server_cert \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \

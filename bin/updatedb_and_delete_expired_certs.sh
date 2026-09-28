@@ -55,8 +55,9 @@ cd "${PKI_ROOT}" || exit
 
 delete_expired_certs() {
     local PEM="$1"
-    local PEMBASE="$(basename "${PEM}" .cert.pem)"
-    local PEMDIR="$(dirname "${PEM}")"
+    local PEMBASE PEMDIR
+    PEMBASE="$(basename "${PEM}" .cert.pem)"
+    PEMDIR="$(dirname "${PEM}")"
     if ! openssl x509 -checkend "0" -noout -in "${PEM}" 1> /dev/null 2>&1
     then \
         for p in "${PEMDIR}/${PEMBASE}"{.cert.pem,.chain.pem,.cer} \
@@ -76,13 +77,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}"
 # update databases
-if [ -f "${CERTDIR}/private/passphrase.txt" -a -f "${CERTDIR}/index.txt" ]; then
+if [ -f "${CERTDIR}/private/passphrase.txt" ] && [ -f "${CERTDIR}/index.txt" ]; then
     openssl ca -config openssl.cnf -passin "file:${CERTDIR}/private/passphrase.txt" -updatedb
 fi
-if [ -f "intermediate/private/passphrase.txt" -a -f "intermediate/index.txt" ]; then
+if [ -f "intermediate/private/passphrase.txt" ] && [ -f "intermediate/index.txt" ]; then
     openssl ca -config intermediate/openssl_intermediate.cnf -passin "file:intermediate/private/passphrase.txt" -updatedb
 fi
-if [ -f "privoxy/private/passphrase.txt" -a -f "privoxy/index.txt" ]; then
+if [ -f "privoxy/private/passphrase.txt" ] && [ -f "privoxy/index.txt" ]; then
     openssl ca -config privoxy/openssl_privoxy.cnf -passin "file:privoxy/private/passphrase.txt" -updatedb
 fi
 

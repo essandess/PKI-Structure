@@ -116,7 +116,6 @@ if [ ! -f "${ISSUERCANAME}/crlnumber" ]; then
 fi
 mkdir -p "${ISSUERCANAME}/crl"
 
-CRLOUT="${ISSUERCANAME}/crl/${ISSUERCANAME}.crl.pem"
 
 openssl ca \
         -config "${CONFIG}" \

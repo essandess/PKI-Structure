@@ -147,7 +147,7 @@ for EXTENSION in signature encryption; do
     if \
 	openssl ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 		-extensions smime_${EXTENSION} \
-		-days ${DAYS} -notext -md ${HASH_DIGEST} \
+		-days ${DAYS} -notext -md "${HASH_DIGEST}" \
 		-in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem \
 		-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
 		-passin file:"${ISSUERCADIR}"/private/passphrase.txt \

@@ -153,7 +153,7 @@ USEAGE
 fi
 
 if [ "${CLEAN}" == "0" ] \
-      && ! [ "${CERTDIR}" = "${ISSUERCADIR}" -a "${CERTNAME}" = "${ISSUERCANAME}" ] \
+      && ! { [ "${CERTDIR}" = "${ISSUERCADIR}" ] && [ "${CERTNAME}" = "${ISSUERCANAME}" ]; } \
       && ! [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem ]; then
     echo "Issuer certificate ${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem doesn't exist."
     exit 1
@@ -256,12 +256,12 @@ for f in "${CERTDIR}"/private/passphrase.txt; do
                     if [ -z "$(echo "${char}" | sed -E 's|[[:lower:]]||')" ]; then
                         # 30% chance flip lowercase
                         if [ ${doit} -lt 3 ] ; then
-                            char="$(echo "${char}" | tr '[[:lower:]]' '[[:upper:]]')"
+                            char="$(echo "${char}" | tr '[:lower:]' '[:upper:]')"
                         fi
                     elif [ -z "$(echo "${char}" | sed -E 's|[[:upper:]]||')" ]; then
                         # 50% chance flip uppercase
                         if [ ${doit} -lt 5 ]; then
-                            char="$(echo "${char}" | tr '[[:upper:]]' '[[:lower:]]')"
+                            char="$(echo "${char}" | tr '[:upper:]' '[:lower:]')"
                         fi
                     fi
                     newpassphrase="${newpassphrase}${char}"

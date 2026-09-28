@@ -48,4 +48,9 @@ USEAGE
     exit 0
 fi
 
-EXPSECS=$(("${EXPMONTHS}" * (30 * 24 + 12) * 3600)); find . -type f -path '*/certs/*.cert.pem' -exec bash -c 'if ! openssl x509 -checkend '"${EXPSECS}"' -noout -in {} 1> /dev/null 2>&1; then echo "{} expires on $(openssl x509 -enddate -noout -in {})" | sed "s|notAfter=||"; fi' ';'
+EXPSECS=$(("${EXPMONTHS}" * (30 * 24 + 12) * 3600))
+find . -type f -path '*/certs/*.cert.pem' -exec bash -c '
+    if ! openssl x509 -checkend "$1" -noout -in "$2" 1> /dev/null 2>&1; then
+        echo "$2 expires on $(openssl x509 -enddate -noout -in "$2")" | sed "s|notAfter=||"
+    fi
+' bash "${EXPSECS}" {} \;

@@ -1,0 +1,93 @@
+# ===========================================================================
+# PKI Structure .gitignore
+# Tracked: scripts, openssl .cnf files, docs, *.sample templates.
+# Ignored: anything personalized to a deployment, secrets, generated PKI output.
+# ===========================================================================
+
+# --- Deployment-specific files (seeded from their *.sample) -----------------
+identity.env
+*.env
+bin/create_organization_smime_pki.sh
+
+# --- MDM: private data ------------------------------------------------------
+# Only the *.sample templates and the generic baseline are tracked.
+# Everything else in mdm-private/ (real YAML, generated profiles) may hold secrets.
+mdm-private/*
+!mdm-private/yaml/
+mdm-private/yaml/*
+!mdm-private/yaml/*.sample
+!mdm-private/yaml/ios-restrictions-baseline.yaml
+*.mobileconfig
+
+# --- Keys, passphrases ------------------------------------------------------
+*.key
+*.key.pem
+*.p12
+*.pfx
+*.jks
+passphrase.txt
+*.passphrase
+*.pass
+
+# --- Generated certificates, requests, CRLs ---------------------------------
+# (Use `git add -f` for a public certificate that should be tracked.)
+*.cer
+*.crt
+*.der
+*.cert.pem
+*.chain.pem
+*.csr
+*.csr.pem
+*.crl
+*.crl.pem
+*.srl
+
+# --- OpenSSL CA database and working directories ----------------------------
+**/private/
+**/certs/
+**/newcerts/
+**/crl/
+index.txt
+index.txt.attr
+index.txt.old
+index.txt.attr.old
+serial
+serial.old
+crlnumber
+crlnumber.old
+
+# --- Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+
+# --- Backups, temp, logs ----------------------------------------------------
+*.bak
+*.orig
+*.rej
+*.tmp
+*.log
+*~
+*.swp
+*.swo
+
+# --- Editors / OS -----------------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+.AppleDouble
+._*
+Thumbs.db
+
+# --- Always track templates (parent directories must not be ignored) --------
+!*.sample

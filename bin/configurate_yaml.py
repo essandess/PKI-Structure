@@ -3,7 +3,7 @@
 configurate_yaml.py -- YAML -> .mobileconfig (unsigned) -> signed .mobileconfig
 
 Usage (from PKI_ROOT):
-    bin/configurate_yaml.py mdm/yaml/myorganization-trust.yaml [--no-sign]
+    bin/configurate_yaml.py mdm-private/yaml/myorganization-trust.yaml [--no-sign]
 
 PKI_ROOT is the directory above this script's directory, and the script
 chdir()s into it, exactly as bin/pki_structure.sh does:
@@ -11,6 +11,15 @@ chdir()s into it, exactly as bin/pki_structure.sh does:
     PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
     cd "${PKI_ROOT}"
 All relative paths are therefore relative to PKI_ROOT, wherever you run it from.
+SECURITY: YAML files and generated profiles can contain secrets.  Ownership is left alone (the
+script runs as whoever runs it); only permissions are managed:
+  * Generated profiles (mdm-private/mobfileconfigs-*) end up as 0700 directories and 0600
+    files, also on exit when the run failed.
+  * Before anything is read, ALL of mdm-private/ is checked. Loose permissions on the output
+    directories/files produce a warning and are fixed immediately.
+  * Loose permissions on everything else (your YAML, etc.) produce a warning and a prompt
+    offering to fix them; nothing there is changed without a "y".
+  * The YAML must live under mdm-private/, and the output directories must be inside it.
 If the YAML has no 'identifier:', it is generated as  <reverse-DNS of $DOMAIN_VAR>.mdm.<yaml file name>
 (e.g. org.myorganization.mdm.myorganization-trust), where DOMAIN_VAR is the identity.env
 variable named below. An explicit 'identifier:' in the YAML still wins.
@@ -24,8 +33,8 @@ Environment overrides (same names/defaults as create_codesign.sh):
     ISSUERCANAME  default $ISSUERCADIR     are used to vet signing certs: revoked/expired are skipped;
                                            every CRL in */crl/ is also checked, see collect_crls)
     CERTSHA1      optional: pick a specific signer when several usable ones exist
-    UNSIGNED_DIR  default "mdm/mobfileconfigs-unsigned"
-    SIGNED_DIR    default "mdm/mobfileconfigs-signed"
+    UNSIGNED_DIR  default "mdm-private/mobfileconfigs-unsigned"
+    SIGNED_DIR    default "mdm-private/mobfileconfigs-signed"
 """
 import argparse
 import glob
@@ -33,6 +42,7 @@ import os
 import plistlib
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -54,6 +64,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PKI_ROOT = SCRIPT_DIR.parent
 os.chdir(PKI_ROOT)
 os.environ["PKI_ROOT"] = str(PKI_ROOT)  # so $PKI_ROOT works inside the YAML
+PRIVATE_DIR = PKI_ROOT / "mdm-private"   # holds secrets: see audit_private() / secure_outputs()
+os.umask(0o077)  # anything we (or openssl) create is private from the first byte
 
 
 def die(msg):
@@ -292,6 +304,125 @@ def load_ca_index(index_file):
     return db
 
 
+def output_dirs():
+    unsigned = under_root(os.environ.get("UNSIGNED_DIR", "mdm-private/mobfileconfigs-unsigned"))
+    signed = under_root(os.environ.get("SIGNED_DIR", "mdm-private/mobfileconfigs-signed"))
+    return unsigned, signed
+
+
+def _entries(base, prune=()):
+    """Yield (path, wanted_mode) for base and everything below it: directories want 0700, files
+    0600, and wanted_mode None marks a symlink (never followed). Directories in `prune` are skipped."""
+    prune = {os.path.abspath(p) for p in prune}
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if os.path.abspath(os.path.join(dirpath, d)) not in prune]
+        yield dirpath, 0o700
+        for n in dirnames + filenames:
+            if os.path.islink(os.path.join(dirpath, n)):
+                yield os.path.join(dirpath, n), None
+        for n in filenames:
+            if not os.path.islink(os.path.join(dirpath, n)):
+                yield os.path.join(dirpath, n), 0o600
+
+
+def find_loose(base, prune=()):
+    """Return ([(path, wanted_mode, stat)] whose mode is wrong, [symlinks])."""
+    loose, links = [], []
+    for path, want in _entries(base, prune):
+        if want is None:
+            links.append(path)
+            continue
+        st = os.lstat(path)
+        if stat.S_IMODE(st.st_mode) != want:
+            loose.append((path, want, st))
+    return loose, links
+
+
+def apply_fix(loose):
+    for path, want, st in loose:
+        try:
+            os.chmod(path, want)
+        except PermissionError as e:
+            die(f"cannot change permissions of {path}: {e}")
+
+
+def secure_outputs(dirs):
+    """Always applied to the generated profiles: 0700 directories, 0600 files."""
+    for d in dirs:
+        if not d.resolve().is_relative_to(PRIVATE_DIR.resolve()):
+            continue  # never touch anything outside mdm-private/
+        if d.is_symlink():
+            die(f"{d} is a symlink; refusing")
+        if not d.is_dir():
+            continue
+        loose, links = find_loose(d)
+        if links:
+            die(f"symlink under {d}: {links[0]} (refusing, chmod would follow it)")
+        if loose:
+            print(f"WARNING: {len(loose)} path(s) under {d} had loose permissions at exit; "
+                  f"set to 0700/0600", file=sys.stderr)
+        apply_fix(loose)
+
+
+def _under(path, directory):
+    path, directory = os.path.abspath(path), os.path.abspath(directory)
+    return path == directory or path.startswith(directory + os.sep)
+
+
+def _print_loose(items):
+    for path, want, st in items[:25]:
+        print(f"  {stat.S_IMODE(st.st_mode):04o}  (want {want:04o})  {os.path.relpath(path, PKI_ROOT)}",
+              file=sys.stderr)
+    if len(items) > 25:
+        print(f"  ... and {len(items) - 25} more", file=sys.stderr)
+
+
+def audit_private(outputs):
+    """Check permissions of everything under mdm-private/ before any secret is read.
+      * Generated-profile locations (the output directories and their files): warn, then fix
+        immediately (these are always 0700/0600).
+      * Everything else (your YAML, etc.): warn and offer to fix; nothing changes without a y."""
+    if not PRIVATE_DIR.is_dir():
+        return
+    loose, links = find_loose(PRIVATE_DIR)
+    for link in links:
+        print(f"WARNING: symlink under {PRIVATE_DIR.name}/ (not followed, not checked): {link}",
+              file=sys.stderr)
+
+    out_loose = [x for x in loose if any(_under(x[0], d) for d in outputs)]
+    out_paths = {x[0] for x in out_loose}
+    in_loose = [x for x in loose if x[0] not in out_paths]
+
+    if out_loose:
+        print(f"\nWARNING: output paths under {PRIVATE_DIR.name}/ had loose permissions; "
+              f"setting 0700 (dirs) / 0600 (files) now:", file=sys.stderr)
+        _print_loose(out_loose)
+        apply_fix(out_loose)
+
+    if not in_loose:
+        return
+    print(f"\nWARNING: these private paths under {PRIVATE_DIR.name}/ may hold secrets but are "
+          f"not restricted (want 0700 dirs / 0600 files):", file=sys.stderr)
+    _print_loose(in_loose)
+
+    fix_cmd = (f"find {PRIVATE_DIR.name} -type d -exec chmod 0700 {{}} + && "
+               f"find {PRIVATE_DIR.name} -type f -exec chmod 0600 {{}} +")
+    if not sys.stdin.isatty():
+        print(f"Not changed (no terminal to prompt on). To fix, from {PKI_ROOT}:\n  {fix_cmd}\n",
+              file=sys.stderr)
+        return
+    try:
+        answer = input("Change them now? [y/N] ").strip().lower()
+    except EOFError:
+        answer = ""
+    if answer in ("y", "yes"):
+        apply_fix(in_loose)
+        print(f"  permissions fixed on {len(in_loose)} path(s)")
+    else:
+        print(f"WARNING: continuing with loose permissions. To fix later, from {PKI_ROOT}:\n"
+              f"  {fix_cmd}\n", file=sys.stderr)
+
+
 def collect_crls():
     """Load every CRL under PKI_ROOT/*/crl/.  In each directory prefer '*.crl.pem'; if there is
     none, use '*.crl' (DER or PEM).  Returns [(path, crl_object)]."""
@@ -456,11 +587,23 @@ def main():
     ap.add_argument("--no-sign", action="store_true", help="only write the unsigned profile")
     args = ap.parse_args()
 
+    outputs = output_dirs()
+    audit_private(outputs)         # warn (+ prompt for the YAML) before any secret is read
+    try:
+        build(args)
+    finally:
+        secure_outputs(outputs)    # generated profiles: 0700/0600, even after a failure
+
+
+def build(args):
     ypath = under_root(args.yaml_file)
     if not ypath.is_file() and (ORIG_CWD / args.yaml_file).is_file():
         ypath = (ORIG_CWD / args.yaml_file).resolve()  # convenience: path relative to where you ran it
     if not ypath.is_file():
         die(f"YAML file not found: {args.yaml_file}")
+    if not ypath.resolve().is_relative_to(PRIVATE_DIR.resolve()):
+        die(f"{ypath} is outside {PRIVATE_DIR}. YAML files can contain secrets and must live "
+            f"under {PRIVATE_DIR.name}/")
 
     cfg = yaml.safe_load(ypath.read_text())
     for key in ("identifier", "name", "description", "organization"):
@@ -479,8 +622,10 @@ def main():
     profile = build_profile(cfg, cert_dirs)
     validate_profile(profile)
 
-    unsigned_dir = under_root(os.environ.get("UNSIGNED_DIR", "mdm/mobfileconfigs-unsigned"))
-    signed_dir = under_root(os.environ.get("SIGNED_DIR", "mdm/mobfileconfigs-signed"))
+    unsigned_dir, signed_dir = output_dirs()
+    for d in (unsigned_dir, signed_dir):
+        if not d.resolve().is_relative_to(PRIVATE_DIR.resolve()):
+            die(f"output directory {d} must be inside {PRIVATE_DIR} (profiles can contain secrets)")
     unsigned_dir.mkdir(parents=True, exist_ok=True)
     unsigned = unsigned_dir / (ypath.stem + ".mobileconfig")
 

@@ -9,7 +9,7 @@ Keychain and necessary MacPorts installation directories.
 ```sh
 # Install and trust privoxy certificates into System Keychain
 
-sudo security import privoxy/private/privoxy.p12 -k /Library/Keychains/System.keychain -P "$(head -1 privoxy/private/passphrase.txt)" -A
+sudo security import privoxy/private/privoxy.p12 -k /Library/Keychains/System.keychain -P "$(sed -n 2p privoxy/private/passphrase.txt)" -A
 sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain privoxy/certs/privoxy.cer
 
 # Install the PKI
@@ -32,7 +32,7 @@ PRIVOXY_PKI_STRUCTURE
 
 # Install and trust privoxy certificates into System Keychain
 
-# sudo security import privoxy/private/privoxy.p12 -k /Library/Keychains/System.keychain -P "$(head -1 privoxy/private/passphrase.txt)" -A
+# sudo security import privoxy/private/privoxy.p12 -k /Library/Keychains/System.keychain -P "$(sed -n 2p privoxy/private/passphrase.txt)" -A
 # sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain privoxy/certs/privoxy.cer
 
 # Install the PKI

@@ -71,7 +71,7 @@ rsync -am \
     --exclude='.git/' \
     --exclude='*.env' \
     --exclude='create_organization_smime_pki.sh' \
-    --exclude="${MDM_PRIVATE}" \
+    --exclude="${MDM_PRIVATE}/" \
     --include='*/' \
     --include='*.sh' --include='*.py' \
     --include='*.cnf' \

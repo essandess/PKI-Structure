@@ -9,7 +9,8 @@ DAYS=825
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}" || exit
-. ./pki_identity.env
+
+. "${PKI_ROOT}/pki_identity.env"
 . "${SCRIPT_DIR}/pki_common.sh"
 
 CATRUE=${CATRUE:-0}

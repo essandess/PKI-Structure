@@ -16,6 +16,9 @@ EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
 RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-2048}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}" || exit
+
 . "${SCRIPT_DIR}/pki_common.sh"
 . "${SCRIPT_DIR}/pki_structure.sh"
 

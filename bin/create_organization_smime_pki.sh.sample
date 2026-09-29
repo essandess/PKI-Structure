@@ -2,6 +2,15 @@
 
 # create_organization_smime_pki.sh
 
+set -e
+set -E
+set -o pipefail
+trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}" || exit
+
 # S/MIME certificate creation
 
 # Person A

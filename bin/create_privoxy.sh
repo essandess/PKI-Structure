@@ -10,6 +10,9 @@ ISSUERCANAME=${ISSUERCANAME:-privoxy}
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}" || exit
+
 . "${SCRIPT_DIR}/pki_structure.sh"
 
 # CA encrypted key

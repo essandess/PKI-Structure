@@ -12,6 +12,7 @@ trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}" || exit
 
 POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-certfile root|intermediate|privoxy [crlReason]}
 POSITIONAL_ARGS=()
@@ -95,9 +96,7 @@ case "${CANAME}" in
 	;;
 esac
 
-cd "${PKI_ROOT}" || exit
-
-. ./pki_identity.env
+. "${PKI_ROOT}/pki_identity.env"
 
 PASSPHRASE="${ISSUERCANAME}/private/passphrase.txt"
 if [ ! -f "${PASSPHRASE}" ]; then

@@ -8,6 +8,7 @@ trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}" || exit
 
 
 DEBUG=${DEBUG:-0}
@@ -49,9 +50,7 @@ USEAGE
     exit 0
 fi
 
-cd "${PKI_ROOT}" || exit
-
-. ./pki_identity.env
+. "${PKI_ROOT}/pki_identity.env"
 
 delete_expired_certs() {
     local PEM="$1"
@@ -73,9 +72,6 @@ delete_expired_certs() {
 export -f delete_expired_certs
 
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "${PKI_ROOT}"
 # update databases
 if [ -f "${CERTDIR}/private/passphrase.txt" ] && [ -f "${CERTDIR}/index.txt" ]; then
     openssl ca -config openssl.cnf -passin "file:${CERTDIR}/private/passphrase.txt" -updatedb

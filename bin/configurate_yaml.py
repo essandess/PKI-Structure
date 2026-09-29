@@ -11,8 +11,11 @@ chdir()s into it, exactly as bin/pki_structure.sh does:
     PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
     cd "${PKI_ROOT}"
 All relative paths are therefore relative to PKI_ROOT, wherever you run it from.
-SECURITY: YAML files and generated profiles can contain secrets.  Ownership is left alone (the
-script runs as whoever runs it); only permissions are managed:
+SECURITY: YAML files and generated profiles can contain secrets (e.g. a Wi-Fi
+password in a settings payload). Signing a profile does NOT encrypt it: any
+plaintext secret in the YAML is readable in the signed .mobileconfig by anyone
+who has it. Ownership is left alone (the script runs as whoever runs it);
+only permissions are managed:
   * Generated profiles (mdm-private/mobfileconfigs-*) end up as 0700 directories and 0600
     files, also on exit when the run failed.
   * Before anything is read, ALL of mdm-private/ is checked. Loose permissions on the output
@@ -23,8 +26,35 @@ script runs as whoever runs it); only permissions are managed:
 If the YAML has no 'identifier:', it is generated as  <reverse-DNS of $DOMAIN_VAR>.mdm.<yaml file name>
 (e.g. org.myorganization.mdm.myorganization-trust), where DOMAIN_VAR is the identity.env
 variable named below. An explicit 'identifier:' in the YAML still wins.
-${VAR} / ${VAR|rdns} placeholders in the YAML fields identifier, name, description and
-organization are filled in from ./identity.env (see load_identity below).
+${VAR} / ${VAR|rdns} placeholders in the YAML fields identifier, name, description,
+organization, and in payloads[].name / .description / .settings (recursively), are
+filled in from ./identity.env (see load_identity below).
+
+A profile needs at least one of 'certificates:' or 'payloads:'.
+
+'certificates:' (with 'cert_dirs:') embeds X.509 certificates as
+com.apple.security.root or com.apple.security.pkcs1 payloads; see resolve_cert.
+
+'payloads:' is a list of arbitrary Apple payload dicts:
+    payloads:
+      - id: passcode              # required, stable, unique in the profile; do not
+                                   # rename after deployment (see 'include:' below)
+        type: com.apple.mobiledevice.passwordpolicy   # required, verbatim
+        name: Passcode             # optional; PayloadDisplayName (default: id)
+        description: ...           # optional; PayloadDescription
+        settings:                  # Apple's own key names/types, passed through as-is.
+          forcePIN: true           # Keys starting with "Payload" are reserved.
+  'include:' merges other YAML files' 'payloads:' underneath this file's own, in the
+  listed order, keyed by 'id' (this file's own payloads are applied last and win):
+    include:
+      - ios-restrictions-baseline.yaml
+  Each include path is relative to the file that lists it (recursive: an included
+  file's own 'include:' resolves relative to itself). An included file may contain
+  only 'payloads:' and 'include:'. A later 'settings:' for the same id is deep-merged
+  key by key into the earlier one; 'name'/'description'/'type' are replaced outright
+  when given. Redefining an existing id with a different 'type' is an error -- use a
+  different id instead.
+
 Environment overrides (same names/defaults as create_codesign.sh):
     CERTDIR       default "codesign"    (signing identity directory)
     CERTNAME      default $CERTDIR
@@ -58,13 +88,16 @@ from cryptography.x509.oid import NameOID
 # Fixed namespace so UUIDs are deterministic across rebuilds. Change once, keep forever.
 NAMESPACE = uuid.UUID("6f1c2f54-3b0e-4a57-9c5e-2d1f8a7b4c10")
 
+# Payload types this script itself constructs as certificate payloads (see build_profile).
+CERT_PAYLOAD_TYPES = {"com.apple.security.root", "com.apple.security.pkcs1"}
+
 # Same definition as bin/pki_structure.sh.
 ORIG_CWD = Path.cwd()
 SCRIPT_DIR = Path(__file__).resolve().parent
 PKI_ROOT = SCRIPT_DIR.parent
 os.chdir(PKI_ROOT)
 os.environ["PKI_ROOT"] = str(PKI_ROOT)  # so $PKI_ROOT works inside the YAML
-PRIVATE_DIR = PKI_ROOT / "mdm-private"   # holds secrets: see audit_private() / secure_outputs()
+MDM_PRIVATE = PKI_ROOT / "mdm-private"   # holds secrets: see audit_private() / secure_outputs()
 os.umask(0o077)  # anything we (or openssl) create is private from the first byte
 
 
@@ -79,6 +112,14 @@ def expand(p):
 def under_root(p):
     p = expand(p)
     return p if p.is_absolute() else PKI_ROOT / p
+
+
+def load_yaml_file(path):
+    try:
+        cfg = yaml.safe_load(path.read_text())
+    except yaml.YAMLError as e:
+        die(f"cannot parse YAML {path}: {e}")
+    return cfg or {}
 
 
 # --------------------------------------------------------------------------
@@ -158,6 +199,98 @@ def render(text):
     return _PLACEHOLDER.sub(sub, text)
 
 
+def render_deep(obj):
+    """Apply render() to every string leaf in a nested dict/list structure."""
+    if isinstance(obj, dict):
+        return {k: render_deep(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [render_deep(v) for v in obj]
+    return render(obj)
+
+
+# --------------------------------------------------------------------------
+# 'payloads:' / 'include:' merging
+# --------------------------------------------------------------------------
+def deep_merge_settings(base, overlay):
+    """Recursively merge overlay into base; overlay wins on scalar conflicts, dicts
+    merge key by key, anything else (lists, scalars) is replaced outright."""
+    result = dict(base)
+    for k, v in overlay.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = deep_merge_settings(result[k], v)
+        else:
+            result[k] = v
+    return result
+
+
+def merge_payload_entry(base, overlay):
+    merged = dict(base)
+    for key in ("name", "description", "type"):
+        if key in overlay:
+            merged[key] = overlay[key]
+    merged["settings"] = deep_merge_settings(base.get("settings") or {}, overlay.get("settings") or {})
+    return merged
+
+
+def merge_payloads(base_list, overlay_list, source_desc=""):
+    """Merge overlay_list into base_list by 'id'. A later entry with the same id deep-merges
+    its 'settings' into the earlier one; 'name'/'description'/'type' are replaced outright
+    when given. An id reused with a different 'type' is an error."""
+    by_id, order = {}, []
+    for p in base_list:
+        pid = p.get("id")
+        if not pid:
+            die(f"payload entry missing required 'id'{source_desc}: {p}")
+        if pid in by_id:
+            die(f"duplicate payload id '{pid}'{source_desc}")
+        by_id[pid] = dict(p)
+        order.append(pid)
+    for p in overlay_list:
+        pid = p.get("id")
+        if not pid:
+            die(f"payload entry missing required 'id'{source_desc}: {p}")
+        if pid in by_id:
+            existing = by_id[pid]
+            if "type" in p and existing.get("type") and p["type"] != existing["type"]:
+                die(f"payload id '{pid}' redefined with a different type "
+                    f"('{existing['type']}' -> '{p['type']}'){source_desc}; use a different id")
+            by_id[pid] = merge_payload_entry(existing, p)
+        else:
+            by_id[pid] = dict(p)
+            order.append(pid)
+    return [by_id[pid] for pid in order]
+
+
+def resolve_payloads_from_file(path, allow_extra_keys, _seen):
+    """Load path, verify it may only contain 'payloads:'/'include:' unless allow_extra_keys,
+    and return its fully merged payload list (its own includes resolved first)."""
+    path = path.resolve()
+    if path in _seen:
+        die(f"circular 'include:' detected at {path}")
+    _seen = _seen | {path}
+    cfg = load_yaml_file(path)
+    if not allow_extra_keys:
+        extra = set(cfg) - {"payloads", "include"}
+        if extra:
+            die(f"included file {path} may contain only 'payloads:' (and its own "
+                f"'include:'); found: {sorted(extra)}")
+    return resolve_included_payloads(cfg, path, _seen)
+
+
+def resolve_included_payloads(cfg, path, _seen):
+    """Resolve cfg's 'include:' list (each entry relative to path's directory, recursively),
+    then merge cfg's own 'payloads:' on top (last, so it wins)."""
+    merged = []
+    for inc in cfg.get("include", []):
+        inc_path = (path.parent / expand(inc)).resolve()
+        if not inc_path.is_file():
+            die(f"include '{inc}' referenced from {path} not found: {inc_path}")
+        inc_payloads = resolve_payloads_from_file(inc_path, allow_extra_keys=False, _seen=_seen)
+        merged = merge_payloads(merged, inc_payloads, f" (from {inc_path})")
+    merged = merge_payloads(merged, cfg.get("payloads", []), f" (from {path})")
+    return merged
+
+
 # --------------------------------------------------------------------------
 # Certificates
 # --------------------------------------------------------------------------
@@ -201,16 +334,21 @@ def common_name(name, fallback):
 # Profile
 # --------------------------------------------------------------------------
 def build_profile(cfg, cert_dirs):
-    for key in ("identifier", "name", "description", "certificates"):
+    for key in ("identifier", "name", "description"):
         if key not in cfg:
             die(f"YAML is missing required field '{key}'")
+    cert_entries = cfg.get("certificates", [])
+    payload_entries = cfg.get("payloads", [])
+    if not cert_entries and not payload_entries:
+        die("YAML needs at least one of 'payloads' or 'certificates'")
     scope = cfg.get("scope", "System")
     if scope not in ("System", "User"):
         die(f"scope must be System or User, got '{scope}'")
 
     ident = cfg["identifier"]
     payloads, seen = [], set()
-    for entry in cfg["certificates"]:
+
+    for entry in cert_entries:
         path = resolve_cert(entry, cert_dirs)
         cert = load_cert(path)
         is_root = cert.subject == cert.issuer
@@ -233,6 +371,33 @@ def build_profile(cfg, cert_dirs):
         })
         print(f"  + {ptype.rsplit('.', 1)[1]:5s} {payloads[-1]['PayloadDisplayName']}  ({path})")
 
+    for entry in payload_entries:
+        for key in ("id", "type"):
+            if key not in entry:
+                die(f"payload entry missing required '{key}': {entry}")
+        pid, ptype = entry["id"], entry["type"]
+        settings = entry.get("settings") or {}
+        bad = [k for k in settings if k.startswith("Payload")]
+        if bad:
+            die(f"payload '{pid}': settings key(s) {bad} start with 'Payload', which is reserved")
+        u = str(uuid.uuid5(NAMESPACE, f"{ident}:{pid}")).upper()
+        if u in seen:
+            die(f"payload id '{pid}' produces a duplicate UUID/identifier")
+        seen.add(u)
+        pl = {
+            "PayloadType": ptype,
+            "PayloadIdentifier": f"{ident}.{pid}",
+            "PayloadUUID": u,
+            "PayloadVersion": 1,
+            "PayloadDisplayName": entry.get("name", pid),
+            "PayloadEnabled": True,
+        }
+        if "description" in entry:
+            pl["PayloadDescription"] = entry["description"]
+        pl.update(settings)
+        payloads.append(pl)
+        print(f"  + payload {ptype}  (id: {pid})")
+
     profile = {
         "PayloadContent": payloads,
         "PayloadDescription": cfg["description"],
@@ -245,6 +410,8 @@ def build_profile(cfg, cert_dirs):
     }
     if cfg.get("organization"):
         profile["PayloadOrganization"] = cfg["organization"]
+    if cfg.get("removal_disallowed") is not None:
+        profile["PayloadRemovalDisallowed"] = bool(cfg["removal_disallowed"])
     return profile
 
 
@@ -273,8 +440,9 @@ def validate_profile(profile):
     ids, uuids = {profile["PayloadIdentifier"]}, {profile["PayloadUUID"]}
     for i, pl in enumerate(profile["PayloadContent"], 1):
         check(pl, f"payload {i}")
-        if not isinstance(pl.get("PayloadContent"), bytes):
-            die(f"payload {i}: certificate PayloadContent must be <data>")
+        if pl["PayloadType"] in CERT_PAYLOAD_TYPES:
+            if not isinstance(pl.get("PayloadContent"), bytes):
+                die(f"payload {i}: certificate PayloadContent must be <data>")
         if pl["PayloadIdentifier"] in ids or pl["PayloadUUID"] in uuids:
             die(f"payload {i}: PayloadIdentifier/PayloadUUID is not unique within the profile")
         ids.add(pl["PayloadIdentifier"])
@@ -349,7 +517,7 @@ def apply_fix(loose):
 def secure_outputs(dirs):
     """Always applied to the generated profiles: 0700 directories, 0600 files."""
     for d in dirs:
-        if not d.resolve().is_relative_to(PRIVATE_DIR.resolve()):
+        if not d.resolve().is_relative_to(MDM_PRIVATE.resolve()):
             continue  # never touch anything outside mdm-private/
         if d.is_symlink():
             die(f"{d} is a symlink; refusing")
@@ -382,11 +550,11 @@ def audit_private(outputs):
       * Generated-profile locations (the output directories and their files): warn, then fix
         immediately (these are always 0700/0600).
       * Everything else (your YAML, etc.): warn and offer to fix; nothing changes without a y."""
-    if not PRIVATE_DIR.is_dir():
+    if not MDM_PRIVATE.is_dir():
         return
-    loose, links = find_loose(PRIVATE_DIR)
+    loose, links = find_loose(MDM_PRIVATE)
     for link in links:
-        print(f"WARNING: symlink under {PRIVATE_DIR.name}/ (not followed, not checked): {link}",
+        print(f"WARNING: symlink under {MDM_PRIVATE.name}/ (not followed, not checked): {link}",
               file=sys.stderr)
 
     out_loose = [x for x in loose if any(_under(x[0], d) for d in outputs)]
@@ -394,19 +562,19 @@ def audit_private(outputs):
     in_loose = [x for x in loose if x[0] not in out_paths]
 
     if out_loose:
-        print(f"\nWARNING: output paths under {PRIVATE_DIR.name}/ had loose permissions; "
+        print(f"\nWARNING: output paths under {MDM_PRIVATE.name}/ had loose permissions; "
               f"setting 0700 (dirs) / 0600 (files) now:", file=sys.stderr)
         _print_loose(out_loose)
         apply_fix(out_loose)
 
     if not in_loose:
         return
-    print(f"\nWARNING: these private paths under {PRIVATE_DIR.name}/ may hold secrets but are "
+    print(f"\nWARNING: these private paths under {MDM_PRIVATE.name}/ may hold secrets but are "
           f"not restricted (want 0700 dirs / 0600 files):", file=sys.stderr)
     _print_loose(in_loose)
 
-    fix_cmd = (f"find {PRIVATE_DIR.name} -type d -exec chmod 0700 {{}} + && "
-               f"find {PRIVATE_DIR.name} -type f -exec chmod 0600 {{}} +")
+    fix_cmd = (f"find {MDM_PRIVATE.name} -type d -exec chmod 0700 {{}} + && "
+               f"find {MDM_PRIVATE.name} -type f -exec chmod 0600 {{}} +")
     if not sys.stdin.isatty():
         print(f"Not changed (no terminal to prompt on). To fix, from {PKI_ROOT}:\n  {fix_cmd}\n",
               file=sys.stderr)
@@ -601,11 +769,11 @@ def build(args):
         ypath = (ORIG_CWD / args.yaml_file).resolve()  # convenience: path relative to where you ran it
     if not ypath.is_file():
         die(f"YAML file not found: {args.yaml_file}")
-    if not ypath.resolve().is_relative_to(PRIVATE_DIR.resolve()):
-        die(f"{ypath} is outside {PRIVATE_DIR}. YAML files can contain secrets and must live "
-            f"under {PRIVATE_DIR.name}/")
+    if not ypath.resolve().is_relative_to(MDM_PRIVATE.resolve()):
+        die(f"{ypath} is outside {MDM_PRIVATE}. YAML files can contain secrets and must live "
+            f"under {MDM_PRIVATE.name}/")
 
-    cfg = yaml.safe_load(ypath.read_text())
+    cfg = load_yaml_file(ypath)
     for key in ("identifier", "name", "description", "organization"):
         if key in cfg:
             cfg[key] = render(cfg[key])
@@ -614,9 +782,12 @@ def build(args):
         print(f"  identifier (from {DOMAIN_VAR} in {IDENTITY_ENV.name}): {cfg['identifier']}")
     if not re.fullmatch(r"[A-Za-z0-9.-]+", str(cfg.get("identifier", ""))):
         die(f"identifier '{cfg.get('identifier')}' must be reverse-DNS (letters, digits, '.' and '-')")
+
+    cfg["payloads"] = render_deep(resolve_included_payloads(cfg, ypath, {ypath.resolve()}))
+
     cert_dirs = [under_root(d) for d in cfg.get("cert_dirs", [])]
-    if not cert_dirs:
-        die("YAML needs at least one entry in 'cert_dirs'")
+    if cfg.get("certificates") and not cert_dirs:
+        die("YAML has 'certificates' but no 'cert_dirs'")
 
     print(f"PKI_ROOT = {PKI_ROOT}\nBuilding {ypath.name}:")
     profile = build_profile(cfg, cert_dirs)
@@ -624,8 +795,8 @@ def build(args):
 
     unsigned_dir, signed_dir = output_dirs()
     for d in (unsigned_dir, signed_dir):
-        if not d.resolve().is_relative_to(PRIVATE_DIR.resolve()):
-            die(f"output directory {d} must be inside {PRIVATE_DIR} (profiles can contain secrets)")
+        if not d.resolve().is_relative_to(MDM_PRIVATE.resolve()):
+            die(f"output directory {d} must be inside {MDM_PRIVATE} (profiles can contain secrets)")
     unsigned_dir.mkdir(parents=True, exist_ok=True)
     unsigned = unsigned_dir / (ypath.stem + ".mobileconfig")
 

@@ -16,7 +16,8 @@
 
 set -euo pipefail
 
-PRIVATE_DIR="mdm-private"
+MDM_PRIVATE="mdm-private"
+MDM_PRIVATE_YAML="${MDM_PRIVATE}/yaml"
 
 # Warn about paths under $1 that are not 0700 (dirs) / 0600 (files), and
 # offer to fix them. $2 is a label for the messages. Nothing is changed unless the answer is y.
@@ -64,13 +65,13 @@ DEST="${1:-.}"
 mkdir -p "${DEST}"
 
 # The source's private directory supplies the seed YAML, so check it first.
-audit_private "${SRC}${PRIVATE_DIR}" "SOURCE"
+audit_private "${SRC}${MDM_PRIVATE}" "SOURCE"
 
 rsync -am \
     --exclude='.git/' \
     --exclude='*.env' \
     --exclude='create_organization_smime_pki.sh' \
-    --exclude="${PRIVATE_DIR}/" \
+    --exclude="${MDM_PRIVATE}" \
     --include='*/' \
     --include='*.sh' --include='*.py' \
     --include='*.cnf' \
@@ -80,19 +81,25 @@ rsync -am \
     "${SRC}" "${DEST}/"
 
 # A new private directory is created closed (0700) before anything goes in it.
-if [ ! -e "${DEST}/${PRIVATE_DIR}" ]; then
-    ( umask 077; mkdir -p "${DEST}/${PRIVATE_DIR}" )
+if [ ! -e "${DEST}/${MDM_PRIVATE}" ]; then
+    ( umask 077; mkdir -p "${DEST}/${MDM_PRIVATE}" )
 fi
 
 # Seed personalized files only if DEST doesn't already have them.
-for PERSONALIZED in identity.env bin/create_organization_smime_pki.sh "${PRIVATE_DIR}/yaml/myorganization-trust.yaml"; do
+for PERSONALIZED in \
+    identity.env \
+    bin/create_organization_smime_pki.sh \
+    "${MDM_PRIVATE_YAML}/ios-restrictions-baseline.yaml" \
+    "${MDM_PRIVATE_YAML}/myorganization-settings.yaml" \
+    "${MDM_PRIVATE_YAML}/myorganization-trust.yaml" \
+    ; do
     BASELINE="${SRC}${PERSONALIZED}.sample"
     [ -f "${BASELINE}" ] || BASELINE="${SRC}${PERSONALIZED}"
 
     if [ -f "${DEST}/${PERSONALIZED}" ]; then
         echo "Existing ${DEST}/${PERSONALIZED} left untouched."
     elif [ -f "${BASELINE}" ]; then
-        if [[ "${PERSONALIZED}" == "${PRIVATE_DIR}/"* ]]; then
+        if [[ "${PERSONALIZED}" == "${MDM_PRIVATE}/"* ]]; then
             # private file: created closed, 0600
             PRIVATE_SUBDIR="$(dirname "${DEST}/${PERSONALIZED}")"
             [ -d "${PRIVATE_SUBDIR}" ] || ( umask 077; mkdir -p "${PRIVATE_SUBDIR}" )
@@ -110,5 +117,5 @@ done
 # Audit everything under the destination's mdm-private/ (new and pre-existing), unless it is
 # the same directory as the source (already audited above).
 if [ "$(cd "${SRC}" && pwd -P)" != "$(cd "${DEST}" && pwd -P)" ]; then
-    audit_private "${DEST}/${PRIVATE_DIR}" "DESTINATION"
+    audit_private "${DEST}/${MDM_PRIVATE}" "DESTINATION"
 fi

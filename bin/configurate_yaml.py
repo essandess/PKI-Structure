@@ -24,16 +24,17 @@ only permissions are managed:
     offering to fix them; nothing there is changed without a "y".
   * The YAML must live under mdm-private/, and the output directories must be inside it.
 If the YAML has no 'identifier:', it is generated as  <reverse-DNS of $DOMAIN_VAR>.mdm.<yaml file name>
-(e.g. org.myorganization.mdm.myorganization-trust), where DOMAIN_VAR is the identity.env
+(e.g. org.myorganization.mdm.myorganization-trust), where DOMAIN_VAR is the pki_identity.env
 variable named below. An explicit 'identifier:' in the YAML still wins.
 ${VAR} / ${VAR|rdns} placeholders in the YAML fields identifier, name, description,
-organization, and in payloads[].name / .description / .settings (recursively), are
-filled in from ./identity.env (see load_identity below).
+organization, short_name, and in payloads[].name / .description / .settings and
+accounts[]'s string fields (all recursively), are filled in from ./pki_identity.env
+(see load_identity below).
 
-A profile needs at least one of 'certificates:' or 'payloads:'.
+A profile needs at least one of 'certificates:', 'payloads:', 'identities:' or 'accounts:'.
 
 'certificates:' (with 'cert_dirs:') embeds X.509 certificates as
-com.apple.security.root or com.apple.security.pkcs1 payloads; see resolve_cert.
+com.apple.security.root or com.apple.security.pkcs1 payloads; see resolve_file.
 
 'payloads:' is a list of arbitrary Apple payload dicts:
     payloads:
@@ -53,7 +54,50 @@ com.apple.security.root or com.apple.security.pkcs1 payloads; see resolve_cert.
   only 'payloads:' and 'include:'. A later 'settings:' for the same id is deep-merged
   key by key into the earlier one; 'name'/'description'/'type' are replaced outright
   when given. Redefining an existing id with a different 'type' is an error -- use a
-  different id instead.
+  different id instead. 'accounts:' (below) are converted into 'payloads:' entries
+  before 'include:' is resolved, so a hand-written payload with the same id overrides
+  the account-generated one, field by field.
+
+'identities:' embeds S/MIME identities as pairs of com.apple.security.pkcs12 payloads
+(one signing cert, one encryption cert), sharing one passphrase:
+    identity_dirs:                    # optional; default shown
+      - $PKI_ROOT/smime/private
+    identity_passphrase_file: smime/private/passphrase.txt   # optional; default shown; line 2
+    identities:
+      - persona_myorganization_2026   # looks for <name>-signature.p12 and <name>-encryption.p12
+  Lookup follows resolve_file (same '<stem>.*<suffix>' fallback as 'certificates:'). Each
+  identity's UUIDs are available to 'accounts:' mail entries as identity_uuids[name]
+  {"signing": UUID, "encryption": UUID}; see AccountType.settings.
+
+'accounts:' is a list of network account entries, translated into the matching Apple
+payload by an AccountType class (see ACCOUNT_TYPES): mail (com.apple.mail.managed),
+caldav (com.apple.caldav.account), carddav (com.apple.carddav.account).
+    short_name: Jane Short Name       # optional; default sender name for mail accounts
+    accounts:
+      - type: mail
+        description: MyOrganization   # required; also the default PayloadDisplayName
+        email: jane@example.org       # required
+        username: jane                # required
+        password: "CHANGE-ME"         # required, secret
+        host: example.org             # required; used for both incoming/outgoing
+        imap_port: 993                # optional, default shown
+        smtp_port: 587                # optional, default shown
+        account_name: Jane Doe        # optional; else short_name, else description
+        smime:                        # optional
+          identity: persona_myorganization_2026   # must appear in 'identities:'
+          encrypt_by_default: false   # optional, default false
+        settings:                     # optional escape hatch, applied last, Apple's own keys
+          PreventMove: true
+      - type: caldav   # or carddav
+        description: MyOrganization
+        host: example.org
+        username: jane
+        password: "CHANGE-ME"
+        port: 8443                    # optional; default 8443 (caldav) / 8843 (carddav)
+        principal_url: ""             # optional, default ""
+  Each account needs an 'id:' only to be referenced by an include or overridden by a
+  hand-written payload; otherwise one is derived from type + description and must be
+  unique among accounts. See AccountType subclasses for the full field list and defaults.
 
 Environment overrides (same names/defaults as create_codesign.sh):
     CERTDIR       default "codesign"    (signing identity directory)
@@ -65,9 +109,11 @@ Environment overrides (same names/defaults as create_codesign.sh):
     CERTSHA1      optional: pick a specific signer when several usable ones exist
     UNSIGNED_DIR  default "mdm-private/mobfileconfigs-unsigned"
     SIGNED_DIR    default "mdm-private/mobfileconfigs-signed"
+    IDENTITY_DOMAIN_VAR  see DOMAIN_VAR below
 """
 import argparse
 import glob
+import hashlib
 import os
 import plistlib
 import re
@@ -88,8 +134,10 @@ from cryptography.x509.oid import NameOID
 # Fixed namespace so UUIDs are deterministic across rebuilds. Change once, keep forever.
 NAMESPACE = uuid.UUID("6f1c2f54-3b0e-4a57-9c5e-2d1f8a7b4c10")
 
-# Payload types this script itself constructs as certificate payloads (see build_profile).
-CERT_PAYLOAD_TYPES = {"com.apple.security.root", "com.apple.security.pkcs1"}
+# Payload types this script itself constructs with raw <data> PayloadContent (certificates
+# and S/MIME identities): see build_profile / build_identities.
+EMBEDDED_DATA_TYPES = {"com.apple.security.root", "com.apple.security.pkcs1",
+                       "com.apple.security.pkcs12"}
 
 # Same definition as bin/pki_structure.sh.
 ORIG_CWD = Path.cwd()
@@ -123,9 +171,9 @@ def load_yaml_file(path):
 
 
 # --------------------------------------------------------------------------
-# identity.env  (bash variables) -> template placeholders in the YAML
+# pki_identity.env  (bash variables) -> template placeholders in the YAML
 # --------------------------------------------------------------------------
-IDENTITY_ENV = PKI_ROOT / "identity.env"
+IDENTITY_ENV = PKI_ROOT / "pki_identity.env"
 _identity_cache = None
 
 # Prints every exported variable as NAME\0VALUE\0 (portable to macOS bash 3.2, unlike `env -0`).
@@ -143,7 +191,7 @@ def _bash_env(script, *args):
 
 
 def load_identity():
-    """Source identity.env in a clean bash (so quoting, ${X} references etc. behave exactly as
+    """Source pki_identity.env in a clean bash (so quoting, ${X} references etc. behave exactly as
     they do for the other scripts) and return only the variables it defines or changes."""
     global _identity_cache
     if _identity_cache is None:
@@ -163,7 +211,7 @@ _FILTERS = {
     "upper": str.upper,
 }
 
-# Name of the identity.env variable holding the bare domain (e.g. myorganization.org).
+# Name of the pki_identity.env variable holding the bare domain (e.g. myorganization.org).
 # Change this default, or override per run:  IDENTITY_DOMAIN_VAR=OTHER_VAR bin/configurate_yaml.py ...
 DOMAIN_VAR = os.environ.get("IDENTITY_DOMAIN_VAR", "DOMAIN_NAME")
 
@@ -180,7 +228,7 @@ def default_identifier(yaml_stem):
 
 
 def render(text):
-    """Replace ${VAR} and ${VAR|filter} using identity.env (falling back to the environment)."""
+    """Replace ${VAR} and ${VAR|filter} using pki_identity.env (falling back to the environment)."""
     if not isinstance(text, str) or "${" not in text:
         return text
     ident = load_identity()
@@ -301,12 +349,12 @@ def load_cert(path):
     return x509.load_der_x509_certificate(raw)
 
 
-def resolve_cert(name, cert_dirs):
-    """Find a certificate file.  Tries an exact filename in each cert_dir; if none,
-    falls back to '<stem>.*<suffix>' to match create_*.sh's '<name>.<sha1>.cer'
-    renaming.  Errors on no match or on more than one distinct match."""
+def resolve_file(name, dirs):
+    """Find a file (certificate or PKCS#12) by name. Tries an exact filename in each of
+    `dirs`; if none, falls back to '<stem>.*<suffix>' to match create_*.sh's
+    '<name>.<sha1>.cer' renaming. Errors on no match or on more than one distinct match."""
     p = expand(name)
-    bases = [p.parent] if p.is_absolute() else [d / p.parent for d in cert_dirs]
+    bases = [p.parent] if p.is_absolute() else [d / p.parent for d in dirs]
     exact = {(b / p.name).resolve() for b in bases if (b / p.name).is_file()}
     hits = exact or {
         f.resolve()
@@ -315,9 +363,9 @@ def resolve_cert(name, cert_dirs):
         if f.is_file()
     }
     if not hits:
-        die(f"certificate '{name}' not found in: {[str(b) for b in bases]}")
+        die(f"file '{name}' not found in: {[str(b) for b in bases]}")
     if len(hits) > 1:
-        die(f"certificate '{name}' is ambiguous, matches:\n  " + "\n  ".join(map(str, sorted(hits)))
+        die(f"file '{name}' is ambiguous, matches:\n  " + "\n  ".join(map(str, sorted(hits)))
             + "\nUse a more specific filename or path in the YAML.")
     return hits.pop()
 
@@ -331,25 +379,239 @@ def common_name(name, fallback):
 
 
 # --------------------------------------------------------------------------
+# S/MIME identities ('identities:') -> com.apple.security.pkcs12 payloads
+# --------------------------------------------------------------------------
+def load_passphrase_line(path, line_no):
+    lines = Path(path).read_text().splitlines()
+    if len(lines) < line_no:
+        die(f"{path} has fewer than {line_no} lines (need line {line_no})")
+    return lines[line_no - 1]
+
+
+def build_identities(cfg, ident, identity_dirs):
+    """Build a signing + encryption com.apple.security.pkcs12 payload for each name in
+    'identities:' (<name>-signature.p12 and <name>-encryption.p12, found via resolve_file,
+    both protected by one passphrase). Returns (payloads: list[dict],
+    identity_uuids: {name: {"signing": UUID, "encryption": UUID}})."""
+    names = cfg.get("identities", [])
+    if not names:
+        return [], {}
+
+    pw_file = under_root(cfg.get("identity_passphrase_file", "smime/private/passphrase.txt"))
+    if not pw_file.is_file():
+        die(f"'identities:' given but passphrase file not found: {pw_file} "
+            f"(set 'identity_passphrase_file:' to override)")
+    password = load_passphrase_line(pw_file, 2)  # line 1 = key passphrase, line 2 = p12 export
+
+    payloads, identity_uuids, seen = [], {}, set()
+    for name in names:
+        roles = {}
+        for role, suffix in (("signing", "signature"), ("encryption", "encryption")):
+            path = resolve_file(f"{name}-{suffix}.p12", identity_dirs)
+            data = path.read_bytes()
+            digest = hashlib.sha256(data).hexdigest()
+            u = str(uuid.uuid5(NAMESPACE, f"{ident}:identity:{name}:{role}:{digest}")).upper()
+            if u in seen:
+                die(f"identity '{name}' ({role}): duplicate UUID (identical file listed twice?)")
+            seen.add(u)
+            roles[role] = u
+            payloads.append({
+                "Password": password,
+                "PayloadCertificateFileName": path.name,
+                "PayloadContent": data,  # -> <data>
+                "PayloadDescription": "Adds a PKCS#12-formatted certificate",
+                "PayloadDisplayName": path.name,
+                "PayloadIdentifier": f"{ident}.pkcs12.{u}",
+                "PayloadType": "com.apple.security.pkcs12",
+                "PayloadUUID": u,
+                "PayloadVersion": 1,
+            })
+        identity_uuids[name] = roles
+        print(f"  + pkcs12 {name}  (signing + encryption, from {identity_dirs})")
+    return payloads, identity_uuids
+
+
+# --------------------------------------------------------------------------
+# Network accounts ('accounts:') -> 'payloads:' entries
+#
+# Each AccountType subclass captures one Apple payload's field mapping: its Apple
+# PayloadType, the friendly fields it requires, a default PayloadDisplayName, and a
+# settings() method building Apple's own keys from the friendly entry. accounts_to_
+# payload_entries() turns 'accounts:' into ordinary payload entries (id/type/name/
+# settings), so they flow through the same merge_payloads/render_deep/build_profile
+# pipeline as hand-written 'payloads:' -- accounts are just a friendlier way to write
+# a handful of well-known payload types.
+# --------------------------------------------------------------------------
+class AccountType:
+    apple_type = ""
+    required = ()
+
+    def display_name(self, entry):
+        return entry.get("description", entry.get("type", ""))
+
+    def settings(self, entry, identity_uuids, context):
+        raise NotImplementedError
+
+
+class MailAccountType(AccountType):
+    apple_type = "com.apple.mail.managed"
+    required = ("description", "email", "username", "password", "host")
+
+    def display_name(self, entry):
+        return entry["description"]
+
+    def settings(self, entry, identity_uuids, context):
+        use_ssl = entry.get("use_ssl", True)
+        s = {
+            "EmailAccountDescription": entry["description"],
+            "EmailAccountName": entry.get("account_name") or context.get("short_name") or entry["description"],
+            "EmailAccountType": entry.get("account_type", "EmailTypeIMAP"),
+            "EmailAddress": entry["email"],
+            "IncomingMailServerAuthentication": "EmailAuthPassword",
+            "IncomingMailServerHostName": entry.get("incoming_host", entry["host"]),
+            "IncomingMailServerPortNumber": entry.get("imap_port", 993),
+            "IncomingMailServerUseSSL": use_ssl,
+            "IncomingMailServerUsername": entry["username"],
+            "IncomingPassword": entry["password"],
+            "OutgoingMailServerAuthentication": "EmailAuthPassword",
+            "OutgoingMailServerHostName": entry.get("outgoing_host", entry["host"]),
+            "OutgoingMailServerPortNumber": entry.get("smtp_port", 587),
+            "OutgoingMailServerUseSSL": use_ssl,
+            "OutgoingMailServerUsername": entry.get("outgoing_username", entry["username"]),
+            "OutgoingPasswordSameAsIncomingPassword": "outgoing_password" not in entry,
+            "PreventAppSheet": entry.get("prevent_app_sheet", False),
+            "PreventMove": entry.get("prevent_move", False),
+            "allowMailDrop": entry.get("allow_mail_drop", False),
+            "disableMailRecentsSyncing": entry.get("disable_recents_syncing", False),
+        }
+        if "outgoing_password" in entry:
+            s["OutgoingPassword"] = entry["outgoing_password"]
+        if "smime" in entry:
+            smime = entry["smime"] or {}
+            name = smime.get("identity")
+            if name not in identity_uuids:
+                die(f"account '{entry['description']}': smime.identity '{name}' is not "
+                    f"listed in 'identities:' ({sorted(identity_uuids)})")
+            per_message = smime.get("allow_per_message_toggle", True)
+            sign_overrideable = smime.get("signing_overrideable", True)
+            encrypt_overrideable = smime.get("encrypt_overrideable", True)
+            encrypt = bool(smime.get("encrypt_by_default", False))
+            s.update({
+                "SMIMEEnabled": True,
+                "SMIMEEnablePerMessageSwitch": per_message,
+                "SMIMEEnableEncryptionPerMessageSwitch": per_message,
+                "SMIMESigningEnabled": smime.get("sign", True),
+                "SMIMESigningUserOverrideable": sign_overrideable,
+                "SMIMESigningCertificateUUID": identity_uuids[name]["signing"],
+                "SMIMESigningCertificateUUIDUserOverrideable": sign_overrideable,
+                "SMIMEEncryptByDefault": encrypt,
+                "SMIMEEncryptByDefaultUserOverrideable": encrypt_overrideable,
+                "SMIMEEncryptionEnabled": encrypt,
+                "SMIMEEncryptionCertificateUUID": identity_uuids[name]["encryption"],
+                "SMIMEEncryptionCertificateUUIDUserOverrideable": encrypt_overrideable,
+            })
+        return s
+
+
+class CalDAVAccountType(AccountType):
+    apple_type = "com.apple.caldav.account"
+    required = ("description", "host", "username", "password")
+
+    def display_name(self, entry):
+        return f"Calendar ({entry['description']})"
+
+    def settings(self, entry, identity_uuids, context):
+        return {
+            "CalDAVAccountDescription": entry["description"],
+            "CalDAVHostName": entry["host"],
+            "CalDAVPassword": entry["password"],
+            "CalDAVPort": entry.get("port", 8443),
+            "CalDAVPrincipalURL": entry.get("principal_url", ""),
+            "CalDAVUseSSL": entry.get("use_ssl", True),
+            "CalDAVUsername": entry["username"],
+        }
+
+
+class CardDAVAccountType(AccountType):
+    apple_type = "com.apple.carddav.account"
+    required = ("description", "host", "username", "password")
+
+    def display_name(self, entry):
+        return "Contacts"
+
+    def settings(self, entry, identity_uuids, context):
+        return {
+            "CardDAVAccountDescription": entry["description"],
+            "CardDAVHostName": entry["host"],
+            "CardDAVPassword": entry["password"],
+            "CardDAVPort": entry.get("port", 8843),
+            "CardDAVPrincipalURL": entry.get("principal_url", ""),
+            "CardDAVUseSSL": entry.get("use_ssl", True),
+            "CardDAVUsername": entry["username"],
+        }
+
+
+ACCOUNT_TYPES = {
+    "mail": MailAccountType(),
+    "caldav": CalDAVAccountType(),
+    "carddav": CardDAVAccountType(),
+}
+
+
+def slugify(text):
+    s = re.sub(r"[^A-Za-z0-9]+", "-", str(text)).strip("-").lower()
+    return s or "account"
+
+
+def accounts_to_payload_entries(cfg, identity_uuids):
+    """Turn 'accounts:' into a list of payload entries (id/type/name/settings), ready to
+    merge_payloads() against 'payloads:'/'include:'."""
+    context = {"short_name": cfg.get("short_name")}
+    entries, seen_ids = [], set()
+    for i, entry in enumerate(cfg.get("accounts", []), 1):
+        t = entry.get("type")
+        account = ACCOUNT_TYPES.get(t)
+        if account is None:
+            die(f"account #{i}: unknown type '{t}' (expected one of {sorted(ACCOUNT_TYPES)})")
+        missing = [f for f in account.required if f not in entry]
+        if missing:
+            die(f"account #{i} (type {t}): missing required field(s) {missing}")
+        settings = account.settings(entry, identity_uuids, context)
+        if entry.get("settings"):  # escape hatch: Apple's own keys, applied last
+            settings = deep_merge_settings(settings, entry["settings"])
+        pid = entry.get("id") or f"{t}-{slugify(entry.get('description', i))}"
+        if pid in seen_ids:
+            die(f"account #{i}: id '{pid}' is not unique among accounts; set 'id:' explicitly")
+        seen_ids.add(pid)
+        entries.append({
+            "id": pid,
+            "type": account.apple_type,
+            "name": entry.get("name", account.display_name(entry)),
+            "settings": settings,
+        })
+    return entries
+
+
+# --------------------------------------------------------------------------
 # Profile
 # --------------------------------------------------------------------------
-def build_profile(cfg, cert_dirs):
+def build_profile(cfg, cert_dirs, identity_payloads=()):
     for key in ("identifier", "name", "description"):
         if key not in cfg:
             die(f"YAML is missing required field '{key}'")
     cert_entries = cfg.get("certificates", [])
     payload_entries = cfg.get("payloads", [])
-    if not cert_entries and not payload_entries:
-        die("YAML needs at least one of 'payloads' or 'certificates'")
+    if not cert_entries and not payload_entries and not identity_payloads:
+        die("YAML needs at least one of 'payloads', 'certificates', 'identities' or 'accounts'")
     scope = cfg.get("scope", "System")
     if scope not in ("System", "User"):
         die(f"scope must be System or User, got '{scope}'")
 
     ident = cfg["identifier"]
-    payloads, seen = [], set()
+    payloads, seen = list(identity_payloads), {p["PayloadUUID"] for p in identity_payloads}
 
     for entry in cert_entries:
-        path = resolve_cert(entry, cert_dirs)
+        path = resolve_file(entry, cert_dirs)
         cert = load_cert(path)
         is_root = cert.subject == cert.issuer
         ptype = "com.apple.security.root" if is_root else "com.apple.security.pkcs1"
@@ -440,7 +702,7 @@ def validate_profile(profile):
     ids, uuids = {profile["PayloadIdentifier"]}, {profile["PayloadUUID"]}
     for i, pl in enumerate(profile["PayloadContent"], 1):
         check(pl, f"payload {i}")
-        if pl["PayloadType"] in CERT_PAYLOAD_TYPES:
+        if pl["PayloadType"] in EMBEDDED_DATA_TYPES:
             if not isinstance(pl.get("PayloadContent"), bytes):
                 die(f"payload {i}: certificate PayloadContent must be <data>")
         if pl["PayloadIdentifier"] in ids or pl["PayloadUUID"] in uuids:
@@ -774,7 +1036,7 @@ def build(args):
             f"under {MDM_PRIVATE.name}/")
 
     cfg = load_yaml_file(ypath)
-    for key in ("identifier", "name", "description", "organization"):
+    for key in ("identifier", "name", "description", "organization", "short_name"):
         if key in cfg:
             cfg[key] = render(cfg[key])
     if "identifier" not in cfg:
@@ -782,6 +1044,16 @@ def build(args):
         print(f"  identifier (from {DOMAIN_VAR} in {IDENTITY_ENV.name}): {cfg['identifier']}")
     if not re.fullmatch(r"[A-Za-z0-9.-]+", str(cfg.get("identifier", ""))):
         die(f"identifier '{cfg.get('identifier')}' must be reverse-DNS (letters, digits, '.' and '-')")
+    ident = cfg["identifier"]
+
+    identity_dirs = [under_root(d) for d in cfg.get("identity_dirs", ["smime/private"])]
+    identity_payloads, identity_uuids = build_identities(cfg, ident, identity_dirs)
+
+    # 'accounts:' become payload entries, merged UNDER any hand-written 'payloads:' (which
+    # therefore override an account field for field, the same way 'include:' works below).
+    account_entries = accounts_to_payload_entries(cfg, identity_uuids)
+    if account_entries:
+        cfg["payloads"] = merge_payloads(account_entries, cfg.get("payloads", []))
 
     cfg["payloads"] = render_deep(resolve_included_payloads(cfg, ypath, {ypath.resolve()}))
 
@@ -790,7 +1062,7 @@ def build(args):
         die("YAML has 'certificates' but no 'cert_dirs'")
 
     print(f"PKI_ROOT = {PKI_ROOT}\nBuilding {ypath.name}:")
-    profile = build_profile(cfg, cert_dirs)
+    profile = build_profile(cfg, cert_dirs, identity_payloads)
     validate_profile(profile)
 
     unsigned_dir, signed_dir = output_dirs()

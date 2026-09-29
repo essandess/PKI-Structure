@@ -37,11 +37,11 @@ Never copied: `.git/`, `*.env`, `bin/create_organization_smime_pki.sh`
 Seeded when absent at `DEST`, from `<file>.sample` or from the source file
 if no sample exists. Existing files are never modified:
 
-- `identity.env`
+- `pki_identity.env`
 - `bin/create_organization_smime_pki.sh`
 - `mdm-private/yaml/myorganization-trust.yaml`
 
-Edit `identity.env` with the deployment's organization, domain
+Edit `pki_identity.env` with the deployment's organization, domain
 (`DOMAIN_NAME`), and PKI hostname before running any `create_*.sh` script.
 
 `mdm-private/` is permission-audited in both source and destination; see
@@ -55,7 +55,7 @@ bin/clean_everything_and_create_pki.sh
 ## Layout
 
 ```
-identity.env                       organization and hostname settings
+pki_identity.env                       organization and hostname settings
 openssl.cnf                        root CA configuration
 common_policy.cnf                  shared CA policies
 bin/                               scripts
@@ -95,7 +95,7 @@ Per-directory configuration:
 
 ## Configuration
 
-### identity.env
+### pki_identity.env
 
 | Variable | Use |
 |---|---|
@@ -427,7 +427,7 @@ Certificate lookup: exact filename in each `cert_dirs` entry; otherwise
 matches are errors. An absolute path bypasses the search.
 
 `${VAR}` placeholders in `identifier`, `name`, `description`, and
-`organization` are filled from `identity.env`, then the environment.
+`organization` are filled from `pki_identity.env`, then the environment.
 Filters: `${VAR|rdns}` (reverse domain labels), `|lower`, `|upper`.
 Undefined variables are errors.
 
@@ -483,7 +483,7 @@ Never edit a profile after signing. Regenerate from the YAML.
 | `CERTSHA1`            | unset                                  | Pin a signer among usable candidates. Revoked or expired certificates are never used. |
 | `UNSIGNED_DIR`        | `mdm-private/mobfileconfigs-unsigned`  | Unsigned output. |
 | `SIGNED_DIR`          | `mdm-private/mobfileconfigs-signed`    | Signed output. |
-| `IDENTITY_DOMAIN_VAR` | `DOMAIN_NAME`                          | `identity.env` variable holding the domain for default identifiers. |
+| `IDENTITY_DOMAIN_VAR` | `DOMAIN_NAME`                          | `pki_identity.env` variable holding the domain for default identifiers. |
 
 ### Permissions
 

@@ -9,11 +9,11 @@
 
 # ---- Profile ---------------------------------------------------------------
 # identifier: org.myorganization.mdm.myorganization-settings
-#   Optional. Default: <DOMAIN_NAME from identity.env, reversed>.mdm.<this file's name>.
+#   Optional. Default: <DOMAIN_NAME from pki_identity.env, reversed>.mdm.<this file's name>.
 #   Keep it stable once deployed: devices match profiles on it.
 name: Settings for iOS
 description: Passcode, Wi-Fi and restriction policy for MyOrganization devices.
-organization: ${ORG_NAME}        # from identity.env
+organization: ${ORG_NAME}        # from pki_identity.env
 scope: System                    # optional; System (default) or User
 removal_disallowed: false        # optional; PayloadRemovalDisallowed, default false
 

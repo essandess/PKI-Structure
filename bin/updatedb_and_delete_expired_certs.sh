@@ -51,7 +51,7 @@ fi
 
 cd "${PKI_ROOT}" || exit
 
-. ./identity.env
+. ./pki_identity.env
 
 delete_expired_certs() {
     local PEM="$1"

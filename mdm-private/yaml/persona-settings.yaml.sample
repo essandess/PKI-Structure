@@ -1,8 +1,35 @@
-name: Settings for Person A Long Name
-description: Network accounts and S/MIME identities for Person A.
-organization: ${ORG_NAME}
-scope: User
-removal_disallowed: false
+# Source description for: network accounts and S/MIME identities for one person.
+#
+# The converter fills in: PayloadType (Configuration), PayloadVersion, PayloadUUIDs,
+# payload identifiers (<profile identifier>.<id> for accounts/payloads,
+# <profile identifier>.pkcs12.<UUID> for identities), PayloadEnabled defaults, and
+# translates 'accounts:' into the matching Apple payload (see AccountType classes in
+# bin/configurate_yaml.py: MailAccountType, CalDAVAccountType, CardDAVAccountType).
+#
+# CONTAINS SECRETS (account passwords; the identities' PKCS#12 export passphrase).
+# Keep this file under mdm-private/, mode 0600. The generated .mobileconfig holds
+# them as readable text -- signing does not encrypt.
+
+name: Settings for User A Long Name
+description: Network accounts and S/MIME identities for User A Long Name.
+organization: ${ORG_NAME}        # from pki_identity.env
+scope: User                      # this profile is per-user, not System
+removal_disallowed: false        # optional; PayloadRemovalDisallowed, default false
+
+# Used as the default "From" sender name on mail accounts below (EmailAccountName),
+# unless an account sets its own 'account_name:'.
+short_name: User A Short Name
+
+# ---- S/MIME identities ------------------------------------------------------------
+# Each name below is looked up as <name>-signature.p12 and <name>-encryption.p12 in
+# identity_dirs (same '<stem>.*<suffix>' fallback as certificate lookup, so a
+# '<name>-signature.<sha1>.p12' produced by a renaming script is also found). Both
+# files must share one passphrase, read from line 2 of identity_passphrase_file
+# (line 1 is a key passphrase elsewhere in this repo's convention; line 2 is the
+# PKCS#12 export password -- see bin/create_codesign.sh for the same convention).
+# identity_dirs:                   # optional; default shown
+#   - $PKI_ROOT/smime/private
+# identity_passphrase_file: smime/private/passphrase.txt   # optional; default shown
 
 identities:
   - persona_gmail_2026
@@ -10,30 +37,54 @@ identities:
   - persona_school_2026
   - persona_myorganization_2026
 
+# ---- Network accounts --------------------------------------------------------------
+# type          Required. One of: mail, caldav, carddav.
+# id            Optional. Stable slug; default <type>-<slugified description>. Also the
+#               merge key if a hand-written 'payloads:' entry should override one of
+#               these field for field. Do not rename after deployment.
+# description   Required for every type. The account's own display label (e.g. shown
+#               in Mail/Calendar/Contacts account settings); also the default profile
+#               PayloadDisplayName for mail, wrapped as "Calendar (<description>)" for
+#               caldav, and fixed to "Contacts" for carddav. Override either with 'name:'.
+# settings:     Optional escape hatch: Apple's own key names, deep-merged in last, for
+#               anything not exposed as a friendly field below (e.g. PreventMove).
 accounts:
+
   - type: mail
     description: MyOrganization
     email: persona@myorganization.org
     username: persona
-    password: "CHANGE-ME"          # secret
-    host: server.myorganization.org
-    imap_port: 993
-    smtp_port: 587
+    password: "CHANGE-ME"            # secret
+    host: server.myorganization.org  # used for both incoming and outgoing unless
+                                      # incoming_host / outgoing_host override it
+    imap_port: 993                   # optional, default shown
+    smtp_port: 587                   # optional, default shown
+    # account_name: username   # optional; else 'short_name:' above, else description
+    # use_ssl: true                  # optional, default shown, both directions
+    # outgoing_username: persona     # optional; default same as username
+    # outgoing_password: "..."       # optional secret; default: same as incoming password
     smime:
-      identity: persona_myorganization_2026
-      encrypt_by_default: false
+      identity: persona_myorganization_2026   # must be listed under 'identities:' above
+      encrypt_by_default: false      # optional, default shown; also sets SMIMEEncryptionEnabled
+      # sign: true                   # optional, default shown
+      # allow_per_message_toggle: true    # optional, default shown
+      # signing_overrideable: true        # optional, default shown
+      # encrypt_overrideable: true        # optional, default shown
 
   - type: caldav
     description: MyOrganization
     host: server.myorganization.org
-    port: 8443
+    port: 8443                       # optional; default 8443
     username: persona
-    password: "CHANGE-ME"          # secret
+    password: "CHANGE-ME"            # secret
+    # principal_url: ""              # optional, default ""
+    # use_ssl: true                  # optional, default shown
 
   - type: carddav
     description: Contacts
     host: server.myorganization.org
-    port: 8843
-    principal_url: /addressbooks/__uids__/15B328E6-0DA4-4768-8FAE-B2B28D4C49C7
+    port: 8843                       # optional; default 8843
+    principal_url: /addressbooks/__uids__/15309EE6-0DA4-4768-8FAE-B20C274C49C7
     username: persona
-    password: "CHANGE-ME"          # secret
+    password: "CHANGE-ME"            # secret
+    # use_ssl: true                  # optional, default shown

@@ -114,11 +114,11 @@ destroot {
 
     # Personalized-file templates: always installed under a .macports
     # suffix in the tracked share dir, so upgrades keep them current.
-    # The live, editable copies (identity.env, create_organization_smime_pki.sh)
+    # The live, editable copies (pki_identity.env, create_organization_smime_pki.sh)
     # are seeded from these in post-activate, once, only if not already present
     xinstall -m 644 \
-        ${worksrcpath}/identity.env.sample \
-        ${destroot}${pki_share_dir}/identity.env.macports
+        ${worksrcpath}/pki_identity.env.sample \
+        ${destroot}${pki_share_dir}/pki_identity.env.macports
     xinstall -m 755 \
         ${worksrcpath}/bin/create_organization_smime_pki.sh.sample \
         ${destroot}${pki_share_dir}/bin/create_organization_smime_pki.sh.macports
@@ -182,8 +182,8 @@ startupitems \
                     {DATE=(/bin/date "+%FT%T")}
     } \
     start {
-                    {[ -f "${PKI_ROOT}/identity.env" ] || { echo "identity.env not found in ${PKI_ROOT}; skipping." ; exit 0 ; }}
-                    {. "${PKI_ROOT}/identity.env"}
+                    {[ -f "${PKI_ROOT}/pki_identity.env" ] || { echo "pki_identity.env not found in ${PKI_ROOT}; skipping." ; exit 0 ; }}
+                    {. "${PKI_ROOT}/pki_identity.env"}
                     {PKI_SITE_DIR="${prefix}/var/www/${PKI_FQDN}"}
                     {/bin/mkdir -p "${PKI_SITE_DIR}"}
                     {echo "CRL update started on $(${DATE[@]})…" >> "${LOGFILE}"}
@@ -241,14 +241,14 @@ post-destroot {
 }
 
 post-activate {
-    # Seed identity.env once, on the live filesystem, only if the user
+    # Seed pki_identity.env once, on the live filesystem, only if the user
     # doesn't already have one - never overwrite an existing deployment's
     # branding on upgrade.
-    if {![file exists ${pki_var_dir}/identity.env]} {
-        ui_msg "--->  Seeding ${pki_var_dir}/identity.env from the baseline template"
+    if {![file exists ${pki_var_dir}/pki_identity.env]} {
+        ui_msg "--->  Seeding ${pki_var_dir}/pki_identity.env from the baseline template"
         file copy -force \
-            ${pki_share_dir}/identity.env.macports \
-            ${pki_var_dir}/identity.env
+            ${pki_share_dir}/pki_identity.env.macports \
+            ${pki_var_dir}/pki_identity.env
     }
 
     # Same pattern for the org-specific S/MIME issuance script.
@@ -287,9 +287,9 @@ notes "
         Replaced on every upgrade; do not edit in place.
 
     ${pki_var_dir}
-        Live PKI deployment. identity.env and
+        Live PKI deployment. pki_identity.env and
         create_organization_smime_pki.sh are seeded here once and
-        never overwritten. Edit identity.env, then run the
+        never overwritten. Edit pki_identity.env, then run the
         create_*.sh scripts from this directory.
 
     ${prefix}/etc/nginx-pki.conf.macports

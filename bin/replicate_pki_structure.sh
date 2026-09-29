@@ -2,7 +2,7 @@
 # replicate_pki_structure.sh
 #
 # Copies PKI-Structure's scripts and openssl configs to a new deployment
-# directory. Never overwrites an existing identity.env,
+# directory. Never overwrites an existing pki_identity.env,
 # create_organization_smime_pki.sh or mdm-private/yaml/myorganization-trust.yaml;
 # seeds them from the baseline template.
 #
@@ -87,7 +87,7 @@ fi
 
 # Seed personalized files only if DEST doesn't already have them.
 for PERSONALIZED in \
-    identity.env \
+    pki_identity.env \
     bin/create_organization_smime_pki.sh \
     "${MDM_PRIVATE_YAML}/ios-restrictions-baseline.yaml" \
     "${MDM_PRIVATE_YAML}/myorganization-settings.yaml" \

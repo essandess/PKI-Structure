@@ -97,7 +97,7 @@ esac
 
 cd "${PKI_ROOT}" || exit
 
-. ./identity.env
+. ./pki_identity.env
 
 PASSPHRASE="${ISSUERCANAME}/private/passphrase.txt"
 if [ ! -f "${PASSPHRASE}" ]; then

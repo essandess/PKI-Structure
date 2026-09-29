@@ -7,8 +7,10 @@
 # Person A
 bin/create_smime.sh person_a@gmail.com persona_gmail_2026
 bin/create_smime.sh person_a@icloud.com persona_icloud_2026
+bin/create_smime.sh person_a@school.edu persona_school_2026
+bin/create_smime.sh person_a@myorganization.org persona_myorganization_2026
 
 # Person B
 bin/create_smime.sh person_b@gmail.com personb_gmail_2026
 bin/create_smime.sh person_b@icloud.com personb_icloud_2026
-bin/create_smime.sh person_b@school.edu personb_school_2026
+bin/create_smime.sh person_b@myorganization.org personb_myorganization_2026

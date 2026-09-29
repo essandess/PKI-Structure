@@ -31,7 +31,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}" || exit
 
-. ./identity.env
+. ./pki_identity.env
 . "${SCRIPT_DIR}/pki_common.sh"
 
 SHOW_CERT_TEXT=${SHOW_CERT_TEXT:-1}

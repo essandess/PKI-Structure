@@ -5,11 +5,11 @@
 # https://support.apple.com/en-us/HT210176
 DAYS=825
 
-# get SERVER_FQDN from ./identity.env
+# get SERVER_FQDN from ./pki_identity.env
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}" || exit
-. ./identity.env
+. ./pki_identity.env
 . "${SCRIPT_DIR}/pki_common.sh"
 
 CATRUE=${CATRUE:-0}

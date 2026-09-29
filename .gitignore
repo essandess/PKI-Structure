@@ -5,7 +5,7 @@
 # ===========================================================================
 
 # --- Deployment-specific files (seeded from their *.sample) -----------------
-identity.env
+pki_identity.env
 *.env
 bin/create_organization_smime_pki.sh
 

@@ -1,0 +1,39 @@
+name: Settings for Person A Long Name
+description: Network accounts and S/MIME identities for Person A.
+organization: ${ORG_NAME}
+scope: User
+removal_disallowed: false
+
+identities:
+  - persona_gmail_2026
+  - persona_icloud_2026
+  - persona_school_2026
+  - persona_myorganization_2026
+
+accounts:
+  - type: mail
+    description: MyOrganization
+    email: persona@myorganization.org
+    username: persona
+    password: "CHANGE-ME"          # secret
+    host: server.myorganization.org
+    imap_port: 993
+    smtp_port: 587
+    smime:
+      identity: persona_myorganization_2026
+      encrypt_by_default: false
+
+  - type: caldav
+    description: MyOrganization
+    host: server.myorganization.org
+    port: 8443
+    username: persona
+    password: "CHANGE-ME"          # secret
+
+  - type: carddav
+    description: Contacts
+    host: server.myorganization.org
+    port: 8843
+    principal_url: /addressbooks/__uids__/15B328E6-0DA4-4768-8FAE-B2B28D4C49C7
+    username: persona
+    password: "CHANGE-ME"          # secret

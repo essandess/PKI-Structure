@@ -92,6 +92,7 @@ for PERSONALIZED in \
     "${MDM_PRIVATE_YAML}/ios-restrictions-baseline.yaml" \
     "${MDM_PRIVATE_YAML}/myorganization-settings.yaml" \
     "${MDM_PRIVATE_YAML}/myorganization-trust.yaml" \
+    "${MDM_PRIVATE_YAML}/persona-settings.yaml" \
     ; do
     BASELINE="${SRC}${PERSONALIZED}.sample"
     [ -f "${BASELINE}" ] || BASELINE="${SRC}${PERSONALIZED}"

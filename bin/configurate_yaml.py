@@ -68,6 +68,10 @@ com.apple.security.root or com.apple.security.pkcs1 payloads; see resolve_file.
   Lookup follows resolve_file (same '<stem>.*<suffix>' fallback as 'certificates:'). Each
   identity's UUIDs are available to 'accounts:' mail entries as identity_uuids[name]
   {"signing": UUID, "encryption": UUID}; see AccountType.settings.
+  Every identity certificate -- the one actually embedded in the .p12, opened with the
+  configured passphrase, not a same-named file elsewhere -- is checked exactly like the
+  code-signing signer below: in date, 'V' in the issuer's index.txt, and verifies against
+  every CRL in PKI_ROOT/*/crl/. See build_identities / SMIME_ISSUERCADIR below.
 
 'accounts:' is a list of network account entries, translated into the matching Apple
 payload by an AccountType class (see ACCOUNT_TYPES): mail (com.apple.mail.managed),
@@ -107,6 +111,9 @@ Environment overrides (same names/defaults as create_codesign.sh):
     ISSUERCANAME  default $ISSUERCADIR     are used to vet signing certs: revoked/expired are skipped;
                                            every CRL in */crl/ is also checked, see collect_crls)
     CERTSHA1      optional: pick a specific signer when several usable ones exist
+    SMIME_ISSUERCADIR   default $ISSUERCADIR  (same role as ISSUERCADIR/ISSUERCANAME, but for
+    SMIME_ISSUERCANAME  default $SMIME_ISSUERCADIR  vetting 'identities:' certificates; override
+                                           only if S/MIME certs come from a different intermediate)
     UNSIGNED_DIR  default "mdm-private/mobfileconfigs-unsigned"
     SIGNED_DIR    default "mdm-private/mobfileconfigs-signed"
     IDENTITY_DOMAIN_VAR  see DOMAIN_VAR below
@@ -129,7 +136,8 @@ from pathlib import Path
 import yaml
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.x509.oid import NameOID
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 # Fixed namespace so UUIDs are deterministic across rebuilds. Change once, keep forever.
 NAMESPACE = uuid.UUID("6f1c2f54-3b0e-4a57-9c5e-2d1f8a7b4c10")
@@ -388,11 +396,32 @@ def load_passphrase_line(path, line_no):
     return lines[line_no - 1]
 
 
+def load_pkcs12(path, password):
+    """Open a .p12 and return its certificate. The private key and any extra certs in the
+    bundle aren't needed here -- only the certificate is checked, and only its bytes are
+    embedded in the profile."""
+    try:
+        _, cert, _ = pkcs12.load_key_and_certificates(path.read_bytes(), password.encode())
+    except ValueError as e:
+        die(f"{path}: cannot open PKCS#12 (wrong passphrase, or not a PKCS#12 file?): {e}")
+    if cert is None:
+        die(f"{path}: PKCS#12 contains no certificate")
+    return cert
+
+
 def build_identities(cfg, ident, identity_dirs):
     """Build a signing + encryption com.apple.security.pkcs12 payload for each name in
     'identities:' (<name>-signature.p12 and <name>-encryption.p12, found via resolve_file,
-    both protected by one passphrase). Returns (payloads: list[dict],
-    identity_uuids: {name: {"signing": UUID, "encryption": UUID}})."""
+    both protected by one passphrase).
+
+    Each certificate is checked exactly like the code-signing signer in find_signer(): in
+    date, not revoked per the issuer's index.txt, and verifies against every CRL in
+    PKI_ROOT/*/crl/. This checks the certificate actually embedded in the .p12 (opened with
+    the given passphrase) -- not a same-named file elsewhere such as smime/certs/, so a stray
+    or stale file there can't make a bad identity look fine, or a fine one look bad.
+
+    Returns (payloads: list[dict], identity_uuids: {name: {"signing": UUID, "encryption": UUID}}).
+    """
     names = cfg.get("identities", [])
     if not names:
         return [], {}
@@ -403,31 +432,51 @@ def build_identities(cfg, ident, identity_dirs):
             f"(set 'identity_passphrase_file:' to override)")
     password = load_passphrase_line(pw_file, 2)  # line 1 = key passphrase, line 2 = p12 export
 
+    # Defaults to the same issuer as code signing; override with SMIME_ISSUERCADIR/NAME if
+    # S/MIME certs come from a different intermediate.
+    ca_bundle, ca_db, crls = load_issuer_context(
+        "SMIME_ISSUERCADIR", "SMIME_ISSUERCANAME", os.environ.get("ISSUERCADIR", "intermediate"))
+    now = datetime.now(timezone.utc)
+
     payloads, identity_uuids, seen = [], {}, set()
-    for name in names:
-        roles = {}
-        for role, suffix in (("signing", "signature"), ("encryption", "encryption")):
-            path = resolve_file(f"{name}-{suffix}.p12", identity_dirs)
-            data = path.read_bytes()
-            digest = hashlib.sha256(data).hexdigest()
-            u = str(uuid.uuid5(NAMESPACE, f"{ident}:identity:{name}:{role}:{digest}")).upper()
-            if u in seen:
-                die(f"identity '{name}' ({role}): duplicate UUID (identical file listed twice?)")
-            seen.add(u)
-            roles[role] = u
-            payloads.append({
-                "Password": password,
-                "PayloadCertificateFileName": path.name,
-                "PayloadContent": data,  # -> <data>
-                "PayloadDescription": "Adds a PKCS#12-formatted certificate",
-                "PayloadDisplayName": path.name,
-                "PayloadIdentifier": f"{ident}.pkcs12.{u}",
-                "PayloadType": "com.apple.security.pkcs12",
-                "PayloadUUID": u,
-                "PayloadVersion": 1,
-            })
-        identity_uuids[name] = roles
-        print(f"  + pkcs12 {name}  (signing + encryption, from {identity_dirs})")
+    with tempfile.TemporaryDirectory() as td:
+        crl_bundle = Path(td) / "crls.pem"
+        crl_bundle.write_bytes(b"".join(c.public_bytes(serialization.Encoding.PEM) for _, c in crls))
+
+        for name in names:
+            roles = {}
+            for role, suffix in (("signing", "signature"), ("encryption", "encryption")):
+                path = resolve_file(f"{name}-{suffix}.p12", identity_dirs)
+                data = path.read_bytes()
+                cert = load_pkcs12(path, password)
+
+                pem_path = Path(td) / f"{path.stem}.pem"
+                pem_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+                problems = cert_problems(cert, pem_path, ca_db, ca_bundle, crl_bundle, now,
+                                         required_eku=ExtendedKeyUsageOID.EMAIL_PROTECTION,
+                                         eku_name="emailProtection")
+                if problems:
+                    die(f"identity '{name}' ({role}) {path.name}: {problems[0]}")
+
+                digest = hashlib.sha256(data).hexdigest()
+                u = str(uuid.uuid5(NAMESPACE, f"{ident}:identity:{name}:{role}:{digest}")).upper()
+                if u in seen:
+                    die(f"identity '{name}' ({role}): duplicate UUID (identical file listed twice?)")
+                seen.add(u)
+                roles[role] = u
+                payloads.append({
+                    "Password": password,
+                    "PayloadCertificateFileName": path.name,
+                    "PayloadContent": data,  # -> <data>
+                    "PayloadDescription": "Adds a PKCS#12-formatted certificate",
+                    "PayloadDisplayName": path.name,
+                    "PayloadIdentifier": f"{ident}.pkcs12.{u}",
+                    "PayloadType": "com.apple.security.pkcs12",
+                    "PayloadUUID": u,
+                    "PayloadVersion": 1,
+                })
+            identity_uuids[name] = roles
+            print(f"  + pkcs12 {name}  (signing + encryption, from {identity_dirs})")
     return payloads, identity_uuids
 
 
@@ -870,8 +919,10 @@ def collect_crls():
     return found
 
 
-def signer_problems(cert, cert_file, ca_db, ca_bundle, crl_bundle, now):
-    """Return a list of reasons this certificate must not be used to sign (empty = usable)."""
+def cert_problems(cert, cert_file, ca_db, ca_bundle, crl_bundle, now, required_eku=None, eku_name=""):
+    """Return a list of reasons this certificate must not be trusted (empty = OK). Shared by
+    the code-signing signer check and the S/MIME identity check below; required_eku is only
+    enforced when the certificate actually carries an ExtendedKeyUsage extension."""
     nb, na = _validity(cert)
     if now < nb:
         return [f"not valid until {nb:%Y-%m-%d %H:%M}Z"]
@@ -887,15 +938,16 @@ def signer_problems(cert, cert_file, ca_db, ca_bundle, crl_bundle, now):
     if status != "V":
         return [f"index.txt status '{status}' (expected V)"]
 
-    try:  # if an EKU is present it must allow code signing
-        eku = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
-        if x509.oid.ExtendedKeyUsageOID.CODE_SIGNING not in eku:
-            return ["ExtendedKeyUsage does not include codeSigning"]
-    except x509.ExtensionNotFound:
-        pass
+    if required_eku is not None:
+        try:  # if an EKU is present it must allow the required use
+            eku = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+            if required_eku not in eku:
+                return [f"ExtendedKeyUsage does not include {eku_name or required_eku}"]
+        except x509.ExtensionNotFound:
+            pass
 
-    # Chain + CRL check: -crl_check_all needs a current, correctly signed CRL for the signer
-    # (from the intermediate) and for every CA below the root (from the root).
+    # Chain + CRL check: -crl_check_all needs a current, correctly signed CRL for this
+    # certificate (from the intermediate) and for every CA below the root (from the root).
     r = subprocess.run(["openssl", "verify", "-CAfile", str(ca_bundle),
                         "-crl_check_all", "-CRLfile", str(crl_bundle), str(cert_file)],
                        capture_output=True, text=True)
@@ -907,15 +959,18 @@ def signer_problems(cert, cert_file, ca_db, ca_bundle, crl_bundle, now):
     return []
 
 
-def find_signer():
-    """Pick the newest signing cert that is in date, not revoked (per the issuer's index.txt),
-    and chains to the issuer CA bundle.  Layout follows create_codesign.sh."""
-    certdir_name = os.environ.get("CERTDIR", "codesign")
-    certname = os.environ.get("CERTNAME", certdir_name)
-    certdir = under_root(certdir_name)
-    issuer_dir = under_root(os.environ.get("ISSUERCADIR", "intermediate"))
-    issuer_name = os.environ.get("ISSUERCANAME", os.environ.get("ISSUERCADIR", "intermediate"))
-    want = os.environ.get("CERTSHA1", "").lower()
+_issuer_context_cache = {}
+
+
+def load_issuer_context(dir_var, name_var, default_dir):
+    """Resolve an issuer's CA bundle, its OpenSSL index.txt (parsed) and every CRL in
+    PKI_ROOT/*/crl/. Shared by the code-signing signer check (ISSUERCADIR/ISSUERCANAME) and
+    the S/MIME identity check (SMIME_ISSUERCADIR/SMIME_ISSUERCANAME, defaulting to the same
+    issuer as code signing unless overridden). Cached per dir_var: CRLs are read once per run."""
+    if dir_var in _issuer_context_cache:
+        return _issuer_context_cache[dir_var]
+    issuer_dir = under_root(os.environ.get(dir_var, default_dir))
+    issuer_name = os.environ.get(name_var, os.environ.get(dir_var, default_dir))
 
     ca_bundle = issuer_dir / "certs" / f"{issuer_name}.chain.pem"
     if not ca_bundle.is_file():  # same fallback as create_codesign.sh
@@ -924,7 +979,7 @@ def find_signer():
         die(f"issuer CA chain not found: {issuer_dir / 'certs' / (issuer_name + '.chain.pem')}")
     index_file = issuer_dir / "index.txt"
     if not index_file.is_file():
-        die(f"{index_file} not found; cannot check revocation status of signing certs")
+        die(f"{index_file} not found; cannot check revocation status of certificates")
     ca_db = load_ca_index(index_file)
 
     crls = collect_crls()
@@ -932,6 +987,20 @@ def find_signer():
         die(f"no CRLs found in {PKI_ROOT}/*/crl/ (looked for *.crl.pem, then *.crl); "
             f"cannot check revocation")
     print("  CRLs: " + ", ".join(f"{f.parent.parent.name}/crl/{f.name}" for f, _ in crls), file=sys.stderr)
+
+    _issuer_context_cache[dir_var] = (ca_bundle, ca_db, crls)
+    return ca_bundle, ca_db, crls
+
+
+def find_signer():
+    """Pick the newest signing cert that is in date, not revoked (per the issuer's index.txt),
+    and chains to the issuer CA bundle.  Layout follows create_codesign.sh."""
+    certdir_name = os.environ.get("CERTDIR", "codesign")
+    certname = os.environ.get("CERTNAME", certdir_name)
+    certdir = under_root(certdir_name)
+    want = os.environ.get("CERTSHA1", "").lower()
+
+    ca_bundle, ca_db, crls = load_issuer_context("ISSUERCADIR", "ISSUERCANAME", "intermediate")
 
     now = datetime.now(timezone.utc)
     pat = re.compile(rf"^{re.escape(certname)}\.([0-9a-f]{{40}})\.cert\.pem$")
@@ -944,7 +1013,8 @@ def find_signer():
             if not m or (want and m.group(1) != want):
                 continue
             c = load_cert(f)
-            problems = signer_problems(c, f, ca_db, ca_bundle, crl_bundle, now)
+            problems = cert_problems(c, f, ca_db, ca_bundle, crl_bundle, now,
+                                     required_eku=ExtendedKeyUsageOID.CODE_SIGNING, eku_name="codeSigning")
             if problems:
                 rejected.append((f, problems[0]))
             else:

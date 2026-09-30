@@ -1,17 +1,19 @@
 # ios-restrictions-baseline.yaml
 #
-# Optional baseline layer for the Restrictions payload (com.apple.applicationaccess).
-# Pulled into a profile YAML with `include:`. Contains no secrets.
+# Optional baseline for the Restrictions payload
+# (com.apple.applicationaccess). Include from a profile YAML with
+# `include:`. Contains no secrets.
 #
-# These are the values Apple Configurator / Profile Manager emitted that match the
-# documented defaults (allow* = true, force* = false, ratings, Safari). Including this
-# file pins them explicitly. Omit the `include:` line to leave them unset.
-# Policy that departs from the defaults belongs in the profile YAML, which overrides this.
+# Values match Apple's documented defaults (allow* true, force* false,
+# ratings, Safari), as emitted by Apple Configurator / Profile Manager.
+# Including this file pins them explicitly; omit `include:` to leave
+# them unset. Profile YAML settings override this file.
 #
-# Several keys here are supervised-only, deprecated, or ignored on current iOS
-# (e.g. allowChat, allowEnablingRestrictions, allowHostPairing); pruning them is safe.
+# Several keys are supervised-only, deprecated, or ignored on current
+# iOS (e.g. allowChat, allowEnablingRestrictions, allowHostPairing).
+# Pruning them is safe.
 #
-# Keys are Apple's own names, passed through unchanged.
+# Keys are Apple's names, passed through unchanged.
 
 payloads:
   - id: restrictions

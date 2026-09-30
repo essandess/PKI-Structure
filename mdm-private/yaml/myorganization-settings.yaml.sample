@@ -1,37 +1,40 @@
-# Source description for: Settings for iOS (passcode, Wi-Fi, restrictions)
+# Settings for iOS: passcode, Wi-Fi, restrictions.
 #
-# The converter fills in: PayloadType (Configuration), PayloadVersion, PayloadUUIDs,
-# payload identifiers (<profile identifier>.<id>), and PayloadEnabled defaults.
+# Converter fills in: PayloadType, PayloadVersion, PayloadUUIDs,
+# payload identifiers (<profile identifier>.<id>), PayloadEnabled.
 #
-# CONTAINS SECRETS (Wi-Fi password). Keep this file under mdm-private/, mode 0600.
-# The generated .mobileconfig holds the password as readable text; signing does not
-# encrypt it.
+# CONTAINS SECRETS (Wi-Fi password). Keep under mdm-private/, mode
+# 0600. Signing does not encrypt the password in the .mobileconfig.
 
-# ---- Profile ---------------------------------------------------------------
+# ---- Profile ----------------------------------------------------
 # identifier: org.myorganization.mdm.myorganization-settings
-#   Optional. Default: <DOMAIN_NAME from pki_identity.env, reversed>.mdm.<this file's name>.
-#   Keep it stable once deployed: devices match profiles on it.
+#   Optional. Default: <DOMAIN_NAME from pki_identity.env,
+#   reversed>.mdm.<file name>. Keep stable once deployed; devices
+#   match profiles on it.
 name: Settings for iOS
-description: Passcode, Wi-Fi and restriction policy for MyOrganization devices.
-organization: ${ORG_NAME}        # from pki_identity.env
-scope: System                    # optional; System (default) or User
-removal_disallowed: false        # optional; PayloadRemovalDisallowed, default false
+description: >-
+  Passcode, Wi-Fi and restriction policy for MyOrganization
+  devices.
+organization: ${ORG_NAME}   # from pki_identity.env
+scope: System                # System (default) or User
+removal_disallowed: false    # PayloadRemovalDisallowed
 
-# Optional layers merged UNDER this file, in order (later files and this file win).
-# Paths are relative to this file. Included files may contain only `payloads:`.
+# Layers merged under this file, in order; this file wins.
+# Paths relative to this file. Included files: `payloads:` only.
 include:
-  - ios-restrictions-baseline.yaml   # pins Apple's default restriction values; delete to skip
+  - ios-restrictions-baseline.yaml   # delete to skip defaults
 
-# ---- Payloads --------------------------------------------------------------
-# id        Required. Stable slug, unique in the profile. Payload identifier becomes
-#           <profile identifier>.<id>; the UUID is derived from it. Also the merge key
-#           for `include:` layers. Do not rename after deployment.
-# type      Required. Apple payload type, verbatim.
-# name      Optional. PayloadDisplayName (default: the id).
+# ---- Payloads -----------------------------------------------------
+# id           Required. Stable slug, unique in the profile.
+#              Identifier: <profile identifier>.<id>; UUID derived
+#              from it. Merge key for `include:`. Do not rename.
+# type         Required. Apple payload type, verbatim.
+# name         Optional. PayloadDisplayName (default: id).
 # description  Optional. PayloadDescription.
-# settings  Apple's own key names and value types, passed through unchanged.
-#           Keys starting with "Payload" are reserved for the converter.
-#           Quote strings that YAML would read as numbers or booleans ("12345678", "yes").
+# settings     Apple's own keys, passed through unchanged. Keys
+#              starting with "Payload" are reserved. Quote values
+#              YAML would read as numbers/booleans ("12345678",
+#              "yes").
 payloads:
 
   - id: passcode
@@ -51,7 +54,7 @@ payloads:
     name: WiFi (My SSID WiFi Name)
     settings:
       SSID_STR: My SSID WiFi Name
-      Password: "CHANGE-ME"            # secret
+      Password: "CHANGE-ME"   # secret
       EncryptionType: WPA
       AutoJoin: true
       HIDDEN_NETWORK: false
@@ -60,10 +63,10 @@ payloads:
       ProxyType: Auto
       ProxyPACURL: http://proxy.myorganization.private/proxy.pac
       ProxyPACFallbackAllowed: true
-      # Not carried over from Profile Manager output: AuthenticationMethod "" (empty),
-      # Interface BuiltInWireless, SetupModes [] (legacy/empty) and PayloadEnabled true (default).
+      # Omitted (Profile Manager defaults): AuthenticationMethod
+      # "", Interface BuiltInWireless, SetupModes [], PayloadEnabled.
 
-  # Only the departures from Apple's defaults. The defaults themselves come from the
+  # Only departures from Apple's defaults; defaults come from the
   # baseline file above, merged key by key.
   - id: restrictions
     type: com.apple.applicationaccess
@@ -74,7 +77,7 @@ payloads:
       forceLimitAdTracking: true
       allowDiagnosticSubmission: false
       allowDiagnosticSubmissionModification: false
-      # Managed / unmanaged contacts separation
+      # Managed/unmanaged contact separation
       allowManagedToWriteUnmanagedContacts: false
       allowUnmanagedToReadManagedContacts: false
       # Apple Watch

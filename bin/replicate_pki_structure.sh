@@ -67,15 +67,20 @@ mkdir -p "${DEST}"
 # The source's private directory supplies the seed YAML, so check it first.
 audit_private "${SRC}${MDM_PRIVATE}" "SOURCE"
 
+# exclude/include to avoid any hint of overwriting exisiting personalized files
 rsync -am \
     --exclude='.git/' \
     --exclude='*.env' \
+    --exclude='*.conf' \
+    --exclude='*.yaml' \
     --exclude='create_organization_smime_pki.sh' \
-    --exclude="${MDM_PRIVATE}/" \
+    --exclude='create_organization_mdm.sh' \
     --include='*/' \
-    --include='*.sh' --include='*.py' \
+    --include='*.sh' \
+    --include='*.py' \
     --include='*.cnf' \
     --include='*.md' \
+    --include="${MDM_PRIVATE_YAML}/*.sample" \
     --include='LICENSE' \
     --exclude='*' \
     "${SRC}" "${DEST}/"
@@ -88,12 +93,8 @@ fi
 # Seed personalized files only if DEST doesn't already have them.
 for PERSONALIZED in \
     pki_identity.env \
-    bin/create_organization_smime_pki.sh \
     bin/create_organization_mdm.sh \
-    "${MDM_PRIVATE_YAML}/ios-restrictions-baseline.yaml" \
-    "${MDM_PRIVATE_YAML}/myorganization-settings.yaml" \
-    "${MDM_PRIVATE_YAML}/myorganization-trust.yaml" \
-    "${MDM_PRIVATE_YAML}/persona-settings.yaml" \
+    bin/create_organization_smime_pki.sh \
     ; do
     BASELINE="${SRC}${PERSONALIZED}.sample"
     [ -f "${BASELINE}" ] || BASELINE="${SRC}${PERSONALIZED}"

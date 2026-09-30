@@ -91,10 +91,12 @@ if [ ! -e "${DEST}/${MDM_PRIVATE}" ]; then
 fi
 
 # Seed personalized files only if DEST doesn't already have them.
+# Only seed necessary dependencies ; user expected to personalize the rest
 for PERSONALIZED in \
     pki_identity.env \
     bin/create_organization_mdm.sh \
     bin/create_organization_smime_pki.sh \
+    "${MDM_PRIVATE_YAML}/ios-restrictions-baseline.yaml" \
     ; do
     BASELINE="${SRC}${PERSONALIZED}.sample"
     [ -f "${BASELINE}" ] || BASELINE="${SRC}${PERSONALIZED}"

@@ -1,0 +1,98 @@
+# ios-configurator-extras.yaml
+#
+# Example fragment for the Apple Configurator.app payload categories that have no
+# dedicated top-level YAML section (unlike certificates:/identities:/accounts:, which
+# need Python for certificate parsing, revocation checks, or friendly-field translation).
+# Every payload below is the generic 'payloads:' mechanism from bin/configurate_yaml.py:
+# Apple's own key names under 'settings:', a short 'type:' from TYPE_ALIASES, and a file
+# embedded with {file: path} where a payload needs binary data. No new Python is needed to
+# add another payload like these -- see the module docstring in bin/configurate_yaml.py.
+#
+# CONFIDENCE: I do not have a reference .mobileconfig for any of these six payload types
+# (unlike Passcode/Wi-Fi/Restrictions/accounts, which were reverse-engineered from an
+# actual Apple Configurator export). The keys below are my best understanding from
+# Apple's public Device Management documentation:
+#   - AirPrint, Fonts, Web Clip, Notifications, Content Filter (BuiltIn only): reasonably
+#     confident, but UNVERIFIED against a real device or Configurator export.
+#   - AirPlay, Subscribed Calendars: NOT confident of the exact key names -- Apple's
+#     documentation for these was less clear in my training, so only the payload type and
+#     a placeholder are given. Check Apple's Device Management documentation, or export
+#     a real profile from Apple Configurator / Profile Manager with these payloads
+#     configured and compare, before using either of these two in production.
+# For all six: build with --no-sign, install on ONE test device, and confirm the setting
+# actually takes effect before deploying broadly.
+
+name: iOS Configurator Extras (example)
+description: Example fragment -- verify before use, see header.
+payloads:
+
+  # ---- AirPrint: restrict to specific known printers ------------------------------
+  - id: airprint
+    type: airprint                       # -> com.apple.airprint
+    name: AirPrint
+    settings:
+      AirPrint:
+        - IPAddress: 10.0.1.50
+          ResourcePath: /printers/lobby  # optional; default is usually fine to omit
+          # Port: 631                    # optional; 631 is the default
+
+  # ---- Fonts: install a custom font file -------------------------------------------
+  - id: corporate-font
+    type: fonts                          # -> com.apple.font
+    name: Corporate Font
+    settings:
+      Name: MyOrgSans-Regular            # the font's own internal name, not a label
+      Font: {file: $PKI_ROOT/assets/fonts/MyOrgSans-Regular.ttf}
+
+  # ---- Web Clip: a home-screen icon that opens a URL --------------------------------
+  - id: intranet-webclip
+    type: webclip                        # -> com.apple.webClip.managed
+    name: Intranet
+    settings:
+      Label: Intranet
+      URL: https://intranet.myorganization.org
+      Icon: {file: $PKI_ROOT/assets/icons/intranet-clip.png}   # 1024x1024 recommended
+      IsRemovable: true
+      FullScreen: false
+      Precomposed: false
+
+  # ---- Notifications: per-app notification policy -----------------------------------
+  - id: notifications
+    type: notifications                  # -> com.apple.notificationsettings
+    name: Notifications
+    settings:
+      NotificationSettings:
+        - BundleIdentifier: com.myorganization.corpapp
+          NotificationsEnabled: true
+          ShowInNotificationCenter: true
+          ShowInLockScreen: false
+          BadgesEnabled: true
+          SoundsEnabled: true
+          AlertType: 2                   # 0 = None, 1 = Banner, 2 = Alerts (unverified numbering)
+
+  # ---- Content Filter: simplest (BuiltIn) form ---------------------------------------
+  # The Plugin/vendor-specific variant has many more keys (ServerAddress, credentials,
+  # PluginBundleID, ...) not attempted here.
+  - id: content-filter
+    type: content-filter                 # -> com.apple.webcontent-filter
+    name: Content Filter
+    settings:
+      FilterType: BuiltIn
+      AutoFilterEnabled: true
+      PermittedURLs:
+        - https://intranet.myorganization.org
+      BlacklistedURLs: []
+
+  # ---- AirPlay: NOT verified -- placeholder only, fill in after checking Apple's docs
+  # - id: airplay
+  #   type: airplay                      # -> com.apple.airplay
+  #   name: AirPlay
+  #   settings:
+  #     {}                               # unknown key names; see CONFIDENCE note above
+
+  # ---- Subscribed Calendars: NOT verified -- placeholder only -----------------------
+  # - id: team-calendar
+  #   type: subscribed-calendar          # -> com.apple.subscribedcalendar
+  #   name: Team Calendar
+  #   settings:
+  #     {}                               # unknown key names; see CONFIDENCE note above

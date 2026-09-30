@@ -73,6 +73,29 @@ com.apple.security.root or com.apple.security.pkcs1 payloads; see resolve_file.
   code-signing signer below: in date, 'V' in the issuer's index.txt, and verifies against
   every CRL in PKI_ROOT/*/crl/. See build_identities / SMIME_ISSUERCADIR below.
 
+A 'type:' in 'payloads:' or 'accounts:' may be a short name from TYPE_ALIASES (e.g.
+'airprint') instead of the full Apple PayloadType string; either always works, and this
+table is the only place to add another one. This covers every Configurator payload with no
+special-cased Apple-key knowledge -- see TYPE_ALIASES and the example fragment file
+mdm-private/yaml/ios-configurator-extras.yaml.sample for the keys reference/support-level
+believed to be right for AirPrint, Notifications, Web Clips and Fonts, and Content Filter's
+simplest (BuiltIn) form; that file also flags AirPlay and Subscribed Calendars as
+unverified against a real device -- their Apple key names are not confidently known here,
+so check Apple's Device Management documentation or an Apple Configurator export before
+using either.
+
+Any 'settings:' value of the exact shape {"file": path} or {"base64": text} is replaced
+with the raw bytes of that file (relative to PKI_ROOT, $VAR expanded) or that base64 text,
+letting any payload embed binary data (a font under 'Font', an icon under 'Icon', etc.)
+with no dedicated YAML section or Python needed; see embed_data_deep.
+
+YAML footguns this script guards against, so a plain admin-facing value stays what it
+looks like: plain 'true'/'false' (only) parse as booleans -- 'yes'/'no'/'on'/'off' do not,
+since Apple payload values are frequently exactly these words as enum strings (see
+_StrictBoolLoader); an un-quoted bare date (2026-01-01) is rejected with a clear message
+rather than silently becoming a wrong type (see check_plistable), which also flags any
+other value plistlib could not otherwise write.
+
 'accounts:' is a list of network account entries, translated into the matching Apple
 payload by an AccountType class (see ACCOUNT_TYPES): mail (com.apple.mail.managed),
 caldav (com.apple.caldav.account), carddav (com.apple.carddav.account).
@@ -119,6 +142,7 @@ Environment overrides (same names/defaults as create_codesign.sh):
     IDENTITY_DOMAIN_VAR  see DOMAIN_VAR below
 """
 import argparse
+import base64
 import glob
 import hashlib
 import os
@@ -130,7 +154,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -146,6 +170,27 @@ NAMESPACE = uuid.UUID("6f1c2f54-3b0e-4a57-9c5e-2d1f8a7b4c10")
 # and S/MIME identities): see build_profile / build_identities.
 EMBEDDED_DATA_TYPES = {"com.apple.security.root", "com.apple.security.pkcs1",
                        "com.apple.security.pkcs12"}
+
+# Short names for 'payloads:'/'accounts:' 'type:' -- purely a convenience so common payloads
+# don't need Apple's full PayloadType string memorized; the literal string always still
+# works too (this dict is consulted, and if 'type:' isn't a key here it is used as-is). Add
+# to this table freely -- it is the only change needed to give a payload type a short name.
+TYPE_ALIASES = {
+    "passcode": "com.apple.mobiledevice.passwordpolicy",
+    "restrictions": "com.apple.applicationaccess",
+    "wifi": "com.apple.wifi.managed",
+    # Note: 'mail', 'caldav', 'carddav' are deliberately not aliased here -- those words are
+    # reserved for 'accounts:' 'type:' (see ACCOUNT_TYPES), which does friendly-field
+    # translation, not a plain alias to the Apple string. A hand-written 'payloads:' entry
+    # for one of these still works, just spell out the full type, e.g. com.apple.mail.managed.
+    "airprint": "com.apple.airprint",
+    "airplay": "com.apple.airplay",
+    "content-filter": "com.apple.webcontent-filter",
+    "fonts": "com.apple.font",
+    "notifications": "com.apple.notificationsettings",
+    "subscribed-calendar": "com.apple.subscribedcalendar",
+    "webclip": "com.apple.webClip.managed",
+}
 
 # Same definition as bin/pki_structure.sh.
 ORIG_CWD = Path.cwd()
@@ -170,9 +215,55 @@ def under_root(p):
     return p if p.is_absolute() else PKI_ROOT / p
 
 
+class _StrictBoolLoader(yaml.SafeLoader):
+    """SafeLoader, but only true/True/TRUE/false/False/FALSE parse as booleans. Plain YAML
+    (1.1) also treats yes/Yes/YES/no/No/NO/on/On/ON/off/Off/OFF as booleans, which is a
+    landmine here: Apple payload values are frequently exactly these words as literal enum
+    strings (e.g. EncryptionType: WPA, or a hypothetical AlertStyle: Off), and an unquoted
+    'off' would silently become Python False instead of the string 'off'. This does not
+    relax the type system -- true/false quoted or not still parse as bool; it only removes
+    the extra YAML 1.1 spellings, so anyone who does want a boolean still writes true/false."""
+
+
+_STRICT_BOOL_RE = re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$")
+_StrictBoolLoader.yaml_implicit_resolvers = {
+    first: [(tag, regexp) if tag != "tag:yaml.org,2002:bool" else (tag, _STRICT_BOOL_RE)
+            for tag, regexp in resolvers]
+    for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+
+
+_PLIST_SCALAR_TYPES = (str, bytes, bytearray, bool, int, float, datetime)
+
+
+def check_plistable(obj, where="profile"):
+    """Walk a nested structure and give a clear error for any value plistlib can't write,
+    instead of an opaque failure from plistlib.dumps() much later. Catches the two most
+    common accidental-YAML-type mistakes: a bare date (2026-01-01) parsed as datetime.date,
+    and a key or value that YAML turned into something other than a plain string/scalar."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if not isinstance(k, str):
+                die(f"{where}: key {k!r} is not a string ({type(k).__name__}) -- "
+                    f"check quoting/indentation around it")
+            check_plistable(v, f"{where}.{k}")
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            check_plistable(v, f"{where}[{i}]")
+    elif obj is None:
+        die(f"{where}: value is empty/null -- plist has no such value; remove the key "
+            f"or give it a value")
+    elif isinstance(obj, date) and not isinstance(obj, datetime):
+        die(f"{where}: bare date {obj} -- YAML read this as a date, but plist needs either "
+            f"a full timestamp or a plain string; write \"{obj}\" (quoted) if a string was meant")
+    elif not isinstance(obj, _PLIST_SCALAR_TYPES):
+        die(f"{where}: unsupported value type {type(obj).__name__} ({obj!r}) -- plist "
+            f"supports strings, numbers, booleans, dates and binary data")
+
+
 def load_yaml_file(path):
     try:
-        cfg = yaml.safe_load(path.read_text())
+        cfg = yaml.load(path.read_text(), Loader=_StrictBoolLoader)
     except yaml.YAMLError as e:
         die(f"cannot parse YAML {path}: {e}")
     return cfg or {}
@@ -262,6 +353,40 @@ def render_deep(obj):
     if isinstance(obj, list):
         return [render_deep(v) for v in obj]
     return render(obj)
+
+
+# --------------------------------------------------------------------------
+# Generic binary embedding for any 'settings:' value -- {"file": path} / {"base64": text}
+#
+# Several Apple payloads need raw binary data under an arbitrary key: a font file under
+# 'Font' (com.apple.font), an icon under 'Icon' (com.apple.webClip.managed), and so on.
+# Rather than one bespoke top-level YAML section and Python loop per such payload (as
+# 'certificates:' and 'identities:' already are, because those also need certificate
+# parsing/validation), any payload's 'settings:' can embed a file directly:
+#     settings:
+#       Font: {file: fonts/MyFont.ttf}       # path relative to PKI_ROOT, $VAR expanded
+#       Icon: {base64: iVBORw0KGgoAAAANSU...} # already-encoded data, e.g. pasted from
+#                                             # an existing exported .mobileconfig
+# This one mechanism covers every current and future payload type that embeds a file,
+# with no new Python needed to add another one.
+# --------------------------------------------------------------------------
+def embed_data_deep(obj):
+    if isinstance(obj, dict):
+        keys = set(obj)
+        if keys == {"file"}:
+            path = under_root(obj["file"])
+            if not path.is_file():
+                die(f"embedded file not found: {path} (from 'file: {obj['file']}')")
+            return path.read_bytes()
+        if keys == {"base64"}:
+            try:
+                return base64.b64decode(obj["base64"], validate=True)
+            except (ValueError, TypeError) as e:
+                die(f"invalid base64 value: {e}")
+        return {k: embed_data_deep(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [embed_data_deep(v) for v in obj]
+    return obj
 
 
 # --------------------------------------------------------------------------
@@ -491,48 +616,78 @@ def build_identities(cfg, ident, identity_dirs):
 # pipeline as hand-written 'payloads:' -- accounts are just a friendlier way to write
 # a handful of well-known payload types.
 # --------------------------------------------------------------------------
+def _same_as(friendly_key):
+    """A fields= default_factory: falls back to another friendly field on the same entry
+    (e.g. Mail's outgoing host defaults to its incoming host)."""
+    return lambda entry, context: entry[friendly_key]
+
+
 class AccountType:
+    """Base class translating one 'accounts:' entry into an Apple payload's own keys.
+
+    Subclasses declare:
+      apple_type -- the Apple PayloadType string.
+      required   -- friendly field names that must be present (checked by
+                    accounts_to_payload_entries before settings() is ever called).
+      fields     -- the plain 1:1 mappings: a tuple of (friendly_key, apple_key, default),
+                    where default is either a literal value or a default_factory(entry,
+                    context) callable (see _same_as above). The base settings() applies
+                    these; a friendly_key may appear more than once to fan out to several
+                    Apple keys (e.g. one 'use_ssl' -> two *UseSSL keys).
+    A subclass overrides settings() only for what isn't a plain 1:1 mapping -- a computed
+    key, a conditional block -- calling super().settings(...) first and layering its own
+    keys on top; see MailAccountType for the one case here that needs this (SMIME).
+    """
     apple_type = ""
     required = ()
+    fields = ()
 
     def display_name(self, entry):
-        return entry.get("description", entry.get("type", ""))
+        return entry.get("description", "")
 
     def settings(self, entry, identity_uuids, context):
-        raise NotImplementedError
+        out = {}
+        for friendly_key, apple_key, default in self.fields:
+            if friendly_key in entry:
+                out[apple_key] = entry[friendly_key]
+            elif callable(default):
+                out[apple_key] = default(entry, context)
+            else:
+                out[apple_key] = default
+        return out
 
 
 class MailAccountType(AccountType):
     apple_type = "com.apple.mail.managed"
     required = ("description", "email", "username", "password", "host")
+    fields = (
+        ("description", "EmailAccountDescription", None),
+        ("account_name", "EmailAccountName", lambda e, c: c.get("short_name") or e["description"]),
+        ("account_type", "EmailAccountType", "EmailTypeIMAP"),
+        ("email", "EmailAddress", None),
+        ("incoming_host", "IncomingMailServerHostName", _same_as("host")),
+        ("imap_port", "IncomingMailServerPortNumber", 993),
+        ("use_ssl", "IncomingMailServerUseSSL", True),
+        ("username", "IncomingMailServerUsername", None),
+        ("password", "IncomingPassword", None),
+        ("outgoing_host", "OutgoingMailServerHostName", _same_as("host")),
+        ("smtp_port", "OutgoingMailServerPortNumber", 587),
+        ("use_ssl", "OutgoingMailServerUseSSL", True),
+        ("outgoing_username", "OutgoingMailServerUsername", _same_as("username")),
+        ("prevent_app_sheet", "PreventAppSheet", False),
+        ("prevent_move", "PreventMove", False),
+        ("allow_mail_drop", "allowMailDrop", False),
+        ("disable_recents_syncing", "disableMailRecentsSyncing", False),
+    )
 
     def display_name(self, entry):
         return entry["description"]
 
     def settings(self, entry, identity_uuids, context):
-        use_ssl = entry.get("use_ssl", True)
-        s = {
-            "EmailAccountDescription": entry["description"],
-            "EmailAccountName": entry.get("account_name") or context.get("short_name") or entry["description"],
-            "EmailAccountType": entry.get("account_type", "EmailTypeIMAP"),
-            "EmailAddress": entry["email"],
-            "IncomingMailServerAuthentication": "EmailAuthPassword",
-            "IncomingMailServerHostName": entry.get("incoming_host", entry["host"]),
-            "IncomingMailServerPortNumber": entry.get("imap_port", 993),
-            "IncomingMailServerUseSSL": use_ssl,
-            "IncomingMailServerUsername": entry["username"],
-            "IncomingPassword": entry["password"],
-            "OutgoingMailServerAuthentication": "EmailAuthPassword",
-            "OutgoingMailServerHostName": entry.get("outgoing_host", entry["host"]),
-            "OutgoingMailServerPortNumber": entry.get("smtp_port", 587),
-            "OutgoingMailServerUseSSL": use_ssl,
-            "OutgoingMailServerUsername": entry.get("outgoing_username", entry["username"]),
-            "OutgoingPasswordSameAsIncomingPassword": "outgoing_password" not in entry,
-            "PreventAppSheet": entry.get("prevent_app_sheet", False),
-            "PreventMove": entry.get("prevent_move", False),
-            "allowMailDrop": entry.get("allow_mail_drop", False),
-            "disableMailRecentsSyncing": entry.get("disable_recents_syncing", False),
-        }
+        s = super().settings(entry, identity_uuids, context)
+        s["IncomingMailServerAuthentication"] = "EmailAuthPassword"
+        s["OutgoingMailServerAuthentication"] = "EmailAuthPassword"
+        s["OutgoingPasswordSameAsIncomingPassword"] = "outgoing_password" not in entry
         if "outgoing_password" in entry:
             s["OutgoingPassword"] = entry["outgoing_password"]
         if "smime" in entry:
@@ -565,39 +720,35 @@ class MailAccountType(AccountType):
 class CalDAVAccountType(AccountType):
     apple_type = "com.apple.caldav.account"
     required = ("description", "host", "username", "password")
+    fields = (
+        ("description", "CalDAVAccountDescription", None),
+        ("host", "CalDAVHostName", None),
+        ("password", "CalDAVPassword", None),
+        ("port", "CalDAVPort", 8443),
+        ("principal_url", "CalDAVPrincipalURL", ""),
+        ("use_ssl", "CalDAVUseSSL", True),
+        ("username", "CalDAVUsername", None),
+    )
 
     def display_name(self, entry):
         return f"Calendar ({entry['description']})"
-
-    def settings(self, entry, identity_uuids, context):
-        return {
-            "CalDAVAccountDescription": entry["description"],
-            "CalDAVHostName": entry["host"],
-            "CalDAVPassword": entry["password"],
-            "CalDAVPort": entry.get("port", 8443),
-            "CalDAVPrincipalURL": entry.get("principal_url", ""),
-            "CalDAVUseSSL": entry.get("use_ssl", True),
-            "CalDAVUsername": entry["username"],
-        }
 
 
 class CardDAVAccountType(AccountType):
     apple_type = "com.apple.carddav.account"
     required = ("description", "host", "username", "password")
+    fields = (
+        ("description", "CardDAVAccountDescription", None),
+        ("host", "CardDAVHostName", None),
+        ("password", "CardDAVPassword", None),
+        ("port", "CardDAVPort", 8843),
+        ("principal_url", "CardDAVPrincipalURL", ""),
+        ("use_ssl", "CardDAVUseSSL", True),
+        ("username", "CardDAVUsername", None),
+    )
 
     def display_name(self, entry):
         return "Contacts"
-
-    def settings(self, entry, identity_uuids, context):
-        return {
-            "CardDAVAccountDescription": entry["description"],
-            "CardDAVHostName": entry["host"],
-            "CardDAVPassword": entry["password"],
-            "CardDAVPort": entry.get("port", 8843),
-            "CardDAVPrincipalURL": entry.get("principal_url", ""),
-            "CardDAVUseSSL": entry.get("use_ssl", True),
-            "CardDAVUsername": entry["username"],
-        }
 
 
 ACCOUNT_TYPES = {
@@ -686,7 +837,7 @@ def build_profile(cfg, cert_dirs, identity_payloads=()):
         for key in ("id", "type"):
             if key not in entry:
                 die(f"payload entry missing required '{key}': {entry}")
-        pid, ptype = entry["id"], entry["type"]
+        pid, ptype = entry["id"], TYPE_ALIASES.get(entry["type"], entry["type"])
         settings = entry.get("settings") or {}
         bad = [k for k in settings if k.startswith("Payload")]
         if bad:
@@ -1126,6 +1277,7 @@ def build(args):
         cfg["payloads"] = merge_payloads(account_entries, cfg.get("payloads", []))
 
     cfg["payloads"] = render_deep(resolve_included_payloads(cfg, ypath, {ypath.resolve()}))
+    cfg["payloads"] = embed_data_deep(cfg["payloads"])  # {"file": ...} / {"base64": ...} -> bytes
 
     cert_dirs = [under_root(d) for d in cfg.get("cert_dirs", [])]
     if cfg.get("certificates") and not cert_dirs:
@@ -1133,6 +1285,7 @@ def build(args):
 
     print(f"PKI_ROOT = {PKI_ROOT}\nBuilding {ypath.name}:")
     profile = build_profile(cfg, cert_dirs, identity_payloads)
+    check_plistable(profile)
     validate_profile(profile)
 
     unsigned_dir, signed_dir = output_dirs()

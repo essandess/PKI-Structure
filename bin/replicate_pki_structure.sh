@@ -6,13 +6,19 @@
 # create_organization_smime_pki.sh or mdm-private/yaml/myorganization-trust.yaml;
 # seeds them from the baseline template.
 #
+# By default, nothing already present in DEST is ever overwritten by the
+# generic .sh/.py/.cnf/.md copy step (rsync --ignore-existing), so re-running
+# this script against a deployment you've since edited is safe. Pass
+# -ow/--overwrite to allow overwriting; you will be asked to confirm first
+# (set PKI_ASSUME_YES=1 to skip that prompt).
+#
 # mdm-private/ holds YAML and .mobileconfig files that contain secrets. It is never
 # copied from the source tree (only the .sample seeds the YAML). What this script creates
 # there is 0700 for directories and 0600 for files (ownership is left as the invoking user).
 # Anything already in mdm-private/ is only audited: loose permissions produce a warning and
 # a prompt to fix. The source tree's mdm-private/ is audited the same way.
 #
-# Usage: replicate_pki_structure.sh [DEST]
+# Usage: replicate_pki_structure.sh [-ow|--overwrite] [-h|--help] [DEST]
 
 set -euo pipefail
 
@@ -60,6 +66,44 @@ audit_private() {
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_STRUCTURE_SRC="${PKI_STRUCTURE_SRC:-$(cd "${SCRIPT_DIR}/.." && pwd)/}"
 SRC="${PKI_STRUCTURE_SRC}"
+
+# -- argument parsing, same style as pki_structure.sh -----------------------
+OVERWRITE=0
+HELP=0
+POSITIONAL_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+	-ow|--overwrite)
+	    OVERWRITE=1
+	    shift
+	    ;;
+	-h|--help)
+	    HELP=1
+	    shift
+	    ;;
+	*)
+	    POSITIONAL_ARGS+=("$1")
+	    shift
+	    ;;
+    esac
+done
+set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+
+if [ "${HELP}" != "0" ]; then
+    cat <<USEAGE
+Useage:
+
+$(basename "$0") [-ow|--overwrite] [-h|--help] [DEST]
+
+DEST defaults to the current directory. Without -ow/--overwrite, files
+already present in DEST are never replaced (rsync --ignore-existing).
+With -ow/--overwrite, you will be asked to confirm before anything is
+replaced; set PKI_ASSUME_YES=1 to skip that prompt.
+USEAGE
+    exit 0
+fi
+
 DEST="${1:-.}"
 
 mkdir -p "${DEST}"
@@ -67,23 +111,54 @@ mkdir -p "${DEST}"
 # The source's private directory supplies the seed YAML, so check it first.
 audit_private "${SRC}${MDM_PRIVATE}" "SOURCE"
 
+RSYNC_EXCLUDE_INCLUDE=(
+    --exclude='.git/'
+    --exclude='*.env'
+    --exclude='*.conf'
+    --exclude='*.yaml'
+    --exclude='create_organization_smime_pki.sh'
+    --exclude='create_organization_mdm.sh'
+    --include='*/'
+    --include='*.sh'
+    --include='*.py'
+    --include='*.cnf'
+    --include='*.md'
+    --include="etc/*.sample"
+    --include="${MDM_PRIVATE_YAML}/*.sample"
+    --include='LICENSE'
+    --exclude='*'
+)
+
+RSYNC_OVERWRITE_FLAGS=(--ignore-existing)
+
+if [ "${OVERWRITE}" == "1" ]; then
+    # Show what -ow would actually replace before asking.
+    CHANGES="$(rsync -am --dry-run --itemize-changes \
+        "${RSYNC_EXCLUDE_INCLUDE[@]}" \
+        "${SRC}" "${DEST}/")"
+    if [ -n "${CHANGES}" ]; then
+        echo >&2
+        echo "WARNING: --overwrite will replace these existing files under '${DEST}' with the source's versions:" >&2
+        echo "${CHANGES}" | sed 's/^/  /' >&2
+    else
+        echo "Nothing under '${DEST}' would actually be changed by --overwrite." >&2
+    fi
+
+    if [ "${PKI_ASSUME_YES:-0}" == "0" ]; then
+        echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
+        read -p "Overwrite existing files in '${DEST}' with the source's versions? [y/N] " -r < /dev/tty
+        echo    # (optional) move to a new line
+        if [[ ! "${REPLY}" =~ ^[y]$ ]]; then
+            echo "Aborted." >&2
+            exit 1
+        fi
+    fi
+    RSYNC_OVERWRITE_FLAGS=()
+fi
+
 # exclude/include to avoid any hint of overwriting exisiting personalized files
-rsync -am \
-    --exclude='.git/' \
-    --exclude='*.env' \
-    --exclude='*.conf' \
-    --exclude='*.yaml' \
-    --exclude='create_organization_smime_pki.sh' \
-    --exclude='create_organization_mdm.sh' \
-    --include='*/' \
-    --include='*.sh' \
-    --include='*.py' \
-    --include='*.cnf' \
-    --include='*.md' \
-    --include="etc/*.sample" \
-    --include="${MDM_PRIVATE_YAML}/*.sample" \
-    --include='LICENSE' \
-    --exclude='*' \
+rsync -am "${RSYNC_OVERWRITE_FLAGS[@]}" \
+    "${RSYNC_EXCLUDE_INCLUDE[@]}" \
     "${SRC}" "${DEST}/"
 
 # A new private directory is created closed (0700) before anything goes in it.

@@ -89,6 +89,7 @@ fi
 for PERSONALIZED in \
     pki_identity.env \
     bin/create_organization_smime_pki.sh \
+    bin/create_organization_mdm.sh \
     "${MDM_PRIVATE_YAML}/ios-restrictions-baseline.yaml" \
     "${MDM_PRIVATE_YAML}/myorganization-settings.yaml" \
     "${MDM_PRIVATE_YAML}/myorganization-trust.yaml" \

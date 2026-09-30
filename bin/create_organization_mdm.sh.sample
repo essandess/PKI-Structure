@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+# create_organization_mdm.sh
+
+set -e
+set -E
+set -o pipefail
+trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}" || exit
+
+# MDM creation
+
+# MyOrganization Trust and Settings
+bin/configurate_yaml.py mdm-private/yaml/myorganization-trust.yaml
+bin/configurate_yaml.py mdm-private/yaml/myorganization-settings.yaml
+
+# Person A
+bin/configurate_yaml.py mdm-private/yaml/persona-settings.yaml

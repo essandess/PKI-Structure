@@ -31,14 +31,14 @@ bin/replicate_pki_structure.sh [DEST]
 `DEST` defaults to the current directory. `PKI_STRUCTURE_SRC` (trailing
 `/` required) overrides the source, which defaults to this repository.
 Copied: `.sh`, `.py`, `.cnf`, `.md`, and `LICENSE` files.
-Never copied: `.git/`, `*.env`, `bin/create_organization_smime_pki.sh`
+Never copied: `.git/`, `*.env`, `bin/create_organization_smime.sh`
 (this deployment's cert-issuance list), and `mdm-private/`.
 
 Seeded when absent at `DEST`, from `<file>.sample` or from the source file
 if no sample exists. Existing files are never modified:
 
 - `pki_identity.env`
-- `bin/create_organization_smime_pki.sh`
+- `bin/create_organization_smime.sh`
 - `mdm-private/yaml/myorganization-trust.yaml`
 
 Edit `pki_identity.env` with the deployment's organization, domain
@@ -230,7 +230,7 @@ bin/create_smime.sh user@example.org user_example
 
 Issue the full list of identities defined for this deployment:
 ```sh
-PKI_ASSUME_YES=1 bin/create_organization_smime_pki.sh
+PKI_ASSUME_YES=1 bin/create_organization_smime.sh
 ```
 
 ### Privoxy and adblock2privoxy

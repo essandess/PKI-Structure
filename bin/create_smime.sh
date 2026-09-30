@@ -98,7 +98,7 @@ cd "${PKI_ROOT}" || exit
 if [ "$#" -ne 2 ]; then
     echo "Error: expected 2 arguments (EMAIL CERTNAME), got $#." >&2
     echo "Usage: $(basename "$0") [-a|--algorithm EC|RSA] [-c|--clean|-vc|--veryclean] EMAIL CERTNAME" >&2
-    echo "To reissue all S/MIME certificates, run ./create_organization_smime_pki.sh; existing ones are archived under their SHA1." >&2
+    echo "To reissue all S/MIME certificates, run ./create_organization_smime.sh; existing ones are archived under their SHA1." >&2
     exit 1
 fi
 EMAIL="$1"

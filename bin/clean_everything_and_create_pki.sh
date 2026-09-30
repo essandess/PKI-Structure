@@ -51,7 +51,7 @@ bin/create_privoxy.sh -vc ; bin/create_adblock2privoxy.sh -vc
 
 # Create PKI chain of trust all at once
 bin/create_privoxy.sh && bin/create_adblock2privoxy.sh
-bin/create_root.sh && bin/create_intermediate.sh && bin/create_server.sh && bin/create_codesign.sh && bin/create_organization_smime_pki.sh
+bin/create_root.sh && bin/create_intermediate.sh && bin/create_server.sh && bin/create_codesign.sh && bin/create_organization_smime.sh
 
 # Single S/MIME certificate creation
 bin/create_smime.sh userc@organization.org userc_organization

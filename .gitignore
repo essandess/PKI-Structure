@@ -7,7 +7,7 @@
 # --- Deployment-specific files (seeded from their *.sample) -----------------
 pki_identity.env
 *.env
-bin/create_organization_smime_pki.sh
+bin/create_organization_smime.sh
 
 # --- MDM: private data ------------------------------------------------------
 # Only the *.sample templates and the generic baseline are tracked.

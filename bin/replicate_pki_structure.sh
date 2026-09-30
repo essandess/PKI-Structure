@@ -3,7 +3,7 @@
 #
 # Copies PKI-Structure's scripts and openssl configs to a new deployment
 # directory. Never overwrites an existing pki_identity.env,
-# create_organization_smime_pki.sh or mdm-private/yaml/myorganization-trust.yaml;
+# create_organization_smime.sh or mdm-private/yaml/myorganization-trust.yaml;
 # seeds them from the baseline template.
 #
 # By default, nothing already present in DEST is ever overwritten by the
@@ -116,7 +116,7 @@ RSYNC_EXCLUDE_INCLUDE=(
     --exclude='*.env'
     --exclude='*.conf'
     --exclude='*.yaml'
-    --exclude='create_organization_smime_pki.sh'
+    --exclude='create_organization_smime.sh'
     --exclude='create_organization_mdm.sh'
     --include='*/'
     --include='*.sh'
@@ -171,7 +171,7 @@ fi
 for PERSONALIZED in \
     pki_identity.env \
     bin/create_organization_mdm.sh \
-    bin/create_organization_smime_pki.sh \
+    bin/create_organization_smime.sh \
     "${MDM_PRIVATE_YAML}/ios-restrictions-baseline.yaml" \
     ; do
     BASELINE="${SRC}${PERSONALIZED}.sample"

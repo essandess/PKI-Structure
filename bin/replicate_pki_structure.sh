@@ -80,6 +80,7 @@ rsync -am \
     --include='*.py' \
     --include='*.cnf' \
     --include='*.md' \
+    --include="etc/*.sample" \
     --include="${MDM_PRIVATE_YAML}/*.sample" \
     --include='LICENSE' \
     --exclude='*' \

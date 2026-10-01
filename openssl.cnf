@@ -178,7 +178,6 @@ localityName                    = $ENV::ORG_LOCALITY
 organizationName                = $ENV::ORG_NAME
 organizationalUnitName          = $ENV::ORG_NAME Certification Authority
 commonName                      = $ENV::ORG_NAME Root CA
-emailAddress                    = $ENV::ORG_EMAIL
 
 # Optionally, specify some defaults.
 countryName_default             = $ENV::ORG_COUNTRY
@@ -187,7 +186,6 @@ localityName_default            = $ENV::ORG_LOCALITY
 organizationName_default        = $ENV::ORG_NAME
 organizationalUnitName_default  = $ENV::ORG_NAME Certification Authority
 commonName_default              = $ENV::ORG_NAME Root CA
-emailAddress_default            = $ENV::ORG_EMAIL
 
 [ v3_ca ]
 # Extensions for a typical CA (`man x509v3_config`).

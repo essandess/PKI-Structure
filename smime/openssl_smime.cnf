@@ -77,7 +77,7 @@ commonName = $ENV::ORG_NAME S/MIME
 commonName_default = $ENV::ORG_NAME S/MIME
 commonName_max = 64
 emailAddress = $ENV::ORG_EMAIL
-emailAddress_max = 40
+emailAddress_max = 254
 
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).

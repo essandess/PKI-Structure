@@ -70,7 +70,6 @@ localityName                    = $ENV::ORG_LOCALITY
 organizationName                = $ENV::ORG_NAME
 organizationalUnitName          = $ENV::ORG_NAME Server Certificate
 commonName                      = $ENV::SERVER_FQDN
-emailAddress                    = $ENV::ORG_EMAIL
 
 # Optionally, specify some defaults.
 countryName_default             = $ENV::ORG_COUNTRY
@@ -79,7 +78,6 @@ localityName_default            = $ENV::ORG_LOCALITY
 organizationName_default        = $ENV::ORG_NAME
 organizationalUnitName_default  = $ENV::ORG_NAME Server Certificate
 commonName_default              = $ENV::SERVER_FQDN
-emailAddress_default            = $ENV::ORG_EMAIL
 
 [ server_cert ]
 # Extensions for server certificates (`man x509v3_config`).

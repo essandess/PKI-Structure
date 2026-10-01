@@ -31,7 +31,7 @@ audit_private() {
     local dir="$1" label="$2" loose symlinks answer
     [ -d "${dir}" ] || return 0
 
-    loose="$(find "${dir}" \( -type d ! -perm 0700 \) -o \( -type f ! -perm 0600 \) \
+    loose="$(find "${dir}" \( -type d ! -perm 0700 \) -o \( -type f ! -perm 0600 ! -name '*.sample' \) \
                            2>/dev/null | { xargs -I{} ls -ld {} 2>/dev/null || true; })"
     [ -n "${loose}" ] || return 0
 

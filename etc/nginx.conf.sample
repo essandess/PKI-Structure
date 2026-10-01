@@ -1,5 +1,7 @@
 worker_processes  auto;
 
+user _www _www;
+
 events {
     worker_connections  1024;
 }
@@ -58,13 +60,13 @@ http {
         access_log   @PREFIX@/var/log/nginx/pki_myorganization_org-access.log vhost;
         error_log    @PREFIX@/var/log/nginx/pki_myorganization_org-error.log;
 
-        # only GET/HEAD - static file drop, nothing else
-        limit_except GET HEAD {
-            deny all;
-        }
-
         # only serve the specific revocation/cert file types
         location / {
+            # only GET/HEAD - static file drop, nothing else
+            limit_except GET HEAD {
+            deny all;
+            }
+
             location ~* \.(crl|pem|crt|cer)$ {
                 try_files $uri =404;
             }

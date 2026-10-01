@@ -42,8 +42,8 @@ default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-# 6 years, half of CA
-default_days      = 2191
+# 10 years, half of CA
+default_days      = 3653
 preserve          = no
 policy            = policy_loose
 

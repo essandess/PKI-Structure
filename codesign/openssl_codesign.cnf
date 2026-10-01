@@ -42,8 +42,8 @@ default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-# 6 years, same as intermediate cert
-default_days      = 2191
+# 5 years plus leap day, half of intermediate cert
+default_days      = 1826
 preserve          = no
 policy            = policy_loose
 

@@ -149,8 +149,8 @@ default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-# 12 years (plus leap days)
-default_days      = 4383
+# 20 years (plus leap days)
+default_days      = 7305
 preserve          = no
 # set to policy_loose if state name/abbreviation mismatch on existing CA
 policy            = policy_strict

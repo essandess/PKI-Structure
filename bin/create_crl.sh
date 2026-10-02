@@ -71,6 +71,7 @@ case "${CANAME}" in
 	;;
 esac
 
+. "${PKI_ROOT}/bin/define_openssl.sh"
 . "${PKI_ROOT}/pki_identity.env"
 
 PASSPHRASE="${CERTDIR}/private/passphrase.txt"

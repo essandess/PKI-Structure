@@ -13,28 +13,6 @@ trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[
 shopt -s nullglob
 shopt -s nocasematch
 
-# Resolve the openssl binary: honor a preset $OPENSSL, else use the first one on PATH.
-OPENSSL="${OPENSSL:-$(command -v openssl || true)}"
-
-if [ -z "${OPENSSL}" ] || [ ! -x "${OPENSSL}" ]; then
-    echo "Error: no usable openssl found (PATH=${PATH})." >&2
-    echo "       Install OpenSSL or set OPENSSL=/path/to/openssl." >&2
-    exit 1
-fi
-
-# Apple's LibreSSL /usr/bin/openssl doesn't support the '.include' directive
-OPENSSL_VERSION="$("${OPENSSL}" version 2>&1 || true)"
-case "${OPENSSL_VERSION}" in
-    LibreSSL*)
-        echo "Error: ${OPENSSL} is ${OPENSSL_VERSION}." >&2
-        echo "       openssl.cnf uses '.include', which LibreSSL does not support." >&2
-        echo "       Put a real OpenSSL ahead of it on PATH (e.g. \${prefix}/bin for MacPorts)," >&2
-        echo "       or set OPENSSL=/path/to/openssl. Current PATH: ${PATH}" >&2
-        exit 1
-        ;;
-esac
-export OPENSSL
-
 umask 077
 # Precaution to avoid overwriting/clearing an existing PKI structure
 if [ -z ${CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY+x} ] \
@@ -51,10 +29,12 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
 cd "${PKI_ROOT}" || exit
 
 . "${PKI_ROOT}/pki_identity.env"
 . "${SCRIPT_DIR}/pki_common.sh"
+. "${PKI_ROOT}/bin/define_openssl.sh"
 
 SHOW_CERT_TEXT=${SHOW_CERT_TEXT:-1}
 

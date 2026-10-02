@@ -26,7 +26,7 @@ pki_confirm() {
 }
 
 cert_sha1() {
-    openssl x509 -noout -fingerprint -sha1 -inform pem -in "$1" \
+    "${OPENSSL}" x509 -noout -fingerprint -sha1 -inform pem -in "$1" \
         | sed -e 's|^.*Fingerprint=||' -e 's|:||g' \
         | tr '[:upper:]' '[:lower:]'
 }
@@ -104,7 +104,7 @@ pki_revoke_matching_cn() {
 
         pki_confirm "An existing valid certificate with CommonName '${target_cn}' (serial ${serial}, in ${issuer_dir}) will be superseded and revoked."
         echo "Revoking superseded certificate: serial ${serial}, CN=${target_cn}, in ${issuer_dir}" >&2
-        openssl ca -config "${issuer_config}" \
+        "${OPENSSL}" ca -config "${issuer_config}" \
             -revoke "${newcert}" \
             -crl_reason superseded \
             -passin file:"${issuer_dir}"/private/passphrase.txt

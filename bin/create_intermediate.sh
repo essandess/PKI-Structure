@@ -53,12 +53,12 @@ DAYS=2191
 # Intermediate encrypted key
 case ${ALGORITHM} in
     EC)
-	openssl genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
+	"${OPENSSL}" genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 		-algorithm EC -pkeyopt ec_paramgen_curve:"${EC_PARAMGEN_CURVE}" -aes256 \
 		-pass file:"${CERTDIR}"/private/passphrase.txt
 	;;
     RSA)
-	openssl genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
+	"${OPENSSL}" genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 		-algorithm RSA -pkeyopt rsa_keygen_bits:"${RSA_KEYGEN_BITS}" -aes256 \
 		-pass file:"${CERTDIR}"/private/passphrase.txt
 	;;
@@ -68,7 +68,7 @@ case ${ALGORITHM} in
 esac
 
 # Intermediate CA CSR
-openssl req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
+"${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 	-new -"${HASH_DIGEST}" \
 	-key "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 	-passin file:"${CERTDIR}"/private/passphrase.txt \
@@ -76,7 +76,7 @@ openssl req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 
 # Intermediate CA certificate
 if \
-    openssl ca -config openssl.cnf \
+    "${OPENSSL}" ca -config openssl.cnf \
 	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
 	-extfile "${CERTDIR}"/openssl_"${CERTDIR}".cnf -extensions v3_intermediate_ca \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
@@ -84,7 +84,7 @@ if \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt -batch
 then
     REISSUED=1
-    NEW_SERIAL=$(openssl x509 -in "${CERTDIR}/certs/${CERTNAME}.cert.pem" -noout -serial | sed 's|^serial=||')
+    NEW_SERIAL=$("${OPENSSL}" x509 -in "${CERTDIR}/certs/${CERTNAME}.cert.pem" -noout -serial | sed 's|^serial=||')
     pki_revoke_matching_cn "${ISSUERCADIR}" openssl.cnf "${ORG_NAME} Intermediate CA" "${NEW_SERIAL}" root
     rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem
 else
@@ -106,36 +106,36 @@ fi
 
 # Intermediate CA chain openssl verification
 if [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem ]; then
-    openssl verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem \
+    "${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem \
 	"${CERTDIR}"/certs/"${CERTNAME}".chain.pem
 else
-    openssl verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
+    "${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
 	"${CERTDIR}"/certs/"${CERTNAME}".chain.pem
 fi
 
 # CA certificate openssl self-verification
 if [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem ]; then
-    openssl verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem \
+    "${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem \
 	"${CERTDIR}"/certs/"${CERTNAME}".cert.pem
 else
-    openssl verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
+    "${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
 	"${CERTDIR}"/certs/"${CERTNAME}".cert.pem
 fi
 
 # Convert to .cer and .p12 for storage
-openssl x509 -outform der -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
+"${OPENSSL}" x509 -outform der -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cer
 
 # N.b. passphrase.txt holds two independent secrets: line 1 (-passin)
 # unlocks the private key, line 2 (-passout) is the .p12 export password.
 # man openssl-passphrase-options
-openssl pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
+"${OPENSSL}" pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
 	-inkey "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-passin file:"${CERTDIR}"/private/passphrase.txt \
 	-passout file:"${CERTDIR}"/private/passphrase.txt
 # verify .p12 passphrase
-openssl pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
+"${OPENSSL}" pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
 	-passin "pass:$(sed -n 2p "${CERTDIR}"/private/passphrase.txt)"
 
 # Copy the new certificate to SHA1-named files. The un-suffixed files stay in

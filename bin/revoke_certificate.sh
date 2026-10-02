@@ -116,7 +116,7 @@ fi
 mkdir -p "${ISSUERCANAME}/crl"
 
 
-openssl ca \
+"${OPENSSL}" ca \
         -config "${CONFIG}" \
         -revoke "${CERTFILE}" \
         -crl_reason "${CRLREASON}" \

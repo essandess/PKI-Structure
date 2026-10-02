@@ -92,7 +92,7 @@ mkdir -p "${CERTDIR}/crl"
 
 CRLOUT="${CERTDIR}/crl/${CERTDIR}.crl.pem"
 
-openssl ca -config "${CONFIG}" \
+"${OPENSSL}" ca -config "${CONFIG}" \
 	-gencrl \
 	-passin file:"${PASSPHRASE}" \
 	-out "${CRLOUT}"
@@ -100,9 +100,9 @@ openssl ca -config "${CONFIG}" \
 # CRL DP fields reference this bare name (no .pem) - openssl ca -gencrl
 # has no -outform, so PEM->DER conversion is a separate step.
 CRLDER="${CERTDIR}/crl/${CERTDIR}.crl"
-openssl crl -in "${CRLOUT}" -outform DER -out "${CRLDER}.tmp" && mv -f "${CRLDER}.tmp" "${CRLDER}"
+"${OPENSSL}" crl -in "${CRLOUT}" -outform DER -out "${CRLDER}.tmp" && mv -f "${CRLDER}.tmp" "${CRLDER}"
 if [ "${SHOW_CRL_TEXT}" != "0" ]; then
-    openssl crl -noout -text -in "${CRLOUT}"
+    "${OPENSSL}" crl -noout -text -in "${CRLOUT}"
 fi
 
 echo "Wrote ${CRLOUT} and ${CRLDER}"

@@ -18,12 +18,12 @@ cd "${PKI_ROOT}" || exit
 # CA encrypted key
 case ${ALGORITHM} in
     EC)
-	openssl genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
+	"${OPENSSL}" genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 		-algorithm EC -pkeyopt ec_paramgen_curve:"${EC_PARAMGEN_CURVE}" -aes256 \
 		-pass file:"${CERTDIR}"/private/passphrase.txt
 	;;
     RSA)
-	openssl genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
+	"${OPENSSL}" genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 		-algorithm RSA -pkeyopt rsa_keygen_bits:"${RSA_KEYGEN_BITS}" -aes256 \
 		-pass file:"${CERTDIR}"/private/passphrase.txt
 	;;
@@ -33,7 +33,7 @@ case ${ALGORITHM} in
 esac
 
 # CA certificate
-openssl req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
+"${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 	-new -x509 -days "${DAYS}" -"${HASH_DIGEST}" \
 	-extensions v3_ca \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
@@ -41,24 +41,24 @@ openssl req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 	-passin file:"${CERTDIR}"/private/passphrase.txt -batch
 
 # CA certificate openssl self-verification
-openssl verify -CAfile "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
+"${OPENSSL}" verify -CAfile "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	"${CERTDIR}"/certs/"${CERTNAME}".cert.pem
 
 # cert text
 show_cert_text "${CERTDIR}"/certs/"${CERTNAME}".cert.pem
 
 # Convert to .cer and .p12 for storage
-openssl x509 -outform der -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
+"${OPENSSL}" x509 -outform der -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cer
 
 # N.b. passphrase.txt holds two independent secrets: line 1 (-passin)
 # unlocks the private key, line 2 (-passout) is the .p12 export password.
 # man openssl-passphrase-options
-openssl pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
+"${OPENSSL}" pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
 	-inkey "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-passin file:"${CERTDIR}"/private/passphrase.txt \
 	-passout file:"${CERTDIR}"/private/passphrase.txt
 # verify .p12 passphrase
-openssl pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
+"${OPENSSL}" pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
 	-passin "pass:$(sed -n 2p "${CERTDIR}"/private/passphrase.txt)"

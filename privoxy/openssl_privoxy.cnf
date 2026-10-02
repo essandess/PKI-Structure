@@ -75,6 +75,11 @@ organizationalUnitName_default = $ENV::ORG_NAME Privoxy
 commonName = $ENV::ORG_NAME Privoxy Root CA
 commonName_default = $ENV::ORG_NAME Privoxy Root CA
 commonName_max = 64
+# email deprecated, but private intercepting proxy has nor AIA
+emailAddress = $ENV::ORG_EMAIL
+emailAddress_default = $ENV::ORG_EMAIL
+emailAddress_max = 254
+
 
 [ v3_ca ]
 # Extensions for a typical CA (`man x509v3_config`).

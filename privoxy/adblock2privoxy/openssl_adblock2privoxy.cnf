@@ -71,6 +71,10 @@ organizationalUnitName_default = adblock2privoxy-nginx
 commonName = adblock2privoxy-nginx
 commonName_default = adblock2privoxy-nginx
 commonName_max = 64
+# email deprecated, but private intercepting proxy has nor AIA
+emailAddress = $ENV::ORG_EMAIL
+emailAddress_default = $ENV::ORG_EMAIL
+emailAddress_max = 254
 
 [ v3_ca ]
 # Extensions for a typical CA (`man x509v3_config`).

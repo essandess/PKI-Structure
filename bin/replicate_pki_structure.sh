@@ -63,7 +63,7 @@ audit_private() {
 
     while IFS= read -r -d '' p; do
         [ -L "${p}" ] && continue
-        [[ "${p}" == *.sample ]] && continue
+        [[ "${p}" == *.sample || "${p##*/}" == .turd_* ]] && continue
         want="$(pki_mode "${p#"${DEST}"/}")"
         have="$(stat -c %a "${p}" 2>/dev/null || stat -f %Lp "${p}")"
         if [ "${have}" != "${want}" ]; then
@@ -91,7 +91,7 @@ audit_private() {
                 exit 1
             fi
             while IFS= read -r -d '' p; do
-                [[ "${p}" == *.sample ]] && continue
+                [[ "${p}" == *.sample || "${p##*/}" == .turd_* ]] && continue
                 chmod "$(pki_mode "${p#"${DEST}"/}")" "${p}"
             done < <(find "${dir}" -print0)
             echo "Set expected permissions under ${dir}."

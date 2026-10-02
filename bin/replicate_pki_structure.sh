@@ -12,11 +12,14 @@
 # -ow/--overwrite to allow overwriting; you will be asked to confirm first
 # (set PKI_ASSUME_YES=1 to skip that prompt).
 #
-# mdm-private/ holds YAML and .mobileconfig files that contain secrets. It is never
-# copied from the source tree (only the .sample seeds the YAML). What this script creates
-# there is 0700 for directories and 0600 for files (ownership is left as the invoking user).
-# Anything already in mdm-private/ is only audited: loose permissions produce a warning and
-# a prompt to fix. The source tree's mdm-private/ is audited the same way.
+# Permissions on DEST follow pki_lockdown:
+#   - directories named *private* (and everything under them): dirs 0700
+#   - other directories: 0755
+#   - *.sh / *.py files: 0750
+#   - other files: 0600 under a private directory, 0640 elsewhere
+# Files and directories this script creates or replaces are set to these modes.
+# Anything already in DEST/mdm-private/ is only audited: deviations produce a
+# warning and a prompt to fix. The source tree's permissions are not examined.
 #
 # Usage: replicate_pki_structure.sh [-ow|--overwrite] [-h|--help] [DEST]
 
@@ -25,20 +28,54 @@ set -euo pipefail
 MDM_PRIVATE="mdm-private"
 MDM_PRIVATE_YAML="${MDM_PRIVATE}/yaml"
 
-# Warn about paths under $1 that are not 0700 (dirs) / 0600 (files), and
-# offer to fix them. $2 is a label for the messages. Nothing is changed unless the answer is y.
+# Print the octal mode pki_lockdown would give $1 (a path relative to DEST).
+# The path must exist (it is tested to see whether it is a directory).
+pki_mode() {
+    local rel="${1%/}" dirpart c
+    local private=0 parts=()
+
+    if [ -d "${DEST}/${rel}" ]; then
+        dirpart="${rel}"
+    else
+        dirpart="$(dirname "${rel}")"
+    fi
+    IFS=/ read -r -a parts <<< "${dirpart}"
+    for c in "${parts[@]}"; do
+        [[ "${c}" == *private* ]] && private=1
+    done
+
+    if [ -d "${DEST}/${rel}" ]; then
+        if [ "${private}" == "1" ]; then echo 700; else echo 755; fi
+    else
+        case "${rel}" in
+            *.sh|*.py) echo 750 ;;
+            *) if [ "${private}" == "1" ]; then echo 600; else echo 640; fi ;;
+        esac
+    fi
+}
+
+# Warn about paths under $1 whose mode differs from pki_mode, and offer to
+# fix them. Nothing is changed unless the answer is y.
 audit_private() {
-    local dir="$1" label="$2" loose symlinks answer
+    local dir="$1" p want have loose="" symlinks answer
+
     [ -d "${dir}" ] || return 0
 
-    loose="$(find "${dir}" \( -type d ! -perm 0700 \) -o \( -type f ! -perm 0600 ! -name '*.sample' \) \
-                           2>/dev/null | { xargs -I{} ls -ld {} 2>/dev/null || true; })"
+    while IFS= read -r -d '' p; do
+        [ -L "${p}" ] && continue
+        [[ "${p}" == *.sample ]] && continue
+        want="$(pki_mode "${p#"${DEST}"/}")"
+        have="$(stat -c %a "${p}" 2>/dev/null || stat -f %Lp "${p}")"
+        if [ "${have}" != "${want}" ]; then
+            loose+="${p} (is ${have}, want ${want})"$'\n'
+        fi
+    done < <(find "${dir}" -print0)
+
     [ -n "${loose}" ] || return 0
 
     echo >&2
-    echo "WARNING: these ${label} private paths under ${dir} may hold secrets but are not restricted" >&2
-    echo "         (want 0700 directories / 0600 files):" >&2
-    echo "${loose}" | sed 's/^/  /' >&2
+    echo "WARNING: these paths under ${dir} do not match the expected permissions:" >&2
+    printf '%s' "${loose}" | sed 's/^/  /' >&2
 
     if [ ! -t 0 ]; then
         echo "Not changed (no terminal to prompt on)." >&2
@@ -53,12 +90,14 @@ audit_private() {
                 echo "${symlinks}" >&2
                 exit 1
             fi
-            find "${dir}" -type d -exec chmod 0700 {} +
-            find "${dir}" -type f -exec chmod 0600 {} +
-            echo "Set 0700 on directories and 0600 on files under ${dir}."
+            while IFS= read -r -d '' p; do
+                [[ "${p}" == *.sample ]] && continue
+                chmod "$(pki_mode "${p#"${DEST}"/}")" "${p}"
+            done < <(find "${dir}" -print0)
+            echo "Set expected permissions under ${dir}."
             ;;
         *)
-            echo "WARNING: continuing with loose permissions on ${dir}." >&2
+            echo "WARNING: continuing with unexpected permissions on ${dir}." >&2
             ;;
     esac
 }
@@ -107,9 +146,7 @@ fi
 DEST="${1:-.}"
 
 mkdir -p "${DEST}"
-
-# The source's private directory supplies the seed YAML, so check it first.
-audit_private "${SRC}${MDM_PRIVATE}" "SOURCE"
+DEST="$(cd "${DEST}" && pwd)"
 
 RSYNC_EXCLUDE_INCLUDE=(
     --exclude='.git/'
@@ -157,9 +194,18 @@ if [ "${OVERWRITE}" == "1" ]; then
 fi
 
 # exclude/include to avoid any hint of overwriting exisiting personalized files
-rsync -am "${RSYNC_OVERWRITE_FLAGS[@]}" \
+TRANSFERRED="$(rsync -am --out-format='%n' "${RSYNC_OVERWRITE_FLAGS[@]}" \
     "${RSYNC_EXCLUDE_INCLUDE[@]}" \
-    "${SRC}" "${DEST}/"
+    "${SRC}" "${DEST}/")"
+
+# rsync -a carries over the source's modes; set what was created/replaced to
+# the pki_lockdown modes instead.
+while IFS= read -r REL; do
+    REL="${REL%/}"
+    case "${REL}" in ""|"."|*.sample) continue ;; esac
+    [ -L "${DEST}/${REL}" ] && continue
+    chmod "$(pki_mode "${REL}")" "${DEST}/${REL}"
+done <<< "${TRANSFERRED}"
 
 # A new private directory is created closed (0700) before anything goes in it.
 if [ ! -e "${DEST}/${MDM_PRIVATE}" ]; then
@@ -181,22 +227,23 @@ for PERSONALIZED in \
         echo "Existing ${DEST}/${PERSONALIZED} left untouched."
     elif [ -f "${BASELINE}" ]; then
         if [[ "${PERSONALIZED}" == "${MDM_PRIVATE}/"* ]]; then
-            # private file: created closed, 0600
+            # private subdirectory: created closed (0700)
             PRIVATE_SUBDIR="$(dirname "${DEST}/${PERSONALIZED}")"
             [ -d "${PRIVATE_SUBDIR}" ] || ( umask 077; mkdir -p "${PRIVATE_SUBDIR}" )
             ( umask 077; cp "${BASELINE}" "${DEST}/${PERSONALIZED}" )
-            chmod 0600 "${DEST}/${PERSONALIZED}"
         else
-            mkdir -p "$(dirname "${DEST}/${PERSONALIZED}")"; cp -p "${BASELINE}" "${DEST}/${PERSONALIZED}"
+            mkdir -p "$(dirname "${DEST}/${PERSONALIZED}")"
+            cp "${BASELINE}" "${DEST}/${PERSONALIZED}"
         fi
+        chmod "$(pki_mode "${PERSONALIZED}")" "${DEST}/${PERSONALIZED}"
         echo "Seeded ${DEST}/${PERSONALIZED} from $(basename "${BASELINE}") - edit it for this deployment."
     else
         echo "Warning: no baseline ${PERSONALIZED} found in '${SRC}'; none created in '${DEST}'." >&2
     fi
 done
 
-# Audit everything under the destination's mdm-private/ (new and pre-existing), unless it is
-# the same directory as the source (already audited above).
-if [ "$(cd "${SRC}" && pwd -P)" != "$(cd "${DEST}" && pwd -P)" ]; then
-    audit_private "${DEST}/${MDM_PRIVATE}" "DESTINATION"
+# Audit everything under the destination's mdm-private/ (new and pre-existing),
+# unless DEST is the source itself (whose permissions are not our business).
+if [ "$(cd "${SRC}" && pwd -P)" != "${DEST}" ] && [ "$(cd "${SRC}" && pwd -P)" != "$(cd "${DEST}" && pwd -P)" ]; then
+    audit_private "${DEST}/${MDM_PRIVATE}"
 fi

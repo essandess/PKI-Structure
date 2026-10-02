@@ -1,17 +1,14 @@
 # ios-restrictions-baseline.yaml
 #
 # Optional baseline for the Restrictions payload
-# (com.apple.applicationaccess). Include from a profile YAML with
-# `include:`. Contains no secrets.
+# (com.apple.applicationaccess). Include from a profile YAML
+# with `include:`. Contains no secrets.
 #
-# Values match Apple's documented defaults (allow* true, force* false,
-# ratings, Safari), as emitted by Apple Configurator / Profile Manager.
-# Including this file pins them explicitly; omit `include:` to leave
-# them unset. Profile YAML settings override this file.
-#
-# Several keys are supervised-only, deprecated, or ignored on current
-# iOS (e.g. allowChat, allowEnablingRestrictions, allowHostPairing).
-# Pruning them is safe.
+# Values match Apple's documented defaults (allow* true,
+# force* false, ratings, Safari) for restrictions available
+# on unsupervised, MDM-enrolled devices. Including this file
+# pins them explicitly; omit `include:` to leave them unset.
+# Profile YAML settings override this file.
 #
 # Keys are Apple's names, passed through unchanged.
 
@@ -20,105 +17,45 @@ payloads:
     type: com.apple.applicationaccess
     settings:
       # allow* (default true)
-      allowAccountModification: true
       allowActivityContinuation: true
-      allowAddingGameCenterFriends: true
-      allowAirDrop: true
-      allowAirPrint: true
-      allowAirPrintCredentialsStorage: true
-      allowAirPrintiBeaconDiscovery: true
-      allowAppCellularDataModification: true
       allowAppInstallation: true
-      allowAppRemoval: true
       allowAssistant: true
-      allowAssistantUserGeneratedContent: true
       allowAssistantWhileLocked: true
-      allowAutoCorrection: true
-      allowAutomaticAppDownloads: true
-      allowBluetoothModification: true
-      allowBookstore: true
       allowBookstoreErotica: true
       allowCamera: true
-      allowCellularPlanModification: true
-      allowChat: true
       allowCloudBackup: true
-      allowCloudDocumentSync: true
       allowCloudKeychainSync: true
       allowCloudPhotoLibrary: true
-      allowDefinitionLookup: true
-      allowDeviceNameModification: true
-      allowDictation: true
-      allowESIMModification: true
-      allowEnablingRestrictions: true
       allowEnterpriseAppTrust: true
       allowEnterpriseBookBackup: true
       allowEnterpriseBookMetadataSync: true
-      allowEraseContentAndSettings: true
-      allowExplicitContent: true
-      allowFindMyFriendsModification: true
       allowFingerprintForUnlock: true
-      allowFingerprintModification: true
-      allowGameCenter: true
       allowGlobalBackgroundFetchWhenRoaming: true
-      allowHostPairing: true
       allowInAppPurchases: true
-      allowKeyboardShortcuts: true
       allowLockScreenControlCenter: true
       allowLockScreenNotificationsView: true
       allowLockScreenTodayView: true
       allowManagedAppsCloudSync: true
-      allowMultiplayerGaming: true
-      allowMusicService: true
-      allowNews: true
-      allowNotificationsModification: true
       allowOTAPKIUpdates: true
       allowOpenFromManagedToUnmanaged: true
       allowOpenFromUnmanagedToManaged: true
-      allowPairedWatch: true
       allowPassbookWhileLocked: true
-      allowPasscodeModification: true
-      allowPasswordAutoFill: true
-      allowPasswordProximityRequests: true
-      allowPasswordSharing: true
-      allowPersonalHotspotModification: true
       allowPhotoStream: true
-      allowPodcasts: true
-      allowPredictiveKeyboard: true
-      allowProximitySetupToNewDevice: true
-      allowRadioService: true
       allowRemoteScreenObservation: true
-      allowSafari: true
       allowScreenShot: true
       allowSharedStream: true
-      allowSpellCheck: true
-      allowSpotlightInternetResults: true
-      allowSystemAppRemoval: true
-      allowUIAppInstallation: true
-      allowUIConfigurationProfileInstallation: true
       allowUSBRestrictedMode: true
       allowUntrustedTLSPrompt: true
-      allowVPNCreation: true
       allowVideoConferencing: true
       allowVoiceDialing: true
-      allowWallpaperModification: true
-      allowiTunes: true
 
       # force* (default false)
       forceAirDropUnmanaged: false
       forceAirPlayOutgoingRequestsPairingPassword: false
-      forceAirPrintTrustedTLSRequirement: false
-      forceAssistantProfanityFilter: false
-      forceAuthenticationBeforeAutoFill: false
-      forceAutomaticDateAndTime: false
-      forceClassroomAutomaticallyJoinClasses: false
-      forceClassroomRequestPermissionToLeaveClasses: false
-      forceClassroomUnpromptedAppAndDeviceLock: false
-      forceClassroomUnpromptedScreenObservation: false
       forceDelayedSoftwareUpdates: false
       forceEncryptedBackup: false
       forceITunesStorePasswordEntry: false
       forceUnpromptedManagedClassroomScreenObservation: false
-      forceWiFiWhitelisting: false
 
       # content ratings and Safari
       ratingApps: 1000
@@ -126,7 +63,6 @@ payloads:
       ratingRegion: us
       ratingTVShows: 1000
       safariAcceptCookies: 2
-      safariAllowAutoFill: true
       safariAllowJavaScript: true
       safariAllowPopups: true
       safariForceFraudWarning: false

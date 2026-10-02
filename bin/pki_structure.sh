@@ -13,6 +13,28 @@ trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[
 shopt -s nullglob
 shopt -s nocasematch
 
+# Resolve the openssl binary: honor a preset $OPENSSL, else use the first one on PATH.
+OPENSSL="${OPENSSL:-$(command -v openssl || true)}"
+
+if [ -z "${OPENSSL}" ] || [ ! -x "${OPENSSL}" ]; then
+    echo "Error: no usable openssl found (PATH=${PATH})." >&2
+    echo "       Install OpenSSL or set OPENSSL=/path/to/openssl." >&2
+    exit 1
+fi
+
+# Apple's LibreSSL /usr/bin/openssl doesn't support the '.include' directive
+OPENSSL_VERSION="$("${OPENSSL}" version 2>&1 || true)"
+case "${OPENSSL_VERSION}" in
+    LibreSSL*)
+        echo "Error: ${OPENSSL} is ${OPENSSL_VERSION}." >&2
+        echo "       openssl.cnf uses '.include', which LibreSSL does not support." >&2
+        echo "       Put a real OpenSSL ahead of it on PATH (e.g. \${prefix}/bin for MacPorts)," >&2
+        echo "       or set OPENSSL=/path/to/openssl. Current PATH: ${PATH}" >&2
+        exit 1
+        ;;
+esac
+export OPENSSL
+
 umask 077
 # Precaution to avoid overwriting/clearing an existing PKI structure
 if [ -z ${CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY+x} ] \
@@ -38,7 +60,7 @@ SHOW_CERT_TEXT=${SHOW_CERT_TEXT:-1}
 
 show_cert_text() {
     if [ "${SHOW_CERT_TEXT}" != "0" ]; then
-        openssl x509 -noout -text -certopt ca_default -nameopt ca_default -in "$1"
+        "${OPENSSL}" x509 -noout -text -certopt ca_default -nameopt ca_default -in "$1"
     fi
 }
 
@@ -268,7 +290,7 @@ for f in "${CERTDIR}"/private/passphrase.txt; do
                     idx=$(( idx + 1 ))
                 done
             else
-                newpassphrase=$(openssl rand -base64 20 | cut -c 1-24)
+                newpassphrase=$("${OPENSSL}" rand -base64 20 | cut -c 1-24)
             fi
             echo "${newpassphrase:-$passphrase}"
         }

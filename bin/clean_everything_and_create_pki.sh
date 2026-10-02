@@ -94,9 +94,6 @@ if [ "${CREATE_PKI}" == "1" ]; then
     # Create PKI chain of trust all at once
     bin/create_privoxy.sh && bin/create_adblock2privoxy.sh
     bin/create_root.sh && bin/create_intermediate.sh && bin/create_server.sh && bin/create_codesign.sh && bin/create_organization_smime.sh
-
-    # Single S/MIME certificate creation
-    bin/create_smime.sh userc@organization.org userc_organization
 else
     echo "Clean complete. PKI not recreated (use --create-pki to regenerate)."
 fi

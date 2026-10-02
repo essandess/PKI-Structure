@@ -4,9 +4,13 @@
 # (com.apple.applicationaccess). Include from a profile YAML
 # with `include:`. Contains no secrets.
 #
-# Values match Apple's documented defaults (allow* true,
-# force* false, ratings, Safari) for restrictions available
-# on unsupervised, MDM-enrolled devices. Including this file
+# Scope: keys that are current (not deprecated) and work on
+# unsupervised, MDM-enrolled devices, per Apple's
+# device-management key reference and Apple Configurator
+# 2.20. Supervised-only and deprecated keys are excluded;
+# Apple Configurator still lists several of them.
+#
+# Values are Apple's documented defaults. Including this file
 # pins them explicitly; omit `include:` to leave them unset.
 # Profile YAML settings override this file.
 #
@@ -17,21 +21,13 @@ payloads:
     type: com.apple.applicationaccess
     settings:
       # allow* (default true)
-      allowActivityContinuation: true
-      allowAppInstallation: true
-      allowAssistant: true
-      allowAssistantWhileLocked: true
-      allowBookstoreErotica: true
-      allowCamera: true
-      allowCloudBackup: true
-      allowCloudKeychainSync: true
-      allowCloudPhotoLibrary: true
+      allowAutoDim: true
+      allowDefaultBrowserModification: true
+      allowDefaultCallingAppModification: true
+      allowDefaultMessagingAppModification: true
       allowEnterpriseAppTrust: true
       allowEnterpriseBookBackup: true
       allowEnterpriseBookMetadataSync: true
-      allowFingerprintForUnlock: true
-      allowGlobalBackgroundFetchWhenRoaming: true
-      allowInAppPurchases: true
       allowLockScreenControlCenter: true
       allowLockScreenNotificationsView: true
       allowLockScreenTodayView: true
@@ -40,29 +36,21 @@ payloads:
       allowOpenFromManagedToUnmanaged: true
       allowOpenFromUnmanagedToManaged: true
       allowPassbookWhileLocked: true
-      allowPhotoStream: true
       allowRemoteScreenObservation: true
+      allowSatelliteConnection: true
       allowScreenShot: true
-      allowSharedStream: true
       allowUSBRestrictedMode: true
       allowUntrustedTLSPrompt: true
-      allowVideoConferencing: true
-      allowVoiceDialing: true
+      allowWebDistributionAppInstallation: true
+      allowiPhoneMirroring: true
 
       # force* (default false)
       forceAirDropUnmanaged: false
       forceAirPlayOutgoingRequestsPairingPassword: false
-      forceDelayedSoftwareUpdates: false
       forceEncryptedBackup: false
-      forceITunesStorePasswordEntry: false
-      forceUnpromptedManagedClassroomScreenObservation: false
 
       # content ratings and Safari
       ratingApps: 1000
-      ratingMovies: 1000
       ratingRegion: us
-      ratingTVShows: 1000
-      safariAcceptCookies: 2
       safariAllowJavaScript: true
-      safariAllowPopups: true
       safariForceFraudWarning: false

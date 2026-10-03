@@ -36,6 +36,8 @@ cd "${PKI_ROOT}" || exit
 . "${SCRIPT_DIR}/pki_common.sh"
 . "${PKI_ROOT}/bin/define_openssl.sh"
 
+: "${OPENSSL:?OPENSSL is not set by bin/define_openssl.sh}"
+
 SHOW_CERT_TEXT=${SHOW_CERT_TEXT:-1}
 
 show_cert_text() {

@@ -74,6 +74,8 @@ esac
 . "${PKI_ROOT}/bin/define_openssl.sh"
 . "${PKI_ROOT}/pki_identity.env"
 
+: "${OPENSSL:?OPENSSL is not set by bin/define_openssl.sh}"
+
 PASSPHRASE="${CERTDIR}/private/passphrase.txt"
 if [ ! -f "${PASSPHRASE}" ]; then
     echo "Passphrase file '${PASSPHRASE}' doesn't exist." >&2

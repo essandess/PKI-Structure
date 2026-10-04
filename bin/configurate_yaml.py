@@ -113,7 +113,11 @@ cert):
   'V' in the issuer's index.txt, and verifies against every CRL in
   PKI_ROOT/*/crl/, even when allow_expired_encryption lets an
   expired encryption certificate through. See build_identities /
-  SMIME_ISSUERCADIR below.
+  SMIME_ISSUERCADIR below. The "-signature"/"-encryption" suffix
+  only says where to look; each certificate's own KeyUsage extension
+  is checked against the role implied by that suffix, so a
+  mislabeled or swapped file is rejected rather than silently
+  embedded under the wrong role. See keyusage_roles.
 
 A 'type:' in 'payloads:' or 'accounts:' may be a short name from
 TYPE_ALIASES (e.g. 'airprint') instead of the full Apple PayloadType
@@ -688,6 +692,25 @@ def load_pkcs12(path: Path, password: str) -> x509.Certificate:
     return cert
 
 
+def keyusage_roles(cert: x509.Certificate) -> set[str] | None:
+    """Return the S/MIME role(s) this certificate's KeyUsage
+    extension actually supports: a subset of {"signing",
+    "encryption"}, or None if the certificate carries no KeyUsage
+    extension at all (nothing to check against). "signing" requires
+    digitalSignature or nonRepudiation; "encryption" requires
+    keyEncipherment (RSA) or keyAgreement (ECDH)."""
+    try:
+        ku = cert.extensions.get_extension_for_class(x509.KeyUsage).value
+    except x509.ExtensionNotFound:
+        return None
+    roles: set[str] = set()
+    if ku.digital_signature or ku.content_commitment:
+        roles.add("signing")
+    if ku.key_encipherment or ku.key_agreement:
+        roles.add("encryption")
+    return roles
+
+
 def normalize_identity_entry(raw: Any) -> dict[str, Any]:
     """A 'identities:' entry is either a plain name, or a mapping
     with 'name:' plus optional 'identity_passphrase_file:' (its own
@@ -787,6 +810,20 @@ def build_identities(
                 path = resolve_file(f"{name}-{suffix}.p12", identity_dirs)
                 data = path.read_bytes()
                 cert = load_pkcs12(path, password)
+
+                # The file name only says where to look; the
+                # certificate's own KeyUsage extension says what
+                # it's actually for. Catch a role/content mismatch
+                # (wrong file renamed, swapped at issuance, etc.)
+                # rather than silently embedding it under the wrong
+                # label.
+                supported_roles = keyusage_roles(cert)
+                if supported_roles is not None and role not in supported_roles:
+                    die(f"identity '{name}' ({role}) {path.name}: "
+                        f"certificate's KeyUsage does not support "
+                        f"{role} (supports: "
+                        f"{sorted(supported_roles) or 'nothing'}) -- "
+                        f"wrong certificate for this role?")
 
                 pem_path = Path(td) / f"{path.stem}.pem"
                 pem_path.write_bytes(

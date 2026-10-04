@@ -79,6 +79,11 @@ cd "${PKI_ROOT}" || exit
 . "${SCRIPT_DIR}/pki_common.sh"
 . "${PKI_ROOT}/bin/define_openssl.sh"
 
+for fn in cert_sha1 cert_smime_role cert_is_ca; do
+    declare -F "${fn}" >/dev/null \
+        || { echo "Error: ${fn} is not defined by bin/pki_common.sh (append pki_common_additions.sh to it)." >&2; exit 1; }
+done
+
 OUTDIR=credentials
 ROOT_CERT=root/certs/root.cert.pem
 ROOT_P12=root/private/root.p12
@@ -266,12 +271,6 @@ cert_enddate_epoch() {
     date_epoch "$(cert_enddate "$1")"
 }
 
-# True if the certificate's keyUsage allows signing.
-cert_can_sign() {
-    "${OPENSSL}" x509 -noout -ext keyUsage -in "$1" 2>/dev/null \
-        | grep -Eqi 'Digital Signature|Non Repudiation|Content Commitment'
-}
-
 # verify_error OUTPUT: the first "error N at D depth lookup: ..." message
 verify_error() {
     local e
@@ -304,7 +303,9 @@ collect_anchors() {
     for tree in "${SM_DIRS[@]}"; do
         r="${tree}/root/certs/root.cert.pem"
         [ -f "${r}" ] || continue
-        if "${OPENSSL}" verify -CAfile "${r}" "${r}" >/dev/null 2>&1; then
+        if ! cert_is_ca "${r}"; then
+            warn "ignoring root certificate ${r}: not a CA certificate (basicConstraints)"
+        elif "${OPENSSL}" verify -CAfile "${r}" "${r}" >/dev/null 2>&1; then
             cat "${r}" >> "${ANCHORS}"
             ANCHOR_COUNT=$((ANCHOR_COUNT + 1))
         else
@@ -466,7 +467,9 @@ crl_revocation_reason() {
     done
 }
 
-# validate_smime_cert CERT EXT -> 0 accepted, 1 rejected; sets CERT_STATE.
+# validate_smime_cert CERT ROLE -> 0 accepted, 1 rejected; sets CERT_STATE.
+# ROLE (signature or encryption) comes from cert_smime_role, i.e. from the
+# certificate's own properties, not from its file name.
 # The certificate must verify against the root through a valid intermediate,
 # with the CRLs of the whole chain checked. Only an S/MIME ENCRYPTION
 # certificate may deviate, because its key is still needed to decrypt old
@@ -474,9 +477,14 @@ crl_revocation_reason() {
 # create_smime.sh sets when it reissues a certificate). A signature
 # certificate never may.
 validate_smime_cert() {
-    local f="$1" ext="$2" out err out2 err2 reason expired=0
+    local f="$1" role="$2" out err out2 err2 reason expired=0
 
     CERT_STATE="valid"
+    if [ "${role}" != signature ] && [ "${role}" != encryption ]; then
+        warn "rejecting ${f}: neither an S/MIME signature nor an encryption certificate (keyUsage/extendedKeyUsage)"
+        return 1
+    fi
+
     if out=$(verify_chain "${f}"); then
         return 0
     fi
@@ -485,16 +493,12 @@ validate_smime_cert() {
         expired=1
     fi
 
-    if [ "${ext}" != encryption ]; then
+    if [ "${role}" = signature ]; then
         if [ "${expired}" = 1 ]; then
             warn "rejecting ${f}: expired signature certificate"
         else
             warn "rejecting ${f}: ${err}"
         fi
-        return 1
-    fi
-    if cert_can_sign "${f}"; then
-        warn "rejecting ${f}: encryption certificate whose keyUsage allows signing"
         return 1
     fi
 
@@ -546,6 +550,36 @@ p12_password_line() {
         fi
     done
     return 1
+}
+
+# p12_check_content P12 PASSPHRASE_FILE LINE CERT: succeeds if the .p12 holds
+# CERT (same certificate, read from inside the .p12) and the private key that
+# belongs to it. On failure prints the reason and returns 1.
+p12_check_content() {
+    local p12="$1" pf="$2" line="$3" cert="$4" pw tmp="${STAGE}/p12check.pem" ck pk
+
+    pw=$(sed -n "${line}p" "${pf}")
+    if ! PKI_TMP_PW="${pw}" "${OPENSSL}" pkcs12 -legacy -in "${p12}" -clcerts -nokeys \
+            -passin env:PKI_TMP_PW -out "${tmp}" 2>/dev/null; then
+        echo "cannot read the certificate inside it"
+        return 1
+    fi
+    if ! grep -q 'BEGIN CERTIFICATE' "${tmp}"; then
+        echo "it holds no certificate paired with a private key"
+        return 1
+    fi
+    if [ "$(cert_sha1 "${tmp}")" != "$(cert_sha1 "${cert}")" ]; then
+        echo "it holds a different certificate than ${cert}"
+        return 1
+    fi
+
+    ck=$("${OPENSSL}" x509 -noout -pubkey -in "${tmp}")
+    pk=$(PKI_TMP_PW="${pw}" "${OPENSSL}" pkcs12 -legacy -in "${p12}" -nocerts -nodes \
+             -passin env:PKI_TMP_PW 2>/dev/null | "${OPENSSL}" pkey -pubout 2>/dev/null) || true
+    if [ -z "${pk}" ] || [ "${pk}" != "${ck}" ]; then
+        echo "its private key does not belong to its certificate"
+        return 1
+    fi
 }
 
 # note_group_password GROUP PASSPHRASE_FILE LINE: remember where a password
@@ -603,7 +637,11 @@ stage_ca_dir() {
         esac
         seen="${seen}${sha1} "
 
-        # a self-signed CA: valid if it verifies against itself (checks expiry)
+        # a self-signed CA: must say CA:TRUE and verify against itself (checks expiry)
+        if ! cert_is_ca "${f}"; then
+            warn "skipping ${f}: not a CA certificate (basicConstraints)"
+            continue
+        fi
         if ! "${OPENSSL}" verify -CAfile "${f}" "${f}" >/dev/null 2>&1; then
             warn "skipping ${f}: does not verify (expired?)"
             continue
@@ -654,9 +692,30 @@ build_common() {
     done
 }
 
+# check_ca_p12 GROUP P12 PASSPHRASE_FILE CERT
+check_ca_p12() {
+    local group="$1" p12="$2" pf="$3" cert="$4" line rc=0 why
+
+    line=$(p12_password_line "${p12}" "${pf}") || rc=$?
+    case "${rc}" in
+        0)
+            why=$(p12_check_content "${p12}" "${pf}" "${line}" "${cert}") \
+                || die "'${p12}': ${why}."
+            note_group_password "${group}" "${pf}" "${line}"
+            ;;
+        1)
+            die "'${p12}' does not open with either of the first two lines of ${pf}."
+            ;;
+        *)
+            warn "${pf} not found: cannot check the password, certificate and key of ${p12}"
+            note_group_password "${group}" "${pf}" ""
+            ;;
+    esac
+}
+
 # --ca-only: only root.p12 and the valid intermediate's .p12. Both must exist.
 build_ca_only() {
-    local base int_p12 line rc pair group rest
+    local base int_p12
 
     mkdir -p "${STAGE}/common/${CA_DOMAIN}"
     : > "${MANIFEST}"
@@ -672,21 +731,10 @@ build_ca_only() {
     [ -f "${int_p12}" ] || die "'${int_p12}' not found."
 
 
-    # each .p12 must open with the passphrase.txt next to it
-    for pair in "root:${ROOT_P12}:root/private/passphrase.txt" "intermediate:${int_p12}:intermediate/private/passphrase.txt"; do
-        group=${pair%%:*}
-        rest=${pair#*:}
-        rc=0
-        line=$(p12_password_line "${rest%%:*}" "${rest#*:}") || rc=$?
-        case "${rc}" in
-            0) note_group_password "${group}" "${rest#*:}" "${line}" ;;
-            1) die "'${rest%%:*}' does not open with either of the first two lines of ${rest#*:}." ;;
-            *)
-                warn "${rest#*:} not found: cannot check the password of ${rest%%:*}"
-                note_group_password "${group}" "${rest#*:}" ""
-                ;;
-        esac
-    done
+    # each .p12 must open with the passphrase.txt next to it and hold the
+    # certificate (and its key) that is being installed
+    check_ca_p12 root "${ROOT_P12}" root/private/passphrase.txt "${ROOT_CERT}"
+    check_ca_p12 intermediate "${int_p12}" intermediate/private/passphrase.txt "${INTERMEDIATE_PEM}"
 
     stage_ca_cert root root "${ROOT_CERT}" "root (trusted)" 1 "${ROOT_P12}"
     stage_ca_cert ca intermediate "${INTERMEDIATE_PEM}" "${INTERMEDIATE_PEM%.cert.pem}" 1 "${int_p12}"
@@ -761,7 +809,7 @@ installer_name() {
 # build_payload_dir -> ${STAGE}/payload: the staged system items plus the
 # S/MIME .p12 files of SEL_CERTNAMES from every source; sets SMIME_COUNT
 build_payload_dir() {
-    local dir="${STAGE}/payload" i sd group src f b certname ext sha1 p12 pf line rc state seen=" " count=0 rejected=0
+    local dir="${STAGE}/payload" i sd group src f b certname ext role why sha1 p12 pf line rc state seen=" " count=0 rejected=0
 
     rm -rf "${dir}"
     mkdir -p "${dir}/smime"
@@ -798,33 +846,47 @@ build_payload_dir() {
             esac
             seen="${seen}${sha1} "
 
-            # must verify against the root through a valid intermediate, CRLs checked
-            if ! validate_smime_cert "${f}" "${ext}"; then
-                rejected=$((rejected + 1))
-                continue
-            fi
-            state="${CERT_STATE}"
-
             # the .p12 must open with the passphrase.txt of the tree it came from
+            # and hold this certificate together with its private key
             pf="${sd}/smime/private/passphrase.txt"
             rc=0
             line=$(p12_password_line "${p12}" "${pf}") || rc=$?
             case "${rc}" in
-                0) note_group_password "${group}" "${pf}" "${line}" ;;
+                0)
+                    if ! why=$(p12_check_content "${p12}" "${pf}" "${line}" "${f}"); then
+                        warn "skipping ${p12}: ${why}"
+                        rejected=$((rejected + 1))
+                        continue
+                    fi
+                    note_group_password "${group}" "${pf}" "${line}"
+                    ;;
                 1)
                     warn "skipping ${p12}: it does not open with either of the first two lines of ${pf}"
                     rejected=$((rejected + 1))
                     continue
                     ;;
                 *)
-                    warn "${pf} not found: cannot check the password of ${p12}"
+                    warn "${pf} not found: cannot check the password, certificate and key of ${p12}"
                     note_group_password "${group}" "${pf}" ""
                     ;;
             esac
 
+            # what the certificate itself says it is, not what its file is called
+            role=$(cert_smime_role "${f}")
+            if [ "${role}" != "${ext}" ]; then
+                warn "${f}: named -${ext}, but its keyUsage/extendedKeyUsage give it the role '${role}'; using '${role}'"
+            fi
+
+            # must verify against the root through a valid intermediate, CRLs checked
+            if ! validate_smime_cert "${f}" "${role}"; then
+                rejected=$((rejected + 1))
+                continue
+            fi
+            state="${CERT_STATE}"
+
             cp "${p12}" "${dir}/smime/${sha1}.p12"
             printf 'smime\t%s\t%s\t1\t%s\n' "${group}" "${sha1}" \
-                   "${certname} ${ext}, ${state}, until $(cert_enddate "${f}")${src}" >> "${dir}/manifest"
+                   "${certname} ${role}, ${state}, until $(cert_enddate "${f}")${src}" >> "${dir}/manifest"
             count=$((count + 1))
         done
     done

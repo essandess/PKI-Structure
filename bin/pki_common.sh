@@ -115,3 +115,39 @@ pki_revoke_matching_cn() {
         "${PKI_ROOT}"/bin/create_crl.sh "${crl_caname}"
     fi
 }
+
+# ---------------------------------------------------------------------
+# Certificate properties (what a certificate says it is, whatever its file
+# is called). Both need OpenSSL >= 1.1.1 for `x509 -ext`.
+# ---------------------------------------------------------------------
+
+# cert_smime_role CERT: print the S/MIME role the certificate itself declares,
+# from its keyUsage and extendedKeyUsage:
+#   signature   can sign (digitalSignature or nonRepudiation/contentCommitment),
+#               or has no keyUsage restriction at all. A dual-use certificate
+#               counts as signature, the stricter role.
+#   encryption  can encrypt (keyEncipherment, dataEncipherment or keyAgreement)
+#               and cannot sign.
+#   other       anything else, or an extendedKeyUsage without emailProtection.
+cert_smime_role() {
+    local text ku eku
+
+    text=$("${OPENSSL}" x509 -noout -ext keyUsage,extendedKeyUsage -in "$1" 2>/dev/null) || true
+    ku=$(printf '%s\n' "${text}" | awk '/^X509v3 Key Usage:/ {m=1; next} /^X509v3 Extended Key Usage:/ {m=2; next} m==1 {print}')
+    eku=$(printf '%s\n' "${text}" | awk '/^X509v3 Key Usage:/ {m=1; next} /^X509v3 Extended Key Usage:/ {m=2; next} m==2 {print}')
+
+    if [ -n "${eku}" ] && ! printf '%s\n' "${eku}" | grep -Eqi 'E-mail Protection|Any Extended Key Usage'; then
+        echo other
+    elif [ -z "${ku}" ] || printf '%s\n' "${ku}" | grep -Eqi 'Digital Signature|Non Repudiation|Content Commitment'; then
+        echo signature
+    elif printf '%s\n' "${ku}" | grep -Eqi 'Key Encipherment|Data Encipherment|Key Agreement'; then
+        echo encryption
+    else
+        echo other
+    fi
+}
+
+# cert_is_ca CERT: true if basicConstraints says CA:TRUE.
+cert_is_ca() {
+    "${OPENSSL}" x509 -noout -ext basicConstraints -in "$1" 2>/dev/null | grep -q 'CA:TRUE'
+}

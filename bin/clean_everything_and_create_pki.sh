@@ -83,9 +83,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}" || exit
 
-# Set the variable CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY
-export CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1
-
 # Clear everything
 bin/create_root.sh -vc ; bin/create_intermediate.sh -vc ; bin/create_server.sh -vc ; bin/create_codesign.sh -vc ; bin/create_smime.sh -vc
 bin/create_privoxy.sh -vc ; bin/create_adblock2privoxy.sh -vc
@@ -97,6 +94,3 @@ if [ "${CREATE_PKI}" == "1" ]; then
 else
     echo "Clean complete. PKI not recreated (use --create-pki to regenerate)."
 fi
-
-# Unset the variable CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY
-unset CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY

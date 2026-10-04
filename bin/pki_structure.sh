@@ -59,8 +59,8 @@ ISSUERCANAME=${ISSUERCANAME:-root}
 #     ./"create_${ISSUERCANAME}.sh"
 # fi
 
-# 12 years (plus leap days)
-DAYS=${DAYS:-4383}
+# 20 years (plus leap days)
+DAYS=${DAYS:-7305}
 
 ALGORITHM=${ALGORITHM:-EC}
 # https://soatok.blog/2022/05/19/guidance-for-choosing-an-elliptic-curve-signature-algorithm-in-2022/

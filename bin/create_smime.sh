@@ -12,8 +12,10 @@
 # the same CommonName (EMAIL - signature / EMAIL - encryption) is
 # revoked as superseded once the replacement is confirmed issued.
 
-# 3 years and a month
-DAYS=1126
+# https://support.apple.com/en-us/HT210176
+# Technically longer acceptable for noncommercial S/MIME, 
+# but not not recommended or guaranteed to be accepted
+DAYS=825
 
 CATRUE=${CATRUE:-0}
 CERTDIR=${CERTDIR:-smime}

@@ -14,6 +14,9 @@ CERTNAME=${CERTNAME:-intermediate}
 ISSUERCADIR=${ISSUERCADIR:-root}
 ISSUERCANAME=${ISSUERCANAME:-root}
 
+# 10 years (plus leap days, half of root)
+DAYS=3653
+
 ALGORITHM=${ALGORITHM:-EC}
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-384}
 RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-3072}
@@ -46,9 +49,6 @@ if [ "${ARCHIVE}" = "1" ] \
 fi
 
 . "${SCRIPT_DIR}/pki_structure.sh"
-
-# 6 years, half of CA
-DAYS=2191
 
 # Intermediate encrypted key
 case ${ALGORITHM} in

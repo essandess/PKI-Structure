@@ -79,11 +79,6 @@ cd "${PKI_ROOT}" || exit
 . "${SCRIPT_DIR}/pki_common.sh"
 . "${PKI_ROOT}/bin/define_openssl.sh"
 
-for fn in cert_sha1 cert_smime_role cert_is_ca; do
-    declare -F "${fn}" >/dev/null \
-        || { echo "Error: ${fn} is not defined by bin/pki_common.sh (append pki_common_additions.sh to it)." >&2; exit 1; }
-done
-
 OUTDIR=credentials
 ROOT_CERT=root/certs/root.cert.pem
 ROOT_P12=root/private/root.p12
@@ -269,6 +264,58 @@ date_epoch() {
 
 cert_enddate_epoch() {
     date_epoch "$(cert_enddate "$1")"
+}
+
+# cert_cn CERT: the common name, reduced to characters that are safe in a
+# file name
+cert_cn() {
+    local cn
+
+    cn=$("${OPENSSL}" x509 -noout -subject -nameopt multiline,utf8 -in "$1" | sed -n 's/^ *commonName *= //p' | head -n 1)
+    cn=$(printf '%s' "${cn}" | tr -c 'A-Za-z0-9 ._@+=,()-' '_' | sed -e 's/  */ /g' -e 's/^[ ._-]*//' -e 's/ *$//' | cut -c1-80)
+    printf '%s' "${cn:-certificate}"
+}
+
+# cert_expiry_date CERT: notAfter as YYYY-MM-DD (UTC)
+cert_expiry_date() {
+    local epoch
+
+    epoch=$(cert_enddate_epoch "$1")
+    date -u -d "@${epoch}" +%Y-%m-%d 2>/dev/null || date -u -r "${epoch}" +%Y-%m-%d
+}
+
+# cert_file_name CERT: "<common name> :: <expiry date> :: <last six of sha1>",
+# the name (without extension) of a certificate's files in the payload. The
+# installer reads the name and the expiry back out of it for its prompts.
+cert_file_name() {
+    local sha1
+
+    sha1=$(cert_sha1 "$1")
+    printf '%s :: %s :: %s' "$(cert_cn "$1")" "$(cert_expiry_date "$1")" "${sha1: -6}"
+}
+
+# parse_name NAME: split a file name made by cert_file_name into CN, EXPIRY, ID
+parse_name() {
+    local rest
+
+    CN="${1%% :: *}"
+    rest="${1#* :: }"
+    EXPIRY="${rest%% :: *}"
+    ID="${rest#* :: }"
+}
+
+# describe NAME [NOTE]: 'CN' (expires DATE, id ID) [NOTE]
+describe() {
+    local when=expires
+
+    parse_name "$1"
+    if [[ "${EXPIRY}" < "$(date +%Y-%m-%d)" ]]; then
+        when=EXPIRED
+    fi
+    printf "'%s' (%s %s, id %s)" "${CN}" "${when}" "${EXPIRY}" "${ID}"
+    if [ -n "${2:-}" ]; then
+        printf ' [%s]' "$2"
+    fi
 }
 
 # verify_error OUTPUT: the first "error N at D depth lookup: ..." message
@@ -601,25 +648,29 @@ note_group_password() {
 
 MANIFEST="${STAGE}/common/manifest"
 
-# stage_ca_cert TYPE GROUP PEM LABEL HASKEY P12
+# stage_ca_cert TYPE GROUP PEM HASKEY P12
 # TYPE is root or ca. The files go to ${CA_DOMAIN}/ in the payload (system/
-# or user/). The DER certificate is always staged (the root is trusted from
-# it); the .p12 only when HASKEY is 1.
+# or user/), named by cert_file_name. The DER certificate is always staged
+# (the root is trusted from it); the .p12 only when HASKEY is 1.
 stage_ca_cert() {
-    local type="$1" group="$2" pem="$3" label="$4" haskey="$5" p12="$6" sha1
+    local type="$1" group="$2" pem="$3" haskey="$4" p12="$5" name sha1
 
+    name=$(cert_file_name "${pem}")
     sha1=$(cert_sha1 "${pem}")
-    "${OPENSSL}" x509 -outform der -in "${pem}" -out "${STAGE}/common/${CA_DOMAIN}/${sha1}.cer"
+    [ ! -e "${STAGE}/common/${CA_DOMAIN}/${name}.cer" ] \
+        || die "payload file name '${name}' is used twice (the same certificate, or a clash of the last six sha1 digits)."
+
+    "${OPENSSL}" x509 -outform der -in "${pem}" -out "${STAGE}/common/${CA_DOMAIN}/${name}.cer"
     if [ "${haskey}" = 1 ]; then
-        cp "${p12}" "${STAGE}/common/${CA_DOMAIN}/${sha1}.p12"
+        cp "${p12}" "${STAGE}/common/${CA_DOMAIN}/${name}.p12"
     fi
-    printf '%s\t%s\t%s\t%s\t%s\n' "${CA_DOMAIN}-${type}" "${group}" "${sha1}" "${haskey}" "${label}" >> "${MANIFEST}"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${CA_DOMAIN}-${type}" "${group}" "${sha1}" "${haskey}" "${name}" "" >> "${MANIFEST}"
 }
 
 # stage_ca_dir DIR: stage every unexpired certificate in DIR/certs as a
 # public CA certificate (its private key is never included).
 stage_ca_dir() {
-    local d="$1" f b sha1 seen=" " found=0
+    local d="$1" f sha1 seen=" " found=0
     local files=("${d}"/certs/*.cert.pem)
 
     if [ "${#files[@]}" -eq 0 ]; then
@@ -628,9 +679,6 @@ stage_ca_dir() {
     fi
 
     for f in "${files[@]}"; do
-        b=${f##*/}
-        b=${b%.cert.pem}
-
         sha1=$(cert_sha1 "${f}")
         case "${seen}" in
             *" ${sha1} "*) continue ;;
@@ -647,7 +695,7 @@ stage_ca_dir() {
             continue
         fi
 
-        stage_ca_cert ca "${d}" "${f}" "${d}/${b}" 0 ""
+        stage_ca_cert ca "${d}" "${f}" 0 ""
         found=1
     done
 
@@ -666,7 +714,7 @@ build_common() {
 
     if [ -f "${ROOT_CERT}" ]; then
         verify_root
-        stage_ca_cert root root "${ROOT_CERT}" "root (trusted)" 0 ""
+        stage_ca_cert root root "${ROOT_CERT}" 0 ""
         have_root=1
     else
         echo "Note: the root CA (${ROOT_CERT}) does not exist; it will not be included in the payload." >&2
@@ -684,7 +732,7 @@ build_common() {
     else
         pick_main_intermediate
         echo "Using intermediate: ${INTERMEDIATE_PEM}" >&2
-        stage_ca_cert ca intermediate "${INTERMEDIATE_PEM}" "${INTERMEDIATE_PEM%.cert.pem}" 0 ""
+        stage_ca_cert ca intermediate "${INTERMEDIATE_PEM}" 0 ""
     fi
 
     for d in ${PRIVOXY_DIRS}; do
@@ -736,8 +784,8 @@ build_ca_only() {
     check_ca_p12 root "${ROOT_P12}" root/private/passphrase.txt "${ROOT_CERT}"
     check_ca_p12 intermediate "${int_p12}" intermediate/private/passphrase.txt "${INTERMEDIATE_PEM}"
 
-    stage_ca_cert root root "${ROOT_CERT}" "root (trusted)" 1 "${ROOT_P12}"
-    stage_ca_cert ca intermediate "${INTERMEDIATE_PEM}" "${INTERMEDIATE_PEM%.cert.pem}" 1 "${int_p12}"
+    stage_ca_cert root root "${ROOT_CERT}" 1 "${ROOT_P12}"
+    stage_ca_cert ca intermediate "${INTERMEDIATE_PEM}" 1 "${int_p12}"
 }
 
 # S/MIME certificate names (the part before -signature/-encryption) found in
@@ -809,7 +857,7 @@ installer_name() {
 # build_payload_dir -> ${STAGE}/payload: the staged system items plus the
 # S/MIME .p12 files of SEL_CERTNAMES from every source; sets SMIME_COUNT
 build_payload_dir() {
-    local dir="${STAGE}/payload" i sd group src f b certname ext role why sha1 p12 pf line rc state seen=" " count=0 rejected=0
+    local dir="${STAGE}/payload" i sd group src f b certname ext role why sha1 name p12 pf line rc state seen=" " count=0 rejected=0
 
     rm -rf "${dir}"
     mkdir -p "${dir}/smime"
@@ -884,9 +932,12 @@ build_payload_dir() {
             fi
             state="${CERT_STATE}"
 
-            cp "${p12}" "${dir}/smime/${sha1}.p12"
-            printf 'smime\t%s\t%s\t1\t%s\n' "${group}" "${sha1}" \
-                   "${certname} ${role}, ${state}, until $(cert_enddate "${f}")${src}" >> "${dir}/manifest"
+            name=$(cert_file_name "${f}")
+            [ ! -e "${dir}/smime/${name}.p12" ] \
+                || die "payload file name '${name}' is used twice (a clash of the last six sha1 digits)."
+            cp "${p12}" "${dir}/smime/${name}.p12"
+            printf 'smime\t%s\t%s\t1\t%s\t%s\n' "${group}" "${sha1}" "${name}" \
+                   "${role}, ${state}${src}" >> "${dir}/manifest"
             count=$((count + 1))
         done
     done
@@ -895,34 +946,22 @@ build_payload_dir() {
     echo "${count} S/MIME certificate(s) selected, ${rejected} rejected" >&2
 }
 
-# show_payload OUT DIR: list the files that go into the tar payload
+# show_payload OUT DIR: list what goes into the tar payload
 show_payload() {
-    local out="$1" dir="$2" f stem kind label keys=0
+    local out="$1" dir="$2" type group sha1 haskey file note kind keys=0 items=0
 
     echo >&2
     echo "${out} will contain:" >&2
-    while IFS= read -r f; do
-        f=${f#./}
-        stem=${f##*/}
-        stem=${stem%.*}
-        label=$(awk -F'\t' -v s="${stem}" '$3 == s { print $1 ": " $5; exit }' "${dir}/manifest")
-
-        case "${f}" in
-            manifest)
-                kind="list"
-                label="items to install"
-                ;;
-            *.p12)
-                kind="PRIVATE KEY"
-                keys=$((keys + 1))
-                ;;
-            *)
-                kind="certificate"
-                ;;
-        esac
-        printf '  %-12s %s  [%s]\n' "${kind}" "${label}" "${f}" >&2
-    done < <(cd "${dir}" && find . -type f | sort)
-    echo "  ${keys} private key(s), password-protected; no passwords are included." >&2
+    while IFS=$'\t' read -r -u 3 type group sha1 haskey file note; do
+        kind="certificate"
+        if [ "${haskey}" = 1 ]; then
+            kind="PRIVATE KEY"
+            keys=$((keys + 1))
+        fi
+        items=$((items + 1))
+        printf '  %-12s %-11s %s\n' "${kind}" "${type}" "$(describe "${file}" "${note}")" >&2
+    done 3< "${dir}/manifest"
+    echo "  ${items} item(s), ${keys} private key(s), password-protected; no passwords are included." >&2
 }
 
 # write_installer LABEL DIR OUT TARNAME
@@ -973,6 +1012,7 @@ confirm() {
     local reply
 
     if [ "${PKI_ASSUME_YES:-0}" != "0" ]; then
+        printf '%s [y/N] y (PKI_ASSUME_YES)\n' "$1"
         return 0
     fi
     {
@@ -1113,11 +1153,38 @@ fail() {
 }
 
 
-list_items() {
-    local type group sha1 haskey label
+# parse_name NAME: split a payload file name without its extension,
+# "common name :: YYYY-MM-DD :: id", into CN, EXPIRY and ID
+parse_name() {
+    local rest
 
-    while IFS=$'\t' read -r -u 3 type group sha1 haskey label; do
-        echo "${type}: ${label} (SHA1 ${sha1})"
+    CN="${1%% :: *}"
+    rest="${1#* :: }"
+    EXPIRY="${rest%% :: *}"
+    ID="${rest#* :: }"
+}
+
+
+# describe NAME [NOTE]: 'CN' (expires DATE, id ID) [NOTE]
+describe() {
+    local when=expires
+
+    parse_name "$1"
+    if [[ "${EXPIRY}" < "$(date +%Y-%m-%d)" ]]; then
+        when=EXPIRED
+    fi
+    printf "'%s' (%s %s, id %s)" "${CN}" "${when}" "${EXPIRY}" "${ID}"
+    if [ -n "${2:-}" ]; then
+        printf ' [%s]' "$2"
+    fi
+}
+
+
+list_items() {
+    local type group sha1 haskey file note
+
+    while IFS=$'\t' read -r -u 3 type group sha1 haskey file note; do
+        echo "${type}: $(describe "${file}" "${note}")"
     done 3< "${MANIFEST}"
 }
 
@@ -1135,10 +1202,11 @@ ensure_sudo() {
 # install_keychain DOMAIN: "system" (System keychain, with sudo) or "user"
 # (login keychain, no sudo). The payload manifest lists the items; the type
 # system-root, system-ca, user-root, user-ca or smime tells which domain an
-# item belongs to.
+# item belongs to, and the file name carries the common name and expiry that
+# the prompts show.
 install_keychain() {
     local domain="$1" keychain heading where trustfor use_sudo
-    local type group sha1 haskey label kind dir file present withkey msg trusted
+    local type group sha1 haskey file note kind dir path desc present withkey msg trusted
     local imported=0
     local acl=()
 
@@ -1168,7 +1236,7 @@ install_keychain() {
 
     echo "== ${heading} =="
 
-    while IFS=$'\t' read -r -u 3 type group sha1 haskey label; do
+    while IFS=$'\t' read -r -u 3 type group sha1 haskey file note; do
         case "${type}" in
             "${domain}"-root) kind=root; dir="${domain}" ;;
             "${domain}"-ca) kind=ca; dir="${domain}" ;;
@@ -1178,12 +1246,12 @@ install_keychain() {
         if [ "${kind}" = smime ] && [ "${domain}" != user ]; then
             continue
         fi
-        echo "- ${type}: ${label}"
+        desc=$(describe "${file}" "${note}")
 
         if [ "${haskey}" = 1 ]; then
-            file="${WORK}/${dir}/${sha1}.p12"
+            path="${WORK}/${dir}/${file}.p12"
         else
-            file="${WORK}/${dir}/${sha1}.cer"
+            path="${WORK}/${dir}/${file}.cer"
         fi
 
         present=0
@@ -1193,7 +1261,7 @@ install_keychain() {
             present=1
         fi
         if [ "${present}" = 1 ] && [ "${kind}" != root ]; then
-            echo "    already present"
+            echo "- ${desc}: already present"
             continue
         fi
 
@@ -1202,11 +1270,17 @@ install_keychain() {
             withkey=" AND ITS PRIVATE KEY"
         fi
         case "${kind}" in
-            root) msg="Add the ROOT CA '${label}'${withkey} to ${where} and trust it ${trustfor}?" ;;
-            ca) msg="Add CA certificate '${label}'${withkey} to ${where}?" ;;
-            smime) msg="Add this S/MIME certificate and its private key to ${where}?" ;;
+            root)
+                if [ "${present}" = 1 ]; then
+                    msg="Trust the ROOT CA ${desc} ${trustfor} (already in ${where})?"
+                else
+                    msg="Add the ROOT CA ${desc}${withkey} to ${where} and trust it ${trustfor}?"
+                fi
+                ;;
+            ca) msg="Add CA certificate ${desc}${withkey} to ${where}?" ;;
+            smime) msg="Add S/MIME certificate ${desc} and its private key to ${where}?" ;;
         esac
-        if ! confirm "    ${msg}"; then
+        if ! confirm "- ${msg}"; then
             echo "    skipped"
             continue
         fi
@@ -1222,33 +1296,33 @@ install_keychain() {
                 continue
             fi
             if [ "${kind}" = smime ]; then
-                import_into_keychain "${use_sudo}" "${keychain}" "${file}" "${PASSWORD}" ${acl[@]+"${acl[@]}"} \
-                    || { fail "${label}"; continue; }
+                import_into_keychain "${use_sudo}" "${keychain}" "${path}" "${PASSWORD}" ${acl[@]+"${acl[@]}"} \
+                    || { fail "${desc}"; continue; }
             else
-                import_into_keychain "${use_sudo}" "${keychain}" "${file}" "${PASSWORD}" -A \
-                    || { fail "${label}"; continue; }
+                import_into_keychain "${use_sudo}" "${keychain}" "${path}" "${PASSWORD}" -A \
+                    || { fail "${desc}"; continue; }
             fi
             if [ "${kind}" = smime ]; then
                 imported=$((imported + 1))
             fi
         else
-            import_into_keychain "${use_sudo}" "${keychain}" "${file}" "" \
-                || { fail "${label}"; continue; }
+            import_into_keychain "${use_sudo}" "${keychain}" "${path}" "" \
+                || { fail "${desc}"; continue; }
         fi
 
         if [ "${kind}" = root ]; then
             trusted=0
             if [ "${use_sudo}" = 1 ]; then
-                if sudo security add-trusted-cert -d -r trustRoot -k "${keychain}" "${WORK}/${dir}/${sha1}.cer"; then
+                if sudo security add-trusted-cert -d -r trustRoot -k "${keychain}" "${WORK}/${dir}/${file}.cer"; then
                     trusted=1
                 fi
-            elif security add-trusted-cert -r trustRoot -k "${keychain}" "${WORK}/${dir}/${sha1}.cer"; then
+            elif security add-trusted-cert -r trustRoot -k "${keychain}" "${WORK}/${dir}/${file}.cer"; then
                 trusted=1
             fi
             if [ "${trusted}" = 1 ]; then
                 echo "    trusted as root"
             else
-                fail "trusting ${label}"
+                fail "trusting ${desc}"
             fi
         fi
     done 3< "${MANIFEST}"

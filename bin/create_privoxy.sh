@@ -2,6 +2,9 @@
 
 # create_privoxy.sh
 
+# 10 years (plus leap days, half of root)
+DAYS=3653
+
 CATRUE=${CATRUE:-1}
 CERTDIR=${CERTDIR:-privoxy}
 CERTNAME=${CERTNAME:-privoxy}

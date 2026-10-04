@@ -2,8 +2,10 @@
 
 # create_codesign.sh
 
-# 6 years, same as intermediate cert
-DAYS=2191
+# https://support.apple.com/en-us/HT210176
+# Technically longer acceptable for noncommercial S/MIME,
+# but not not recommended or guaranteed to be accepted
+DAYS=825
 
 CATRUE=${CATRUE:-0}
 CERTDIR=${CERTDIR:-codesign}

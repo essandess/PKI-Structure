@@ -42,8 +42,10 @@ default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-# 5 years plus leap day, half of intermediate cert
-default_days      = 1826
+# https://support.apple.com/en-us/HT210176
+# Technically longer acceptable for noncommercial S/MIME,
+# but not not recommended or guaranteed to be accepted
+default_days      = 825
 preserve          = no
 policy            = policy_loose
 

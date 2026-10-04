@@ -170,7 +170,7 @@ RSYNC_OVERWRITE_FLAGS=(--ignore-existing)
 
 if [ "${OVERWRITE}" == "1" ]; then
     # Show what -ow would actually replace before asking.
-    CHANGES="$(rsync -am --dry-run --itemize-changes \
+    CHANGES="$(rsync -rtm --dry-run --itemize-changes \
         "${RSYNC_EXCLUDE_INCLUDE[@]}" \
         "${SRC}" "${DEST}/")"
     if [ -n "${CHANGES}" ]; then
@@ -194,7 +194,7 @@ if [ "${OVERWRITE}" == "1" ]; then
 fi
 
 # exclude/include to avoid any hint of overwriting exisiting personalized files
-TRANSFERRED="$(rsync -am --out-format='%n' "${RSYNC_OVERWRITE_FLAGS[@]}" \
+TRANSFERRED="$(rsync -rtm --out-format='%n' "${RSYNC_OVERWRITE_FLAGS[@]}" \
     "${RSYNC_EXCLUDE_INCLUDE[@]}" \
     "${SRC}" "${DEST}/")"
 

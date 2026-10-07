@@ -3,7 +3,8 @@
 # Usage: revoke_certificate.sh certfile root|intermediate|privoxy [crlReason]
 #
 # Revokes a certificate for the named CA and stated reason,
-# and overwrites the CRL file.
+# overwrites the CRL file, and (root, intermediate) publishes the new CRL
+# with bin/publish_crls.sh when a web directory is configured there.
 
 set -e
 set -E
@@ -97,6 +98,9 @@ case "${CANAME}" in
 esac
 
 . "${PKI_ROOT}/pki_identity.env"
+. "${PKI_ROOT}/bin/define_openssl.sh"
+
+: "${OPENSSL:?OPENSSL is not set by bin/define_openssl.sh}"
 
 PASSPHRASE="${ISSUERCANAME}/private/passphrase.txt"
 if [ ! -f "${PASSPHRASE}" ]; then
@@ -123,5 +127,11 @@ mkdir -p "${ISSUERCANAME}/crl"
 	-passin file:"${PASSPHRASE}"
 
 bin/create_crl.sh "${CANAME}"
+
+# Publish the new CRL now: clients only learn of the revocation from the
+# published copy. (The privoxy CRL is not published anywhere.)
+if [ "${CANAME}" != "privoxy" ]; then
+    bin/publish_crls.sh --if-configured --no-regenerate "${CANAME}"
+fi
 
 echo "Revoked ${CERTFILE} for CA ${CANAME}"

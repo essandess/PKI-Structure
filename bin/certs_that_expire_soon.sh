@@ -50,9 +50,14 @@ USEAGE
     exit 0
 fi
 
+# Defines and exports OPENSSL; the find -exec children below need it.
+. "${PKI_ROOT}/bin/define_openssl.sh"
+
 EXPSECS=$(("${EXPMONTHS}" * (30 * 24 + 12) * 3600))
 find . -type f -path '*/certs/*.cert.pem' -exec bash -c '
-    if ! "${OPENSSL}" x509 -checkend "$1" -noout -in "$2" 1> /dev/null 2>&1; then
+    if ! "${OPENSSL}" x509 -noout -in "$2" 1> /dev/null 2>&1; then
+        echo "$2: cannot read certificate" >&2
+    elif ! "${OPENSSL}" x509 -checkend "$1" -noout -in "$2" 1> /dev/null 2>&1; then
         echo "$2 expires on $("${OPENSSL}" x509 -enddate -noout -in "$2")" | sed "s|notAfter=||"
     fi
 ' bash "${EXPSECS}" {} \;

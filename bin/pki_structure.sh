@@ -24,7 +24,7 @@ this script:
 
 export CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1
 CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY
-    exit 1    
+    exit 1
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -95,11 +95,6 @@ case ${RSA_KEYGEN_BITS} in
 	echo "Nonstandard RSA bits '${RSA_KEYGEN_BITS}'"
 	RSA_HASH_DIGEST=${RSA_HASH_DIGEST:-sha384}
 esac
-if [ "${ALGORITHM}" == "EC" ]; then
-	HASH_DIGEST=${HASH_DIGEST:-${EC_HASH_DIGEST}}
-elif [ "${ALGORITHM}" == "RSA" ]; then
-	HASH_DIGEST=${HASH_DIGEST:-${RSA_HASH_DIGEST}}
-fi
 
 VERYCLEAN=0
 CLEAN=0
@@ -112,11 +107,11 @@ POSITIONAL_ARGS=()
 while [[ $# -gt 0 ]]; do
     case $1 in
 	-a|--algorithm)
-	    ALGORITHM=$2
-	    if [[ ! "${ALGORITHM}" =~ ^EC|RSA$ ]]; then
-		echo "Unknown algorithm '${ALGORITHM}'"
+	    if [ $# -lt 2 ]; then
+		echo "Option '$1' needs an argument: EC or RSA." >&2
 		exit 1
 	    fi
+	    ALGORITHM=$2
 	    shift; shift
 	    ;;
 	-c|--clean)
@@ -140,6 +135,21 @@ while [[ $# -gt 0 ]]; do
 done
 
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
+
+# Normalize and check the algorithm (from -a or the environment), then choose
+# the digest. This must come after option parsing: -a changes the digest.
+ALGORITHM="${ALGORITHM^^}"
+case "${ALGORITHM}" in
+    EC)
+	HASH_DIGEST=${HASH_DIGEST:-${EC_HASH_DIGEST}}
+	;;
+    RSA)
+	HASH_DIGEST=${HASH_DIGEST:-${RSA_HASH_DIGEST}}
+	;;
+    *)
+	echo "Unknown algorithm '${ALGORITHM}' (expected EC or RSA)." >&2
+	exit 1
+esac
 
 if [ "${HELP}" != "0" ]; then
     cat <<USEAGE
@@ -180,6 +190,7 @@ if [ "${CLEAN}" == "1" ]; then
 	    "${CERTDIR}"/certs/*.*.pem \
 	    "${CERTDIR}"/certs/*.cer \
 	    "${CERTDIR}"/private/*.p12 \
+	    "${CERTDIR}"/private/*.p12.pass \
 	    "${CERTDIR}"/certs/*.csr.pem \
 	    "${CERTDIR}"/index.txt* \
 	    "${CERTDIR}"/serial* \

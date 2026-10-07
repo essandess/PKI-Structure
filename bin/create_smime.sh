@@ -7,14 +7,24 @@
 # Creates a signature and an encryption S/MIME certificate for EMAIL. If
 # certificates named CERTNAME already exist, they are first moved to
 # SHA1-named files, ${CERTNAME}-{signature,encryption}.${CERTSHA1}.{key,cert,chain}.pem,
-# .cer, and .p12, and new certificates are issued in their place. Any
-# other still-valid certificate the intermediate CA has on record under
-# the same CommonName (EMAIL - signature / EMAIL - encryption) is
-# revoked as superseded once the replacement is confirmed issued.
+# .cer, .p12 and .p12.pass, and new certificates are issued in their place.
+# Any other still-valid certificate the intermediate CA has on record under
+# the same CommonName (EMAIL - signature / EMAIL - encryption) is revoked as
+# superseded, but only once BOTH replacements are issued and complete: if
+# anything fails before that, the previous files are restored and nothing is
+# revoked.
+#
+# Each issuance gets its own random .p12 export password, shared by the
+# signature and encryption .p12 of this issuance and kept next to each one
+# as ${CERTNAME}-{signature,encryption}.p12.pass (mode 0600). Give that
+# password to the person who receives the .p12 and to nobody else: it opens
+# nobody else's .p12. (The key passphrase, passphrase.txt line 1, never
+# leaves the PKI directory.)
 
 # https://support.apple.com/en-us/HT210176
 # Technically longer acceptable for noncommercial S/MIME, 
 # but not not recommended or guaranteed to be accepted
+# (shortened if the intermediate ends sooner)
 DAYS=825
 
 CATRUE=${CATRUE:-0}
@@ -29,14 +39,7 @@ RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-3072}
 POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-EMAIL CERTNAME}
 
 # Files that make up one S/MIME certificate, as <subdirectory>/<suffix>
-SMIME_FILES="private/key.pem private/p12 certs/cert.pem certs/chain.pem certs/cer"
-
-# SHA1 fingerprint of a PEM certificate: lowercase, no colons
-cert_sha1() {
-    "${OPENSSL}" x509 -noout -fingerprint -sha1 -inform pem -in "$1" \
-	| sed -e 's|^.*Fingerprint=||' -e 's|:||g' \
-	| tr '[:upper:]' '[:lower:]'
-}
+SMIME_FILES="private/key.pem private/p12 private/p12.pass certs/cert.pem certs/chain.pem certs/cer"
 
 # Move existing signature/encryption certificates for CERTNAME to SHA1-named
 # files so that new ones can be issued. Each one is named after its own
@@ -106,6 +109,9 @@ fi
 EMAIL="$1"
 CERTNAME="$2"
 
+# Never longer than the intermediate's remaining life
+DAYS=$(pki_cap_days "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem" "${DAYS}")
+
 # pki_structure.sh checked for existing files before CERTNAME was known, so
 # archive any existing certificates here.
 trap restore_archived_smime EXIT
@@ -122,6 +128,13 @@ for EXTENSION in signature encryption; do
 	fi
     done
 done
+
+# One random .p12 password for this issuance (both .p12 files)
+P12_PASSWORD=$(pki_random_password)
+
+# Predecessors to revoke once everything below has succeeded
+REVOKE_CN=()
+REVOKE_SERIAL=()
 
 for EXTENSION in signature encryption; do
     # Encryption cert is always RSA: Apple Mail (macOS/iOS) does not support
@@ -160,7 +173,9 @@ for EXTENSION in signature encryption; do
 		-batch
     then
 	NEW_SERIAL=$("${OPENSSL}" x509 -in "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem" -noout -serial | sed 's|^serial=||')
-	pki_revoke_matching_cn "${ISSUERCADIR}" "${CERTDIR}/openssl_${CERTDIR}.cnf" "${EMAIL} - ${EXTENSION}" "${NEW_SERIAL}" intermediate
+	# not revoked yet: see the end of this script
+	REVOKE_CN+=("${EMAIL} - ${EXTENSION}")
+	REVOKE_SERIAL+=("${NEW_SERIAL}")
 	rm "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem
     else
 	rm "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem
@@ -202,18 +217,23 @@ for EXTENSION in signature encryption; do
 	    -in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
 	    -out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cer
 
-    # N.b. passphrase.txt holds two independent secrets: line 1 (-passin)
-    # unlocks the private key, line 2 (-passout) is the .p12 export password.
+    # The .p12 export password of this issuance (see the top of this file),
+    # in a file of its own next to the .p12. umask 077 keeps it private.
+    printf '%s\n' "${P12_PASSWORD}" > "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12.pass
+    chmod 0600 "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12.pass
+
+    # The key is opened with passphrase.txt line 1 (-passin); the .p12 is
+    # protected by its own password (-passout).
     # man openssl-passphrase-options
     "${OPENSSL}" pkcs12 -legacy -export \
 		-out "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12 \
 		-inkey "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \
 		-in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
 		-passin file:"${CERTDIR}"/private/passphrase.txt \
-		-passout file:"${CERTDIR}"/private/passphrase.txt
+		-passout file:"${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12.pass
     # verify .p12 passphrase
     "${OPENSSL}" pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12 \
-	    -passin "pass:$(sed -n 2p "${CERTDIR}"/private/passphrase.txt)"
+	    -passin file:"${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12.pass
 done
 
 # Both certificates were issued; the previous pair no longer needs restoring.
@@ -229,3 +249,10 @@ for EXTENSION in signature encryption; do
 	   "${CERTDIR}/${dir}/${CERTNAME}-${EXTENSION}.${CERTSHA1}.${suffix}"
     done
 done
+
+# Only now, with both replacements complete, revoke what they supersede.
+for i in "${!REVOKE_CN[@]}"; do
+    pki_revoke_matching_cn "${ISSUERCADIR}" "${CERTDIR}/openssl_${CERTDIR}.cnf" "${REVOKE_CN[i]}" "${REVOKE_SERIAL[i]}" intermediate
+done
+
+echo "The .p12 password of ${CERTNAME} is in ${CERTDIR}/private/${CERTNAME}-{signature,encryption}.p12.pass (give it only to the recipient)." >&2

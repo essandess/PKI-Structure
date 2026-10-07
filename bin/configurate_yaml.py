@@ -103,6 +103,18 @@ cert):
             # ENCRYPTION certificate be expired, for decrypting old
             # mail only -- never applies to the signing certificate,
             # which must never be expired
+        allow_superseded_encryption: true
+            # optional, default false; lets this identity's
+            # ENCRYPTION certificate be revoked with reason
+            # "superseded" (what create_smime.sh sets when it
+            # reissues), again only to decrypt old mail. Both keys
+            # are needed for one that is expired AND superseded.
+            # Any other revocation is always refused, and so is
+            # any expired or revoked signing certificate. An error
+            # names the key to set.
+        # Each .p12's password is the first line of '<p12>.pass'
+        # when that exists (create_smime.sh writes one per
+        # issuance), else line 2 of identity_passphrase_file.
   Lookup follows resolve_file (same '<stem>.*<suffix>' fallback as
   'certificates:'). Each identity's UUIDs are available to
   'accounts:' mail entries as identity_uuids[name]
@@ -725,6 +737,18 @@ def normalize_identity_entry(raw: Any) -> dict[str, Any]:
         f"or a mapping with 'name:'")
 
 
+def p12_password(path: Path, fallback: Callable[[], str]) -> str:
+    """The password of a PKCS#12 file: the first line of '<file>.pass'
+    if that exists (create_smime.sh writes one per issuance, so a
+    password opens only that identity's .p12 files), else the shared
+    fallback (line 2 of the passphrase file), which older .p12 files
+    use."""
+    pw_file = path.with_name(path.name + ".pass")
+    if pw_file.is_file():
+        return load_passphrase_line(pw_file, 1)
+    return fallback()
+
+
 def build_identities(
     cfg: dict[str, Any], ident: str, identity_dirs: list[Path]
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
@@ -738,22 +762,26 @@ def build_identities(
     Each certificate is checked exactly like the code-signing signer
     in find_signer(): not revoked per the issuer's index.txt, and
     verifies against every CRL in PKI_ROOT/*/crl/. This checks the
-    certificate actually embedded in the .p12 (opened with the
-    configured passphrase) -- not a same-named file elsewhere such
-    as smime/certs/, so a stray or stale file there can't make a bad
+    certificate actually embedded in the .p12 (opened with its
+    password) -- not a same-named file elsewhere such as
+    smime/certs/, so a stray or stale file there can't make a bad
     identity look fine, or a fine one look bad.
 
-    An identity's signing certificate must never be expired: it is
-    never legitimate to sign new mail with an expired certificate.
-    Its encryption certificate may be expired -- kept only to
-    decrypt old archived mail -- if the entry sets
-    'allow_expired_encryption: true'; revocation is still checked
-    (against today's CRL/index.txt) even then.
+    An identity's signing certificate must never be expired or
+    revoked: it is never legitimate to sign new mail with such a
+    certificate. Its encryption certificate may be, kept only to
+    decrypt old archived mail, if the entry opts in:
+      allow_expired_encryption: true      it may be expired
+      allow_superseded_encryption: true   it may be revoked as
+                                          "superseded" (create_smime.sh
+                                          does that when it reissues)
+    Both are needed for one that is both. Any other revocation is
+    refused. Without the opt-in the error says which key to set.
 
-    A plain passphrase file is shared by every entry by default
-    (identity_passphrase_file:, or its own default); a mapping entry
-    may set its own 'identity_passphrase_file:' to use a different
-    one, e.g. an archived tree's own passphrase.txt.
+    Passwords: each .p12's own '<file>.pass' (one per issuance) when
+    it exists, else line 2 of the entry's passphrase file
+    (identity_passphrase_file:, shared by every entry unless a
+    mapping entry sets its own, e.g. for an archived tree).
 
     Returns (payloads, identity_uuids), where identity_uuids maps
     each name to {"signing": UUID, "encryption": UUID}.
@@ -766,12 +794,12 @@ def build_identities(
         "identity_passphrase_file", "smime/private/passphrase.txt"
     )
 
-    def load_password(pw_rel: str) -> str:
+    def shared_password(pw_rel: str) -> str:
         pw_file = under_root(pw_rel)
         if not pw_file.is_file():
-            die(f"'identities:' given but passphrase file not "
-                f"found: {pw_file} (set 'identity_passphrase_file:' "
-                f"to override)")
+            die(f"a .p12 has no '<file>.pass' and the shared passphrase "
+                f"file was not found: {pw_file} (set "
+                f"'identity_passphrase_file:' to override)")
         # line 1 = key passphrase, line 2 = p12 export password
         return load_passphrase_line(pw_file, 2)
 
@@ -797,11 +825,12 @@ def build_identities(
 
         for spec in entries:
             name = spec["name"]
-            password = load_password(
-                spec.get("identity_passphrase_file", default_pw_file)
-            )
+            pw_rel = spec.get("identity_passphrase_file", default_pw_file)
             allow_expired_encryption = bool(
                 spec.get("allow_expired_encryption", False)
+            )
+            allow_superseded_encryption = bool(
+                spec.get("allow_superseded_encryption", False)
             )
 
             roles: dict[str, str] = {}
@@ -809,6 +838,9 @@ def build_identities(
                                  ("encryption", "encryption")):
                 path = resolve_file(f"{name}-{suffix}.p12", identity_dirs)
                 data = path.read_bytes()
+                password = p12_password(
+                    path, lambda pw_rel=pw_rel: shared_password(pw_rel)
+                )
                 cert = load_pkcs12(path, password)
 
                 # The file name only says where to look; the
@@ -829,24 +861,43 @@ def build_identities(
                 pem_path.write_bytes(
                     cert.public_bytes(serialization.Encoding.PEM)
                 )
-                allow_expired = (
-                    role == "encryption" and allow_expired_encryption
-                )
+                encryption = role == "encryption"
                 problems = cert_problems(
                     cert, pem_path, ca_db, ca_bundle, crl_bundle, now,
                     required_eku=ExtendedKeyUsageOID.EMAIL_PROTECTION,
                     eku_name="emailProtection",
-                    allow_expired=allow_expired,
+                    allow_expired=encryption and allow_expired_encryption,
+                    allow_superseded=(
+                        encryption and allow_superseded_encryption
+                    ),
+                    expired_hint=(
+                        f" -- to include it only to decrypt old mail, "
+                        f"set 'allow_expired_encryption: true' on "
+                        f"identity '{name}'" if encryption else
+                        " -- a signing certificate is never accepted "
+                        "when expired"
+                    ),
+                    superseded_hint=(
+                        f" -- to include it only to decrypt old mail, "
+                        f"set 'allow_superseded_encryption: true' on "
+                        f"identity '{name}'" if encryption else ""
+                    ),
                 )
                 if problems:
                     die(f"identity '{name}' ({role}) {path.name}: "
                         f"{problems[0]}")
-                if allow_expired and now > _validity(cert)[1]:
-                    print(f"  WARNING: identity '{name}' encryption "
-                          f"certificate is expired; included only "
-                          f"to decrypt old mail (allow_expired_"
-                          f"encryption: true) -- do not use it to "
-                          f"encrypt anything new", file=sys.stderr)
+                if encryption:
+                    status = ca_db.get(cert.serial_number, ("", ""))[0]
+                    why = [w for w, hit in (
+                        ("expired", now > _validity(cert)[1]),
+                        ("revoked as superseded", status == "R"),
+                    ) if hit]
+                    if why:
+                        print(f"  WARNING: identity '{name}' encryption "
+                              f"certificate is {' and '.join(why)}; "
+                              f"included only to decrypt old mail -- do "
+                              f"not use it to encrypt anything new",
+                              file=sys.stderr)
 
                 digest = hashlib.sha256(data).hexdigest()
                 u = str(uuid.uuid5(
@@ -873,6 +924,7 @@ def build_identities(
             print(f"  + pkcs12 {name}  "
                   f"(signing + encryption, from {identity_dirs})")
     return payloads, identity_uuids
+
 
 
 # ---------------------------------------------------------------------
@@ -1441,6 +1493,85 @@ def collect_crls() -> list[tuple[Path, x509.CertificateRevocationList]]:
     return found
 
 
+def _openssl_verify(
+    cert_file: Path,
+    ca_bundle: Path,
+    crl_bundle: Path,
+    *,
+    crl: str | None = None,
+    no_time: bool = False,
+) -> str | None:
+    """Run openssl verify; return None if it succeeds, else its error
+    line. crl is None (no CRL check), "leaf" (-crl_check) or "all"
+    (-crl_check_all)."""
+    cmd = ["openssl", "verify", "-CAfile", str(ca_bundle)]
+    if crl == "all":
+        cmd += ["-crl_check_all", "-CRLfile", str(crl_bundle)]
+    elif crl == "leaf":
+        cmd += ["-crl_check", "-CRLfile", str(crl_bundle)]
+    if no_time:
+        cmd.append("-no_check_time")
+    cmd.append(str(cert_file))
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode == 0:
+        return None
+    lines = (r.stdout + r.stderr).strip().splitlines()
+    err = next((l for l in lines if "error" in l.lower()),
+               lines[-1] if lines else "")
+    hint = " (missing or expired CRL?)" if "CRL" in err else ""
+    return f"{err}{hint}"
+
+
+def crl_revocation_reason(
+    cert: x509.Certificate, crl_bundle: Path
+) -> str | None:
+    """The reason (e.g. 'superseded') under which a CRL issued by the
+    certificate's issuer lists it; 'unspecified' if it is listed
+    without a reason; None if no such CRL lists it."""
+    pem = crl_bundle.read_text()
+    for block in re.findall(
+        r"-----BEGIN X509 CRL-----.*?-----END X509 CRL-----", pem, re.S
+    ):
+        crl = x509.load_pem_x509_crl(block.encode())
+        if crl.issuer != cert.issuer:
+            continue
+        entry = crl.get_revoked_certificate_by_serial_number(
+            cert.serial_number
+        )
+        if entry is None:
+            continue
+        try:
+            return entry.extensions.get_extension_for_class(
+                x509.CRLReason
+            ).value.reason.name
+        except x509.ExtensionNotFound:
+            return "unspecified"
+    return None
+
+
+def ca_chain_problems(ca_bundle: Path, crl_bundle: Path) -> list[str]:
+    """Every CA in the bundle that is not self-signed must itself be
+    valid now and not revoked (its issuer's CRL checked)."""
+    problems: list[str] = []
+    pem = ca_bundle.read_text()
+    with tempfile.TemporaryDirectory() as td:
+        for i, block in enumerate(re.findall(
+            r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            pem, re.S,
+        )):
+            ca = x509.load_pem_x509_certificate(block.encode())
+            if ca.subject == ca.issuer:
+                continue
+            f = Path(td) / f"ca{i}.pem"
+            f.write_text(block + "\n")
+            err = _openssl_verify(f, ca_bundle, crl_bundle, crl="leaf")
+            if err:
+                problems.append(
+                    f"CA {common_name(ca.subject, 'certificate')}: {err}"
+                )
+    return problems
+
+
 def cert_problems(
     cert: x509.Certificate,
     cert_file: Path,
@@ -1451,6 +1582,9 @@ def cert_problems(
     required_eku: x509.ObjectIdentifier | None = None,
     eku_name: str = "",
     allow_expired: bool = False,
+    allow_superseded: bool = False,
+    expired_hint: str = "",
+    superseded_hint: str = "",
 ) -> list[str]:
     """Return a list of reasons this certificate must not be
     trusted (empty = OK). Shared by the code-signing signer check
@@ -1460,26 +1594,43 @@ def cert_problems(
 
     allow_expired lets an expired certificate through (still
     subject to every other check, including today's CRL/index.txt
-    revocation status) -- for an S/MIME encryption certificate kept
-    only to decrypt old mail. A certificate that isn't valid yet is
-    never allowed, and this must never be set for a code-signing
-    signer or an S/MIME signing certificate: signing with an expired
-    certificate is never legitimate."""
+    revocation status), and allow_superseded one that is revoked with
+    reason "superseded" (what create_smime.sh sets when it reissues a
+    certificate), provided the issuer's index.txt AND a current CRL
+    both say so and the chain is otherwise sound. Both are for an
+    S/MIME encryption certificate kept only to decrypt old mail, and
+    both are opt-in: without them the problem is reported, followed
+    by expired_hint / superseded_hint (what to set to opt in). A
+    certificate that isn't valid yet is never allowed, and neither
+    flag may be set for a code-signing signer or an S/MIME signing
+    certificate: signing with an expired or superseded certificate is
+    never legitimate."""
     nb, na = _validity(cert)
     if now < nb:
         return [f"not valid until {nb:%Y-%m-%d %H:%M}Z"]
     expired = now > na
     if expired and not allow_expired:
-        return [f"expired {na:%Y-%m-%d %H:%M}Z"]
+        return [f"expired {na:%Y-%m-%d %H:%M}Z{expired_hint}"]
 
     entry = ca_db.get(cert.serial_number)
     if entry is None:
         return [f"serial {cert.serial_number:X} not in the issuer's "
                 f"index.txt (cannot confirm it is not revoked)"]
     status, rev = entry
+    superseded = False
     if status == "R":
-        return [f"revoked ({rev})"]
-    if status != "V":
+        if rev.lower().endswith(",superseded"):
+            if not allow_superseded:
+                return [f"revoked ({rev}){superseded_hint}"]
+            superseded = True
+        else:
+            return [f"revoked ({rev})"]
+    elif status == "E":
+        # openssl ca -updatedb marks a certificate that has expired
+        # and was not revoked 'E'; fine if expired ones are allowed
+        if not (expired and allow_expired):
+            return [f"index.txt status 'E' (expired){expired_hint}"]
+    elif status != "V":
         return [f"index.txt status '{status}' (expected V)"]
 
     if required_eku is not None:
@@ -1493,25 +1644,36 @@ def cert_problems(
         except x509.ExtensionNotFound:
             pass
 
+    if superseded:
+        # openssl would stop at the certificate's own revocation, so
+        # check the pieces: (1) the chain and signatures, no CRL;
+        # (2) the CAs above it are valid and not revoked; (3) a
+        # current CRL really lists it as superseded.
+        err = _openssl_verify(cert_file, ca_bundle, crl_bundle,
+                              crl=None, no_time=True)
+        if err:
+            return [f"failed chain verification against "
+                    f"{ca_bundle.name}: {err}"]
+        problems = ca_chain_problems(ca_bundle, crl_bundle)
+        if problems:
+            return problems
+        reason = crl_revocation_reason(cert, crl_bundle)
+        if reason != "superseded":
+            return [f"index.txt says revoked as superseded but the "
+                    f"CRLs say {reason or 'not revoked'} (stale CRL?)"]
+        return []
+
     # Chain + CRL check: -crl_check_all needs a current, correctly
     # signed CRL for this certificate (from the intermediate) and
     # for every CA below the root (from the root). -no_check_time
     # only skips openssl's own expiry check (already decided above);
     # it does not relax the CRL/revocation check, which still runs
     # against today's CRL.
-    cmd = ["openssl", "verify", "-CAfile", str(ca_bundle),
-          "-crl_check_all", "-CRLfile", str(crl_bundle)]
-    if expired:
-        cmd.append("-no_check_time")
-    cmd.append(str(cert_file))
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode:
-        lines = (r.stdout + r.stderr).strip().splitlines()
-        err = next((l for l in lines if "error" in l.lower()),
-                    lines[-1] if lines else "")
-        hint = " (missing or expired CRL?)" if "CRL" in err else ""
+    err = _openssl_verify(cert_file, ca_bundle, crl_bundle,
+                          crl="all", no_time=expired)
+    if err:
         return [f"failed chain/CRL verification against "
-                f"{ca_bundle.name}: {err}{hint}"]
+                f"{ca_bundle.name}: {err}"]
     return []
 
 

@@ -91,3 +91,7 @@ Thumbs.db
 
 # --- Always track templates (parent directories must not be ignored) --------
 !*.sample
+
+# --- Generated credential installers (hold base64 .p12 files) ---
+credentials/
+*.txz

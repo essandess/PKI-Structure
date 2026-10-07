@@ -24,6 +24,9 @@ cd "${PKI_ROOT}" || exit
 . "${SCRIPT_DIR}/pki_common.sh"
 . "${SCRIPT_DIR}/pki_structure.sh"
 
+# Never longer than the issuer's remaining life
+DAYS=$(pki_cap_days "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem" "${DAYS}")
+
 # Certificate encrypted key
 case ${ALGORITHM} in
     EC)

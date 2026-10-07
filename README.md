@@ -158,12 +158,12 @@ Certificates it issued can no longer be revoked. Not reversible.
 
 | Script | Issuer | Default key | Validity |
 |---|---|---|---|
-| `create_root.sh` | self-signed | EC P-384, SHA-384 | 4383 days |
-| `create_intermediate.sh` | root | EC P-384, SHA-384 | 2191 days |
+\g<1>7305\g<2>
+\g<1>3653\g<2>
 | `create_server.sh` | intermediate | EC P-256, SHA-256 | 825 days |
-| `create_codesign.sh` | intermediate | EC P-256, SHA-256 | 2191 days |
-| `create_smime.sh` | intermediate | signature EC P-256; encryption RSA 3072 | 1126 days |
-| `create_privoxy.sh` | self-signed | EC P-256, SHA-256 | 4383 days |
+\g<1>825\g<2>
+\g<1>825\g<2>
+\g<1>3653\g<2>
 | `create_adblock2privoxy.sh` | privoxy | EC P-256, SHA-256 | 825 days |
 
 ### Root CA
@@ -174,8 +174,13 @@ bin/create_root.sh [-a EC|RSA]
 
 Self-signed, `pathlen:1`. Creates `root/certs/root.cert.pem`,
 `root/certs/root.cer`, `root/private/root.key.pem`, `root/private/root.p12`,
-and the initial CRL. Refuses to run if `root/` already holds a key or
-certificate; clean first with `-c`.
+and the initial CRL. If `root/` already holds a certificate, a new one is issued only when it expires
+within `PKI_RENEW_WINDOW_DAYS` (default 30) or has expired; earlier than that is
+an error (or clean first with `-c`, which destroys the PKI). The renewal is
+self-signed with the **same key** and subject, the old files are archived as
+`root.<sha1>.*`, the CA database is kept, and nothing is revoked. `--new-key`
+generates a new key instead (then reissue the intermediate and below). Install and
+trust the new root on every device before the old one expires.
 
 ### Intermediate CA
 
@@ -188,8 +193,15 @@ Signed by root, `pathlen:0`. Creates
 `intermediate/private/intermediate.{key.pem,p12}`, SHA1-named copies
 `intermediate.<sha1>.*`, and the initial CRL.
 
-Requires root. Rotating the intermediate leaves existing leaf certificates
-signed by the previous key; reissue them (see Reissue below).
+Requires root. Running it again **renews** the intermediate (after a confirmation)
+with the same key and subject: the old files are archived as
+`intermediate.<sha1>.*`, the old certificate is not revoked, and everything already
+issued stays valid. `--new-key` generates a new key instead; nothing the old key
+signed chains to the new certificate, so reissue the server, code signing and S/MIME
+certificates. Revoke the old certificate yourself only if its key was compromised
+(`bin/revoke_certificate.sh intermediate/certs/intermediate.<sha1>.cert.pem root CACompromise`).
+Validity is capped at the root's remaining life, as for every leaf certificate
+(`pki_cap_days`).
 
 ### Server
 
@@ -223,7 +235,10 @@ Issues a signature and an encryption certificate for `EMAIL`:
   S/MIME encryption certificates.
 
 Output is `smime/{certs,private}/CERTNAME-{signature,encryption}.*` plus
-SHA1-named copies. Example:
+SHA1-named copies. Each issuance gets its own random `.p12` password, shared by the
+signature and encryption `.p12` of that issuance and kept next to each as
+`CERTNAME-{signature,encryption}.p12.pass` (mode 0600, archived with the `.p12`).
+Give it only to the recipient: it opens nobody else's `.p12`. Example:
 ```sh
 bin/create_smime.sh user@example.org user_example
 ```
@@ -255,12 +270,14 @@ the issuer's CRL is regenerated once.
 
 * A `[y/N]` prompt precedes each revocation. Set `PKI_ASSUME_YES=1` to skip.
 * Matching is by CommonName in the CA database, not by filename.
-* If issuance fails, nothing is revoked. `create_intermediate.sh` and
+* Predecessors are revoked only after the replacement is issued and complete (for
+  S/MIME: both certificates). If issuance fails, nothing is revoked. `create_intermediate.sh` and
   `create_smime.sh` restore the previous files.
 * Existing files are archived as `<name>.<sha1>.*`.
 
-After reissuing the intermediate, reissue server, code signing, and S/MIME
-certificates.
+The intermediate, root and privoxy CAs are renewed with their existing key and their
+predecessor is not revoked; after `create_intermediate.sh --new-key` reissue server,
+code signing, and S/MIME certificates.
 
 ## Certificate revocation lists
 
@@ -292,7 +309,7 @@ bin/revoke_certificate.sh CERTFILE CA [REASON]
 |---|---|
 | `CERTFILE` | PEM certificate to revoke (`*.cert.pem`) |
 | `CA` | Issuing CA: `root`, `intermediate`, or `privoxy` |
-| `REASON` | Default `keyCompromise` |
+| `REASON` | Default `unspecified` |
 
 `REASON` is one of: `unspecified`, `keyCompromise`, `CACompromise`,
 `affiliationChanged`, `superseded`, `cessationOfOperation`,
@@ -348,6 +365,32 @@ openssl verify -crl_check \
     server/certs/<fqdn>.<sha1>.cert.pem
 ```
 
+## Publish CRLs
+
+```sh
+bin/publish_crls.sh [--if-configured] [--no-regenerate] [root|intermediate ...]
+```
+
+Regenerates the CRLs and copies each CRL and CA certificate (DER) to the web directory
+(`PKI_SITE_DIR`, or `<prefix>/var/www/PKI_FQDN` in a MacPorts layout). The periodic job
+calls it, and `revoke_certificate.sh` calls it right after a revocation so that the
+revocation is published immediately.
+
+## Deploy credentials to macOS
+
+```sh
+bin/create_credentials.sh [--user-keychain] [--extra-pki-dir DIR]... [--allow-expired-encryption] [--allow-superseded-encryption] ['NAME_GLOB' ...]
+bin/create_credentials.sh --ca-only [--user-keychain]
+```
+
+Writes one installer, `credentials/install_credentials_<stem>.sh`, holding the root,
+intermediate and privoxy CA certificates and the S/MIME `.p12` files matching the globs.
+Every certificate is validated first (chain, CRLs). An S/MIME encryption certificate that
+is expired or revoked as superseded is left out unless you opt in with the two flags, to
+decrypt old mail; you are reminded when that happens. The installer contains no passwords:
+send each `.p12.pass` to its recipient separately. `bin/create_credentials.sh -h` for all
+options.
+
 ## Maintenance
 
 List certificates expiring within N months (default 6):
@@ -356,7 +399,7 @@ bin/certs_that_expire_soon.sh [N]
 ```
 
 Mark expired entries in each CA database (`openssl ca -updatedb`) and delete
-expired server, code signing, and adblock2privoxy files. CA and S/MIME
+expired server, code signing, and adblock2privoxy files (`-n` lists them without deleting). CA and S/MIME
 certificates are not deleted:
 ```sh
 bin/updatedb_and_delete_expired_certs.sh

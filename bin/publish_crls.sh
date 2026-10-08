@@ -7,7 +7,9 @@
 # Regenerates each named CA's CRL (bin/create_crl.sh) and publishes the CRL
 # and the CA certificate, both DER, to the web directory the CRL
 # distribution points point at (http://PKI_FQDN/<ca>.crl and <ca>.cer).
-# Default CAs: root intermediate. Safe to run at any time; called by the
+# Default CAs: root intermediate. If a CA's key or passphrase is not here
+# (an offline root), its existing CRL is published as it is, with a warning
+# when that CRL is about to expire (root: 30 days, others: 7). Safe to run at any time; called by the
 # periodic CRL job and by revoke_certificate.sh, so that a revocation is
 # published immediately rather than at the next scheduled run.
 #
@@ -72,6 +74,8 @@ if [ "${#CAS[@]}" -eq 0 ]; then
 fi
 
 . "${PKI_ROOT}/pki_identity.env"
+. "${PKI_ROOT}/bin/define_openssl.sh"
+. "${PKI_ROOT}/bin/pki_common.sh"
 
 if [ -z "${PKI_SITE_DIR:-}" ]; then
     PREFIX_WWW="$(cd "${PKI_ROOT}/../.." 2>/dev/null && pwd)/var/www"
@@ -109,7 +113,29 @@ publish_file() {
 
 for ca in "${CAS[@]}"; do
     if [ "${REGENERATE}" = "1" ]; then
-	SHOW_CRL_TEXT=0 "${PKI_ROOT}/bin/create_crl.sh" "${ca}" > /dev/null
+	if [ -f "${ca}/private/${ca}.key.pem" ] && [ -f "${ca}/private/passphrase.txt" ]; then
+	    # quiet unless it fails
+	    if ! out=$(SHOW_CRL_TEXT=0 "${PKI_ROOT}/bin/create_crl.sh" "${ca}" 2>&1); then
+		echo "${out}" >&2
+		exit 1
+	    fi
+	else
+	    echo "Note: the ${ca} key is not here (offline?); publishing the existing ${ca} CRL." >&2
+	fi
+    fi
+
+    if [ ! -f "${ca}/crl/${ca}.crl" ]; then
+	echo "Error: ${ca}/crl/${ca}.crl does not exist; generate it with the ${ca} key (bin/create_crl.sh ${ca})." >&2
+	exit 1
+    fi
+    # the root CRL lasts a year, the others a month: warn at 30 / 7 days
+    warn_days=7
+    if [ "${ca}" = "root" ]; then
+	warn_days=30
+    fi
+    next=$("${OPENSSL}" crl -inform DER -in "${ca}/crl/${ca}.crl" -noout -nextupdate | sed 's|^nextUpdate=||')
+    if [ -n "${next}" ] && [ $(( $(pki_date_epoch "${next}") - $(date +%s) )) -lt $((warn_days * 86400)) ]; then
+	echo "Warning: the ${ca} CRL expires within ${warn_days} days (or has expired): regenerate it with the ${ca} key (bin/create_crl.sh ${ca})." >&2
     fi
 
     SRC="${ca}/certs/${ca}.cer"

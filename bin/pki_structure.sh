@@ -159,9 +159,9 @@ $(basename "$0") [-a|--algorithm [EC (default)|RSA]] [-h|--help] [-c|--clean] ${
 
 Note that the file ./${CERTDIR}/private/passphrase.txt will be created,
 if it does not exist, with two independent strong passphrases, one per
-line: line 1 protects the private key, line 2 protects .p12 exports. See:
+line: line 1 protects the private key, line 2 protects .p12 exports. Both
+are 24 random letters and digits from openssl rand. See:
 * man openssl-passphrase-options
-* sf-pwgen --algorithm memorable --count 2 --length 16 | paste -s -d -- '-'
 USEAGE
     exit 0
 fi
@@ -258,43 +258,14 @@ done
 
 for f in "${CERTDIR}"/private/passphrase.txt; do
     if ! [ -f "${f}" ]; then
-        # passphrase generation function created/destroyed every time
-        _pki_generate_passphrase() {
-            local newpassphrase="" passphrase="" char doit idx=0
-            if command -v sf-pwgen >/dev/null 2>&1; then
-                # no comment metacharacters in the passphrase
-                passphrase=$(sf-pwgen --algorithm memorable --count 2 --length 16 | paste -s -d -- '-' | tr '#' '&' | tr '\' '/')
-                # RanDoM caPitAlizaTioN
-                while [[ ${idx} -lt "${#passphrase}" ]]; do
-                    char="${passphrase:${idx}:1}"
-                    doit=$(( RANDOM % 10 ))
-                    if [ -z "$(echo "${char}" | sed -E 's|[[:lower:]]||')" ]; then
-                        # 30% chance flip lowercase
-                        if [ ${doit} -lt 3 ] ; then
-                            char="$(echo "${char}" | tr '[:lower:]' '[:upper:]')"
-                        fi
-                    elif [ -z "$(echo "${char}" | sed -E 's|[[:upper:]]||')" ]; then
-                        # 50% chance flip uppercase
-                        if [ ${doit} -lt 5 ]; then
-                            char="$(echo "${char}" | tr '[:upper:]' '[:lower:]')"
-                        fi
-                    fi
-                    newpassphrase="${newpassphrase}${char}"
-                    idx=$(( idx + 1 ))
-                done
-            else
-                newpassphrase=$("${OPENSSL}" rand -base64 20 | cut -c 1-24)
-            fi
-            echo "${newpassphrase:-$passphrase}"
-        }
-
         # Two independent secrets, one per line: line 1 protects the
         # private key (-passin), line 2 protects .p12 exports (-passout).
         # See openssl-passphrase-options(1) on file:pathname passed to
         # both -passin and -passout.
-        PASSIN=$(_pki_generate_passphrase)
-        PASSOUT=$(_pki_generate_passphrase)
-        unset -f _pki_generate_passphrase
+        # Nobody types these (they sit in this file), so they are random
+        # letters and digits from openssl rand, not memorable words.
+        PASSIN=$(pki_random_password)
+        PASSOUT=$(pki_random_password)
         touch "${f}"
         chmod go-rwx "${f}"
         printf '%s\n%s\n' "${PASSIN}" "${PASSOUT}" > "${f}"

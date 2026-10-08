@@ -3,7 +3,8 @@
 # create_credentials.sh -- build a macOS credential installer from the PKI tree.
 #
 # Usage: create_credentials.sh [--user-keychain] [--extra-pki-dir DIR]...
-#                              ['NAME_GLOB' ...]
+#                              [--allow-expired-encryption]
+#                              [--allow-superseded-encryption] ['NAME_GLOB' ...]
 #        create_credentials.sh --ca-only [--user-keychain]
 #
 # Writes ONE installer, credentials/install_credentials_<stem>.sh, after
@@ -20,9 +21,12 @@
 # --extra-pki-dir DIR (repeatable) also searches DIR/smime, a PKI tree with
 # the same layout, e.g. an older one holding expired certificates. Its root,
 # intermediate and CRLs, if present, are used for validation too. Each such
-# tree gets its own password prompt in the installer, and each of its .p12
-# files must open with a line of that tree's smime/private/passphrase.txt
-# (line 2, else line 1); the script reports which line, never the password.
+# tree gets its own password prompt in the installer.
+# Each .p12 must open with its own password file, <p12>.pass (one password
+# per issuance, written by create_smime.sh; the installer asks once per
+# issuance), or, for older .p12 files, with line 2 (else line 1) of its
+# tree's smime/private/passphrase.txt (one prompt per tree). The script
+# reports which file and line, never the password.
 #
 # Installer contents:
 #   CA certificates  root (trusted), valid intermediate, privoxy CA; public
@@ -49,12 +53,16 @@
 #   S/MIME        must verify against the root through a valid intermediate,
 #                 CRLs of the whole chain checked (openssl verify
 #                 -crl_check_all)
-# Exception, for decrypting old mail only: an S/MIME ENCRYPTION certificate
-# may be expired, or revoked with reason "superseded" (which is what
-# create_smime.sh sets on reissue), and is then included with a warning. A
-# signature certificate is never accepted when expired or revoked, nor an
-# encryption certificate whose keyUsage allows signing or that is revoked
-# for any other reason.
+# Opt-in exceptions, for decrypting old mail only. An S/MIME ENCRYPTION
+# certificate is rejected when it is expired or revoked with reason
+# "superseded" (what create_smime.sh sets on reissue) unless you ask for it:
+#   --allow-expired-encryption      include expired encryption certificates
+#   --allow-superseded-encryption   include those revoked as superseded
+# (both, for one that is both). Without the flag it is left out, with a
+# reminder to opt in. Included ones carry a warning. A signature
+# certificate is never accepted when expired or revoked, nor an encryption
+# certificate whose keyUsage allows signing or that is revoked for any
+# other reason.
 #
 # Environment: PKI_ASSUME_YES, PKI_ROOT_CRL, PKI_INTERMEDIATE_CRL,
 # PKI_PRIVOXY_DIRS (default privoxy).
@@ -79,6 +87,11 @@ cd "${PKI_ROOT}" || exit
 . "${SCRIPT_DIR}/pki_common.sh"
 . "${PKI_ROOT}/bin/define_openssl.sh"
 
+for fn in cert_sha1 cert_smime_role cert_is_ca; do
+    declare -F "${fn}" >/dev/null \
+        || { echo "Error: ${fn} is not defined by bin/pki_common.sh (append pki_common_additions.sh to it)." >&2; exit 1; }
+done
+
 OUTDIR=credentials
 ROOT_CERT=root/certs/root.cert.pem
 ROOT_P12=root/private/root.p12
@@ -89,6 +102,10 @@ SMIME_RE='^(.+)-(signature|encryption)(\.[0-9a-fA-F]{40})?\.cert\.pem$'
 NAME_GLOB_RE='^[][A-Za-z0-9_.,*?{}!^-]+$'
 
 CA_ONLY=0
+ALLOW_EXPIRED_ENC=0
+ALLOW_SUPERSEDED_ENC=0
+OPTIN_EXPIRED=0       # certificates left out for want of --allow-expired-encryption
+OPTIN_SUPERSEDED=0    # ... and of --allow-superseded-encryption
 USER_KEYCHAIN=0
 CA_DOMAIN=system   # payload directory and keychain of the CA certificates
 HELP=0
@@ -124,6 +141,14 @@ while [[ $# -gt 0 ]]; do
             CA_DOMAIN=user
             shift
             ;;
+        --allow-expired-encryption)
+            ALLOW_EXPIRED_ENC=1
+            shift
+            ;;
+        --allow-superseded-encryption)
+            ALLOW_SUPERSEDED_ENC=1
+            shift
+            ;;
         --extra-pki-dir)
             [ $# -ge 2 ] || die "--extra-pki-dir needs a DIR argument."
             add_extra_dir "$2"
@@ -153,7 +178,8 @@ if [ "${HELP}" != "0" ]; then
     cat <<USEAGE
 Useage:
 
-$(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... ['NAME_GLOB' ...]
+$(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--allow-expired-encryption]
+    [--allow-superseded-encryption] ['NAME_GLOB' ...]
 $(basename "$0") --ca-only [--user-keychain]
 
 Creates ONE installer, ./${OUTDIR}/install_credentials_<stem>.sh, with the
@@ -173,10 +199,13 @@ PKI_ASSUME_YES=1 skips the prompt.
 
 Every certificate is validated first: the intermediate against the root, the
 S/MIME certificates against the root through a valid intermediate, with the
-CRLs checked (an unexpired CRL is required). Only an S/MIME encryption
-certificate may be expired, or revoked as "superseded", and is then included
-with a warning, to decrypt old mail; expired or revoked signature
-certificates are always rejected.
+CRLs checked (an unexpired CRL is required). An S/MIME ENCRYPTION certificate
+that is expired, or revoked as "superseded" (what create_smime.sh sets when
+it reissues one), is left out unless you opt in, to decrypt old mail:
+  --allow-expired-encryption      include expired encryption certificates
+  --allow-superseded-encryption   include those revoked as superseded
+You are reminded when certificates were left out for want of a flag.
+Expired or revoked signature certificates are always rejected.
 
   --user-keychain         install the CA certificates into the user's login
                           keychain (payload directory user/, no sudo)
@@ -186,8 +215,7 @@ certificates are always rejected.
                           one with expired certificates); repeatable. Its
                           root, intermediate and CRLs also serve validation.
                           The installer asks for a separate .p12 password for
-                          each tree; each .p12 must open with that tree's
-                          smime/private/passphrase.txt.
+                          each tree (and for each issuance with a .p12.pass).
   --ca-only               create an installer whose payload is only root.p12
                           and the valid intermediate .p12; running that
                           installer imports them and trusts the root
@@ -518,13 +546,15 @@ crl_revocation_reason() {
 # ROLE (signature or encryption) comes from cert_smime_role, i.e. from the
 # certificate's own properties, not from its file name.
 # The certificate must verify against the root through a valid intermediate,
-# with the CRLs of the whole chain checked. Only an S/MIME ENCRYPTION
-# certificate may deviate, because its key is still needed to decrypt old
-# mail: it may be expired, or revoked with reason "superseded" (what
-# create_smime.sh sets when it reissues a certificate). A signature
-# certificate never may.
+# with the CRLs of the whole chain checked. A signature certificate must pass
+# outright. An ENCRYPTION certificate, whose key is still needed to decrypt
+# old mail, may in addition be
+#   expired                         if --allow-expired-encryption is given
+#   revoked as "superseded"         if --allow-superseded-encryption is given
+# (what create_smime.sh sets when it reissues a certificate). Without the
+# flag it is rejected and counted, so that the caller can remind the user.
 validate_smime_cert() {
-    local f="$1" role="$2" out err out2 err2 reason expired=0
+    local f="$1" role="$2" out err out2 err2 reason expired=0 superseded=0 need="" what
 
     CERT_STATE="valid"
     if [ "${role}" != signature ] && [ "${role}" != encryption ]; then
@@ -549,54 +579,84 @@ validate_smime_cert() {
         return 1
     fi
 
-    # Encryption certificate. Did only the validity period fail?
+    # Encryption certificate: is the validity period the only problem, or is
+    # it revoked as superseded (and otherwise sound)?
     if out2=$(verify_chain -no_check_time "${f}"); then
-        if [ "${expired}" = 1 ]; then
-            CERT_STATE="expired"
-            warn "accepting expired encryption certificate ${f} (for decrypting old mail only)"
-            return 0
+        if [ "${expired}" != 1 ]; then
+            warn "rejecting ${f}: ${err}"
+            return 1
         fi
-        warn "rejecting ${f}: ${err}"
-        return 1
-    fi
-
-    # Or was it revoked as superseded (and is otherwise sound)?
-    err2=$(verify_error "${out2}")
-    if [ "${err2}" = "certificate revoked" ]; then
+        what="expired encryption certificate"
+    else
+        err2=$(verify_error "${out2}")
+        if [ "${err2}" != "certificate revoked" ]; then
+            warn "rejecting ${f}: ${err2}"
+            return 1
+        fi
         reason=$(crl_revocation_reason "${f}")
-        if [[ "${reason}" == [Ss]uperseded ]] && verify_chain_only "${f}" >/dev/null; then
-            CERT_STATE="revoked: superseded"
-            if [ "${expired}" = 1 ]; then
-                CERT_STATE="expired, revoked: superseded"
-            fi
-            warn "accepting encryption certificate ${f}: ${CERT_STATE} (for decrypting old mail only)"
-            return 0
+        if ! [[ "${reason}" == [Ss]uperseded ]] || ! verify_chain_only "${f}" >/dev/null; then
+            warn "rejecting ${f}: revoked (${reason:-reason unknown})"
+            return 1
         fi
-        warn "rejecting ${f}: revoked (${reason:-reason unknown})"
+        superseded=1
+        what="encryption certificate revoked as superseded"
+        if [ "${expired}" = 1 ]; then
+            what="expired encryption certificate revoked as superseded"
+        fi
+    fi
+
+    # Needs an opt-in
+    if [ "${superseded}" = 1 ] && [ "${ALLOW_SUPERSEDED_ENC}" != 1 ]; then
+        need="${need} --allow-superseded-encryption"
+        OPTIN_SUPERSEDED=$((OPTIN_SUPERSEDED + 1))
+    fi
+    if [ "${expired}" = 1 ] && [ "${ALLOW_EXPIRED_ENC}" != 1 ]; then
+        need="${need} --allow-expired-encryption"
+        OPTIN_EXPIRED=$((OPTIN_EXPIRED + 1))
+    fi
+    if [ -n "${need}" ]; then
+        warn "rejecting ${f}: ${what}; add${need} to include it (only to decrypt old mail)"
         return 1
     fi
 
-    warn "rejecting ${f}: ${err2}"
-    return 1
+    CERT_STATE="expired"
+    if [ "${superseded}" = 1 ]; then
+        CERT_STATE="revoked: superseded"
+        if [ "${expired}" = 1 ]; then
+            CERT_STATE="expired, revoked: superseded"
+        fi
+    fi
+    warn "accepting ${what} ${f} (for decrypting old mail only)"
+    return 0
 }
 
-# p12_password_line P12 PASSPHRASE_FILE: prints the line (2, else 1) of the
-# passphrase file that opens the .p12. Returns 1 if neither does, 2 if the
-# passphrase file does not exist.
-p12_password_line() {
-    local p12="$1" pf="$2" n pw
+# p12_password_source P12 FALLBACK_PASSPHRASE_FILE: prints "FILE<TAB>LINE",
+# where the password that opens the .p12 is: first <P12>.pass (one password
+# per issuance, written by create_smime.sh), then lines 2 and 1 of the
+# fallback passphrase.txt (older .p12 files share one password). Returns 1 if
+# none of them opens it, 2 if there is no password file at all.
+p12_password_source() {
+    local p12="$1" fallback="$2" i f n pw found=0
+    local files=("${p12}.pass" "${fallback}" "${fallback}")
+    local lines=(1 2 1)
 
-    [ -f "${pf}" ] || return 2
-    for n in 2 1; do
-        pw=$(sed -n "${n}p" "${pf}")
+    for i in 0 1 2; do
+        f="${files[i]}"
+        n="${lines[i]}"
+        [ -f "${f}" ] || continue
+        found=1
+        pw=$(sed -n "${n}p" "${f}")
         [ -n "${pw}" ] || continue
         if PKI_TMP_PW="${pw}" "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" \
                 -passin env:PKI_TMP_PW >/dev/null 2>&1; then
-            printf '%s' "${n}"
+            printf '%s\t%s' "${f}" "${n}"
             return 0
         fi
     done
-    return 1
+    if [ "${found}" = 1 ]; then
+        return 1
+    fi
+    return 2
 }
 
 # p12_check_content P12 PASSPHRASE_FILE LINE CERT: succeeds if the .p12 holds
@@ -742,11 +802,13 @@ build_common() {
 
 # check_ca_p12 GROUP P12 PASSPHRASE_FILE CERT
 check_ca_p12() {
-    local group="$1" p12="$2" pf="$3" cert="$4" line rc=0 why
+    local group="$1" p12="$2" pf="$3" cert="$4" src line rc=0 why
 
-    line=$(p12_password_line "${p12}" "${pf}") || rc=$?
+    src=$(p12_password_source "${p12}" "${pf}") || rc=$?
     case "${rc}" in
         0)
+            line=${src#*$'\t'}
+            pf=${src%%$'\t'*}
             why=$(p12_check_content "${p12}" "${pf}" "${line}" "${cert}") \
                 || die "'${p12}': ${why}."
             note_group_password "${group}" "${pf}" "${line}"
@@ -858,6 +920,7 @@ installer_name() {
 # S/MIME .p12 files of SEL_CERTNAMES from every source; sets SMIME_COUNT
 build_payload_dir() {
     local dir="${STAGE}/payload" i sd group src f b certname ext role why sha1 name p12 pf line rc state seen=" " count=0 rejected=0
+    local psrc pwfile pwid grp
 
     rm -rf "${dir}"
     mkdir -p "${dir}/smime"
@@ -897,25 +960,33 @@ build_payload_dir() {
             # the .p12 must open with the passphrase.txt of the tree it came from
             # and hold this certificate together with its private key
             pf="${sd}/smime/private/passphrase.txt"
+            grp="${group}"
             rc=0
-            line=$(p12_password_line "${p12}" "${pf}") || rc=$?
+            psrc=$(p12_password_source "${p12}" "${pf}") || rc=$?
             case "${rc}" in
                 0)
-                    if ! why=$(p12_check_content "${p12}" "${pf}" "${line}" "${f}"); then
+                    line=${psrc#*$'\t'}
+                    pwfile=${psrc%%$'\t'*}
+                    if ! why=$(p12_check_content "${p12}" "${pwfile}" "${line}" "${f}"); then
                         warn "skipping ${p12}: ${why}"
                         rejected=$((rejected + 1))
                         continue
                     fi
-                    note_group_password "${group}" "${pf}" "${line}"
+                    if [[ "${pwfile}" == *.p12.pass ]]; then
+                        # one password per issuance: one installer prompt per issuance
+                        pwid=$(sed -n 1p "${pwfile}" | tr -d '\n' | "${OPENSSL}" dgst -sha256 | sed 's/.*= *//' | cut -c1-6)
+                        grp="${group}/${certname}/${pwid}"
+                    fi
+                    note_group_password "${grp}" "${pwfile}" "${line}"
                     ;;
                 1)
-                    warn "skipping ${p12}: it does not open with either of the first two lines of ${pf}"
+                    warn "skipping ${p12}: it opens with neither ${p12}.pass nor the first two lines of ${pf}"
                     rejected=$((rejected + 1))
                     continue
                     ;;
                 *)
-                    warn "${pf} not found: cannot check the password, certificate and key of ${p12}"
-                    note_group_password "${group}" "${pf}" ""
+                    warn "neither ${p12}.pass nor ${pf} found: cannot check the password, certificate and key of ${p12}"
+                    note_group_password "${grp}" "${pf}" ""
                     ;;
             esac
 
@@ -936,7 +1007,7 @@ build_payload_dir() {
             [ ! -e "${dir}/smime/${name}.p12" ] \
                 || die "payload file name '${name}' is used twice (a clash of the last six sha1 digits)."
             cp "${p12}" "${dir}/smime/${name}.p12"
-            printf 'smime\t%s\t%s\t1\t%s\t%s\n' "${group}" "${sha1}" "${name}" \
+            printf 'smime\t%s\t%s\t1\t%s\t%s\n' "${grp}" "${sha1}" "${name}" \
                    "${role}, ${state}${src}" >> "${dir}/manifest"
             count=$((count + 1))
         done
@@ -944,6 +1015,17 @@ build_payload_dir() {
 
     SMIME_COUNT="${count}"
     echo "${count} S/MIME certificate(s) selected, ${rejected} rejected" >&2
+
+    if [ $((OPTIN_EXPIRED + OPTIN_SUPERSEDED)) -gt 0 ]; then
+        echo "Reminder: encryption certificates were left out because you have not opted in" >&2
+        echo "(they are only useful to decrypt old mail). To include them, add:" >&2
+        if [ "${OPTIN_EXPIRED}" -gt 0 ]; then
+            echo "  --allow-expired-encryption       (${OPTIN_EXPIRED} expired)" >&2
+        fi
+        if [ "${OPTIN_SUPERSEDED}" -gt 0 ]; then
+            echo "  --allow-superseded-encryption    (${OPTIN_SUPERSEDED} revoked as superseded)" >&2
+        fi
+    fi
 }
 
 # show_payload OUT DIR: list what goes into the tar payload
@@ -1361,7 +1443,7 @@ INSTALLER
         printf '__PAYLOAD_BELOW__\n'
         tar -cJf - -C "${dir}" . | "${OPENSSL}" base64
     } > "${out}"
-    chmod 0700 "${out}"
+    chmod 0750 "${out}"   # the project's mode for scripts; the contents are encrypted
 }
 
 # ---------------------------------------------------------------------
@@ -1369,7 +1451,7 @@ INSTALLER
 # ---------------------------------------------------------------------
 
 mkdir -p "${OUTDIR}"
-chmod 0700 "${OUTDIR}"
+chmod 0755 "${OUTDIR}"
 
 SEL_CERTNAMES=()
 
@@ -1422,7 +1504,7 @@ fi
 
 build_payload_dir
 if [ "${CA_ONLY}" != "1" ] && [ "${#NAMES[@]}" -gt 0 ] && [ "${SMIME_COUNT}" -eq 0 ]; then
-    die "none of the matching S/MIME certificates can be included (no .p12, or rejected by validation: see the warnings above)."
+    die "none of the matching S/MIME certificates can be included (no .p12, or rejected by validation or for want of an opt-in flag: see above)."
 fi
 if [ ! -s "${STAGE}/payload/manifest" ]; then
     warn "nothing to include in the payload; no installer created."

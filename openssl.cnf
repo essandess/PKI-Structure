@@ -142,7 +142,10 @@ certificate       = $dir/certs/$dir.cert.pem
 crlnumber         = $dir/crlnumber
 crl               = $dir/crl/$dir.crl.pem
 crl_extensions    = crl_ext
-default_crl_days  = 30
+# 1 year: the root only revokes intermediates, so its key can stay offline;
+# run bin/create_crl.sh root (and bin/publish_crls.sh --no-regenerate root)
+# before the CRL expires.
+default_crl_days  = 365
 
 # SHA-1 is deprecated, so use SHA-2 instead.
 default_md        = sha256

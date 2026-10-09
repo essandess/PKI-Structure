@@ -114,7 +114,8 @@ fi
 if \
     "${OPENSSL}" ca -config openssl.cnf \
 	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
-	-extfile "${CERTDIR}"/openssl_"${CERTDIR}".cnf -extensions v3_intermediate_ca \
+	-extfile "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
+	-extensions intermediate_ca \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt -batch

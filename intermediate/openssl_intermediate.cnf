@@ -62,6 +62,16 @@ organizationName_default        = $ENV::ORG_NAME
 organizationalUnitName_default  = $ENV::ORG_NAME Intermediate Certification Authority
 commonName_default              = $ENV::ORG_NAME Intermediate CA
 
+# replicates ../openssl.cnf intermediate_ca extension
+[ intermediate_ca ]
+# The intermediate certificate, issued by the root.
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+basicConstraints = critical, CA:true, pathlen:0
+keyUsage = critical, cRLSign, keyCertSign
+crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cer
+
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).
 authorityKeyIdentifier=keyid:always

@@ -1,123 +1,15 @@
-# Commands to create a surrogate TLS server certificate chain of trust
-
-##################
-# CA
-##################
-
-# CA encrypted key
-# EC
-# openssl genpkey -out private/root.key.pem \
-#     -algorithm EC -pkeyopt ec_paramgen_curve:${EC_PARAMGEN_CURVE} -aes256 \
-#     -pass file:private/passphrase.txt
-
-# RSA
-# # openssl genpkey -out private/root.key.pem  \
-# #     -algorithm RSA -pkeyopt rsa_keygen_bits:${RSA_KEYGEN_BITS} -aes256 \
-# #     -pass file:private/passphrase.txt
-
-# CA certificate
-# openssl req -config openssl.cnf \
-#     -new -x509 -days 1460 -${HASH_DIGEST} -extensions v3_ca -out root.cert.pem \
-#     -key private/root.key.pem -passin file:private/passphrase.txt -batch
-
-# CA certificate text verification
-# openssl x509 -text -noout -in root.cert.pem
-
-# CA certificate openssl self-verification
-# openssl verify -CAfile root.cert.pem root.cert.pem
-
-##################
-# Intermediate CA
-##################
-
-# Intermediate CA encrypted key
-# EC
-# openssl genpkey -out intermediate/private/intermediate.key.pem \
-#     -algorithm EC -pkeyopt ec_paramgen_curve:${EC_PARAMGEN_CURVE} -aes256 \
-#     -passout file:intermediate/private/passphrase_intermediate.txt
-
-# RSA
-# openssl genpkey -out intermediate/private/intermediate.key.pem \
-#     -algorithm RSA -pkeyopt rsa_keygen_bits:${RSA_KEYGEN_BITS} -aes256 \
-#     -pass file:intermediate/private/passphrase_intermediate.txt
-
-# Intermediate CA CSR
-# openssl req -config intermediate/openssl_intermediate.cnf -new -${HASH_DIGEST} \
-#     -key intermediate/private/intermediate.key.pem \
-#     -passin file:intermediate/private/passphrase_intermediate.txt -batch \
-#     -out intermediate/intermediate.csr.pem
-
-# CA initialize database
-# sh -c 'echo 01 > serial'
-# touch index.txt
-
-# Intermediate CA certificate
-# openssl ca -config openssl.cnf \
-#     -days 730 -notext -md ${HASH_DIGEST} -extensions v3_intermediate_ca \
-#     -in intermediate/intermediate.csr.pem \
-#     -out intermediate/intermediate.cert.pem
-#     -passin file:private/passphrase.txt -batch
-
-# Intermediate CA chain
-# sh -c 'cat intermediate/intermediate.cert.pem root.cert.pem \
-#     > intermediate/ca-chain.cert.pem'
-
-# Intermediate CA certificate text verification
-# openssl x509 -text -noout -in intermediate/intermediate.cert.pem
-
-# Intermediate CA chain openssl self-verification
-# openssl verify -CAfile root.cert.pem intermediate/ca-chain.cert.pem
-
-##################
-# Client Certs
-##################
-
-# Client certificate encrypted key
-# openssl genrsa -aes256 -out intermediate/private/www.example.com.key.pem \
-#     -passout file:intermediate/private/passphrase_client.txt 4096
-
-# Client certificate decrypted key
-# openssl rsa -in intermediate/private/www.example.com.key.pem \
-#     -passin file:intermediate/private/passphrase_client.txt \
-#     -out intermediate/private/www.example.com.key.pem.decrypted
-
-# Client certificate CSR
-# openssl req -config intermediate/openssl_intermediate.cnf -new -${HASH_DIGEST} \
-#     -key intermediate/private/www.example.com.key.pem \
-#     -passin file:intermediate/private/passphrase_client.txt -batch \
-#     -out intermediate/www.example.com.csr.pem
-
-# Intermediate CA initialize database
-# sh -c 'echo 01 > intermediate/serial'
-# touch intermediate/index.txt
-
-# Client certificate
-# openssl ca -config intermediate/openssl_intermediate.cnf \
-#     -days 375 -notext -md ${HASH_DIGEST} \
-#     -in intermediate/www.example.com.csr.pem \
-#     -out intermediate/www.example.com.cert.pem
-#     -passin file:intermediate/private/passphrase_intermediate.txt -batch \
-#     -subj '/CN=www.example.com'
-
-# Client certificate text verification
-# openssl x509 -text -noout -in intermediate/www.example.com.cert.pem
-
-# Client chain openssl self-verification
-# openssl verify -CAfile intermediate/ca-chain.cert.pem \
-#     intermediate/www.example.com.cert.pem
-
-# Client chain of trust
-# sh -c 'cat intermediate/www.example.com.cert.pem \
-#     intermediate/intermediate.cert.pem root.cert.pem \
-#     > intermediate/www.example.com.chain.pem'
-
-# Client certificate SHA1 hash
-# openssl x509 -noout -fingerprint -sha1 -inform pem \
-# -in intermediate/www.example.com.cert.pem \
-# | tr -d ':' | sed -e 's|^SHA1 Fingerprint=||'
-
-# Client certificate of the forms
-# @host@.@domain@.@tld@.@CERTIFICATE_SHA1@.{cert,key,chain}.pem
+# openssl.cnf -- configuration of the ROOT CA.
+#
+# Used by
+#   bin/create_root.sh          req -x509 ... -extensions root_ca
+#   bin/create_intermediate.sh  ca ... -extensions intermediate_ca
+#                               (the root signs the intermediate)
+#   bin/create_crl.sh root, bin/revoke_certificate.sh root,
+#   bin/updatedb_and_delete_expired_certs.sh
+#
+# Extension sections are named for the certificate they are issued to; the
+# scripts choose one with -extensions. Validity periods are not set here:
+# each create_*.sh script owns its DAYS.
 
 .include ./common_policy.cnf
 
@@ -125,26 +17,18 @@
 default_ca        = CA_default
 
 [ CA_default ]
-# Directory and file locations.
 dir               = root
-certs             = $dir/certs
-crl_dir           = $dir/crl
 new_certs_dir     = $dir/newcerts
 database          = $dir/index.txt
 serial            = $dir/serial
-RANDFILE          = $dir/private/.rand
-
-# The root key and root certificate.
 private_key       = $dir/private/$dir.key.pem
 certificate       = $dir/certs/$dir.cert.pem
 
-# For certificate revocation lists.
+# The root only revokes intermediates, so its CRL can last a year and the
+# root key can stay offline. Run bin/create_crl.sh root (and
+# bin/publish_crls.sh --no-regenerate root) before it expires.
 crlnumber         = $dir/crlnumber
-crl               = $dir/crl/$dir.crl.pem
 crl_extensions    = crl_ext
-# 1 year: the root only revokes intermediates, so its key can stay offline;
-# run bin/create_crl.sh root (and bin/publish_crls.sh --no-regenerate root)
-# before the CRL expires.
 default_crl_days  = 365
 
 # SHA-1 is deprecated, so use SHA-2 instead.
@@ -152,26 +36,17 @@ default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-# 20 years (plus leap days)
-default_days      = 7305
 preserve          = no
 # set to policy_loose if state name/abbreviation mismatch on existing CA
 policy            = policy_strict
 
-# allow issuing multiple certificates with the same CN 
-unique_subject = no
+# allow issuing multiple certificates with the same CN
+unique_subject    = no
 
 [req]
 # Options for the `req` tool (`man req`).
-default_bits        = 4096
 distinguished_name  = req_distinguished_name
 string_mask         = utf8only
-
-# SHA-1 is deprecated, so use SHA-2 instead.
-default_md          = sha256
-
-# Extension to add when the -x509 option is used.
-x509_extensions     = v3_ca
 
 [ req_distinguished_name ]
 # See <https://en.wikipedia.org/wiki/Certificate_signing_request>.
@@ -190,12 +65,21 @@ organizationName_default        = $ENV::ORG_NAME
 organizationalUnitName_default  = $ENV::ORG_NAME Certification Authority
 commonName_default              = $ENV::ORG_NAME Root CA
 
-[ v3_ca ]
-# Extensions for a typical CA (`man x509v3_config`).
+[ root_ca ]
+# The self-signed root certificate (`man x509v3_config`).
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 basicConstraints = critical, CA:true, pathlen:1
 keyUsage = critical, cRLSign, keyCertSign
+
+[ intermediate_ca ]
+# The intermediate certificate, issued by the root.
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
+basicConstraints = critical, CA:true, pathlen:0
+keyUsage = critical, cRLSign, keyCertSign
+crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
+authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cer
 
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).

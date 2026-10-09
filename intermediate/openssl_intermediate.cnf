@@ -1,16 +1,15 @@
-# Change this block from the CA's ./openssl.cnf
-# [ CA_default ]
-# dir             = …/intermediate
-# database        = $dir/index_intermediate.txt
-# serial          = $dir/serial_intermediate
-# private_key     = $dir/private/intermediate.key.pem
-# certificate     = $dir/intermediate.cert.pem
-# crlnumber       = $dir/crlnumber_intermediate
-# crl             = $dir/intermediate.crl.pem
-# policy          = policy_loose
-
-# commonName                      = MacPorts Intermediate CA Surrogate
-# commonName_default              = MacPorts Intermediate CA Surrogate
+# openssl_intermediate.cnf -- configuration of the INTERMEDIATE CA.
+#
+# Used by
+#   bin/create_intermediate.sh  req (the subject of the intermediate's CSR)
+#   bin/create_crl.sh intermediate, bin/revoke_certificate.sh intermediate,
+#   bin/updatedb_and_delete_expired_certs.sh
+#   bin/create_server.sh, bin/create_codesign.sh  ca -revoke, through
+#                               pki_revoke_matching_cn
+# The intermediate's own certificate is issued by the ROOT, with the
+# intermediate_ca section of ../openssl.cnf. Certificates this CA issues use
+# the configuration of what they are (server/, codesign/, smime/), which
+# point at this CA's database.
 
 .include ./common_policy.cnf
 
@@ -18,22 +17,15 @@
 default_ca        = CA_default
 
 [ CA_default ]
-# Directory and file locations.
 dir               = intermediate
-certs             = $dir/certs
-crl_dir           = $dir/crl
 new_certs_dir     = $dir/newcerts
 database          = $dir/index.txt
 serial            = $dir/serial
-RANDFILE          = $dir/private/.rand
-
-# The root key and root certificate.
 private_key       = $dir/private/intermediate.key.pem
 certificate       = $dir/certs/intermediate.cert.pem
 
 # For certificate revocation lists.
 crlnumber         = $dir/crlnumber
-crl               = $dir/crl/intermediate.crl.pem
 crl_extensions    = crl_ext
 default_crl_days  = 30
 
@@ -42,25 +34,16 @@ default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-# 10 years, half of CA
-default_days      = 3653
 preserve          = no
 policy            = policy_loose
 
-# allow issuing multiple certificates with the same CN 
-unique_subject = no
+# allow issuing multiple certificates with the same CN
+unique_subject    = no
 
 [req]
 # Options for the `req` tool (`man req`).
-default_bits        = 4096
 distinguished_name  = req_distinguished_name
 string_mask         = utf8only
-
-# SHA-1 is deprecated, so use SHA-2 instead.
-default_md          = sha256
-
-# Extension to add when the -x509 option is used.
-x509_extensions     = v3_ca
 
 [ req_distinguished_name ]
 # See <https://en.wikipedia.org/wiki/Certificate_signing_request>.
@@ -79,23 +62,6 @@ organizationName_default        = $ENV::ORG_NAME
 organizationalUnitName_default  = $ENV::ORG_NAME Intermediate Certification Authority
 commonName_default              = $ENV::ORG_NAME Intermediate CA
 
-[ v3_intermediate_ca ]
-# Extensions for a typical intermediate CA (`man x509v3_config`).
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-basicConstraints = critical, CA:true, pathlen:0
-keyUsage = critical, cRLSign, keyCertSign
-crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cer
-
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).
 authorityKeyIdentifier=keyid:always
-
-[ ocsp ]
-# Extension for OCSP signing certificates (`man ocsp`).
-basicConstraints = CA:FALSE
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid
-keyUsage = critical, digitalSignature
-extendedKeyUsage = critical, OCSPSigning

@@ -156,21 +156,20 @@ for EXTENSION in signature encryption; do
 
     # Server CSR
     "${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
-	    -new -"${HASH_DIGEST}" \
-	    -key "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \
-	    -passin file:"${CERTDIR}"/private/passphrase.txt \
-	    -out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem -batch
+	-new -"${HASH_DIGEST}" \
+	-key "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \
+	-passin file:"${CERTDIR}"/private/passphrase.txt \
+	-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem -batch
 
     # Server certificate
-    if \
-	"${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
-		-extensions smime_${EXTENSION} \
-		-days ${DAYS} -notext -md "${HASH_DIGEST}" \
-		-in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem \
-		-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
-		-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
-		-subj "/CN=${EMAIL} - ${EXTENSION}/emailAddress=${EMAIL}/O=${ORG_NAME}/OU=${ORG_NAME} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
-		-batch
+    if "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
+	-extensions "${CERTDIR}_${EXTENSION}" \
+	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
+	-in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem \
+	-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
+	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
+	-subj "/CN=${EMAIL} - ${EXTENSION}/emailAddress=${EMAIL}/O=${ORG_NAME}/OU=${ORG_NAME} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
+	-batch
     then
 	NEW_SERIAL=$("${OPENSSL}" x509 -in "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem" -noout -serial | sed 's|^serial=||')
 	# not revoked yet: see the end of this script

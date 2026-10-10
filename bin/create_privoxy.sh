@@ -87,8 +87,8 @@ fi
 
 # CA certificate
 "${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
+	-extensions "${CERTDIR}_ca" \
 	-new -x509 -days "${DAYS}" -"${HASH_DIGEST}" \
-	-extensions v3_ca \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-key "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 	-passin file:"${CERTDIR}"/private/passphrase.txt -batch

@@ -52,9 +52,9 @@ esac
 	-out "${CERTDIR}"/certs/"${CERTNAME}".csr.pem -batch
 
 # Server certificate
-if \
-    "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
-	-days ${DAYS} -notext -md "${HASH_DIGEST}" -extensions codesign \
+if "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
+	-extensions "${CERTDIR}" \
+	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \

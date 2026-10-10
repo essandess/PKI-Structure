@@ -111,11 +111,10 @@ fi
 	-out "${CERTDIR}"/certs/"${CERTNAME}".csr.pem -batch
 
 # Intermediate CA certificate
-if \
-    "${OPENSSL}" ca -config openssl.cnf \
-	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
+if "${OPENSSL}" ca -config openssl.cnf \
 	-extfile "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
-	-extensions intermediate_ca \
+	-extensions "${CERTDIR}_ca" \
+	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt -batch

@@ -1,16 +1,13 @@
-# Change this block from the CA's ./openssl.cnf
-# [ CA_default ]
-# dir             = …/intermediate
-# database        = $dir/index_intermediate.txt
-# serial          = $dir/serial_intermediate
-# private_key     = $dir/private/intermediate.key.pem
-# certificate     = $dir/intermediate.cert.pem
-# crlnumber       = $dir/crlnumber_intermediate
-# crl             = $dir/intermediate.crl.pem
-# policy          = policy_loose
-
-# commonName                      = MacPorts Intermediate CA Surrogate
-# commonName_default              = MacPorts Intermediate CA Surrogate
+# openssl_smime.cnf -- S/MIME certificates, issued by the INTERMEDIATE.
+#
+# Used by
+#   bin/create_smime.sh  req (the CSR), ca ... -extensions smime_signature
+#                        and smime_encryption (one certificate each), and
+#                        ca -revoke of superseded ones (pki_revoke_matching_cn)
+# CA_default is the intermediate's: it points at the intermediate's database
+# and key. Validity is set by the script (DAYS).
+# https://www.dalesandro.net/create-self-signed-smime-certificates/
+# https://gist.github.com/richieforeman/3166387
 
 .include ./common_policy.cnf
 
@@ -18,51 +15,30 @@
 default_ca        = CA_default
 
 [ CA_default ]
-# Directory and file locations.
 dir               = intermediate
-certs             = $dir/certs
-crl_dir           = $dir/crl
 new_certs_dir     = $dir/newcerts
 database          = $dir/index.txt
 serial            = $dir/serial
-RANDFILE          = $dir/private/.rand
-
-# The root key and root certificate.
 private_key       = $dir/private/$dir.key.pem
 certificate       = $dir/certs/$dir.cert.pem
-
-# For certificate revocation lists.
-crlnumber         = $dir/crlnumber
-crl               = $dir/crl/$dir.crl.pem
-crl_extensions    = crl_ext
-default_crl_days  = 30
 
 # SHA-1 is deprecated, so use SHA-2 instead.
 default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-# https://support.apple.com/en-us/HT210176
-# Technically longer acceptable for noncommercial S/MIME,
-# but not not recommended or guaranteed to be accepted
-default_days      = 825
 preserve          = no
 policy            = policy_strict
 
-# allow issuing multiple certificates with the same CN 
-unique_subject = no
+# allow issuing multiple certificates with the same CN
+unique_subject    = no
 
 [req]
 # Options for the `req` tool (`man req`).
-# default_bits        = 4096
-default_bits        = 3072
 distinguished_name  = req_distinguished_name
 string_mask         = utf8only
 
-# SHA-1 is deprecated, so use SHA-2 instead.
-default_md          = sha256
-
-# note: these settings are overridden in the script create_smime.sh
+# note: these settings are overridden by the -subj in bin/create_smime.sh
 [req_distinguished_name]
 countryName = $ENV::ORG_COUNTRY
 countryName_default = $ENV::ORG_COUNTRY
@@ -81,31 +57,8 @@ commonName_max = 64
 emailAddress = $ENV::ORG_EMAIL
 emailAddress_max = 254
 
-[ crl_ext ]
-# Extension for CRLs (`man x509v3_config`).
-authorityKeyIdentifier=keyid:always
-
-[ ocsp ]
-# Extension for OCSP signing certificates (`man ocsp`).
-basicConstraints = CA:FALSE
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid
-keyUsage = critical, digitalSignature
-extendedKeyUsage = critical, OCSPSigning
-
-# SMIME certificates (`man x509v3_config`)
-# https://www.dalesandro.net/create-self-signed-smime-certificates/
-# https://gist.github.com/richieforeman/3166387
-
-[ smime ]
-basicConstraints = CA:FALSE
-keyUsage = nonRepudiation, digitalSignature, keyEncipherment
-extendedKeyUsage = emailProtection
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-subjectAltName = email:copy
-crlDistributionPoints = URI:http://$ENV::PKI_FQDN/intermediate.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer
+# S/MIME certificates (`man x509v3_config`). Two certificates per identity:
+# one for signing, one for encryption (create_smime.sh issues both).
 
 [ smime_encryption ]
 basicConstraints = CA:FALSE

@@ -1,16 +1,15 @@
-# Change this block from the CA's ./openssl.cnf
-# [ CA_default ]
-# dir             = …/intermediate
-# database        = $dir/index_intermediate.txt
-# serial          = $dir/serial_intermediate
-# private_key     = $dir/private/intermediate.key.pem
-# certificate     = $dir/intermediate.cert.pem
-# crlnumber       = $dir/crlnumber_intermediate
-# crl             = $dir/intermediate.crl.pem
-# policy          = policy_loose
-
-# commonName                      = MacPorts Intermediate CA Surrogate
-# commonName_default              = MacPorts Intermediate CA Surrogate
+# openssl_privoxy.cnf -- the PRIVOXY CA (self-signed; its own trust anchor).
+#
+# Used by
+#   bin/create_privoxy.sh   req -x509 ... -extensions privoxy_ca
+#   bin/create_crl.sh privoxy, bin/revoke_certificate.sh privoxy,
+#   bin/updatedb_and_delete_expired_certs.sh
+# The certificate it issues (adblock2privoxy-nginx) uses
+# privoxy/adblock2privoxy/openssl_adblock2privoxy.cnf, which points at this
+# CA's database.
+# Validity is set by create_privoxy.sh (DAYS): 825 days, the same as the
+# certificates it issues, so that its key is not exposed for longer than
+# those are.
 
 .include ./common_policy.cnf
 
@@ -18,22 +17,15 @@
 default_ca        = CA_default
 
 [ CA_default ]
-# Directory and file locations.
 dir               = privoxy
-certs             = $dir/certs
-crl_dir           = $dir/crl
 new_certs_dir     = $dir/newcerts
 database          = $dir/index.txt
 serial            = $dir/serial
-RANDFILE          = $dir/private/.rand
-
-# The root key and root certificate.
 private_key       = $dir/private/$dir.key.pem
 certificate       = $dir/certs/$dir.cert.pem
 
 # For certificate revocation lists.
 crlnumber         = $dir/crlnumber
-crl               = $dir/crl/$dir.crl.pem
 crl_extensions    = crl_ext
 default_crl_days  = 30
 
@@ -42,22 +34,16 @@ default_md        = sha256
 
 name_opt          = ca_default
 cert_opt          = ca_default
-default_days      = 3653
 preserve          = no
 policy            = policy_strict
 
-# allow issuing multiple certificates with the same CN 
-unique_subject = no
+# allow issuing multiple certificates with the same CN
+unique_subject    = no
 
 [req]
 # Options for the `req` tool (`man req`).
-# default_bits        = 4096
-default_bits        = 2048
 distinguished_name  = req_distinguished_name
 string_mask         = utf8only
-
-# SHA-1 is deprecated, so use SHA-2 instead.
-default_md          = sha256
 
 [req_distinguished_name]
 countryName = $ENV::ORG_COUNTRY
@@ -80,9 +66,8 @@ emailAddress = $ENV::ORG_EMAIL
 emailAddress_default = $ENV::ORG_EMAIL
 emailAddress_max = 254
 
-
-[ v3_ca ]
-# Extensions for a typical CA (`man x509v3_config`).
+[ privoxy_ca ]
+# The self-signed privoxy CA certificate (`man x509v3_config`).
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 basicConstraints = critical, CA:true, pathlen:1
@@ -91,31 +76,3 @@ keyUsage = critical, cRLSign, keyCertSign
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).
 authorityKeyIdentifier=keyid:always
-
-[ ocsp ]
-# Extension for OCSP signing certificates (`man ocsp`).
-basicConstraints = CA:FALSE
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid
-keyUsage = critical, digitalSignature
-extendedKeyUsage = critical, OCSPSigning
-
-# SMIME certificates (`man x509v3_config`)
-# https://www.dalesandro.net/create-self-signed-smime-certificates/
-# https://gist.github.com/richieforeman/3166387
-
-[ smime_encryption ]
-basicConstraints = CA:FALSE
-keyUsage = critical, keyEncipherment
-extendedKeyUsage = critical, emailProtection
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-subjectAltName = email:copy
-
-[ smime_signature ]
-basicConstraints = CA:FALSE
-keyUsage = critical, nonRepudiation, digitalSignature
-extendedKeyUsage = critical, emailProtection
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-subjectAltName = email:copy

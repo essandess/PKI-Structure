@@ -66,7 +66,7 @@ fi
 case $- in
     *x*) set +x; echo "(xtrace off: it would show passwords)" >&2 ;;
 esac
-trap 'rc=$?; echo "Error: ${0##*/} failed (exit ${rc}) at line ${LINENO}" >&2' ERR
+trap 'echo "Error: ${0##*/} failed (exit $?) at line ${LINENO}" >&2' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -213,9 +213,13 @@ probe() {
     fi
     pem=$(sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' \
               <<<"${out}")
-    if [ -z "${pem}" ]; then PROBE_ERR="no certificate in the .p12"; return 1; fi
-    info=$("${OPENSSL}" x509 -noout -serial -startdate -enddate \
-               <<<"${pem}" 2>/dev/null) || { PROBE_ERR="unreadable certificate"; return 1; }
+    if [ -z "${pem}" ]; then
+        PROBE_ERR="no certificate in the .p12"; return 1
+    fi
+    if ! info=$("${OPENSSL}" x509 -noout -serial -startdate -enddate \
+                    <<<"${pem}" 2>/dev/null); then
+        PROBE_ERR="unreadable certificate"; return 1
+    fi
     while IFS='=' read -r key val; do
         case ${key} in
             serial)    P_SERIAL=${val^^} ;;
@@ -251,7 +255,8 @@ index_status() {
             if ($1 == "V") out = "valid"
             else if ($1 == "R") {
                 out = "revoked"
-                if (index($3, ",")) out = out " (" substr($3, index($3, ",") + 1) ")"
+                c = index($3, ",")
+                if (c) out = out " (" substr($3, c + 1) ")"
             } else if ($1 == "E") out = "expired"
             else out = $1
             print out; found = 1; exit
@@ -322,15 +327,17 @@ for tree in "${TREES[@]}"; do
     fi
     for p12 in "${tree}"/smime/private/*.p12; do
         if [[ ${p12##*/} =~ ${NAME_RE} ]]; then
-            C_TREE+=("${tree}"); C_FILE+=("${p12}"); C_NAME+=("${BASH_REMATCH[1]}")
+            C_TREE+=("${tree}")
+            C_FILE+=("${p12}")
+            C_NAME+=("${BASH_REMATCH[1]}")
         else
             IGNORED=$((IGNORED + 1))
         fi
     done
 done
 if [ "${IGNORED}" -gt 0 ]; then
-    warn "${IGNORED} .p12 not named <name>-{signature,encryption}[.<sha1>].p12" \
-         "were ignored"
+    warn "${IGNORED} .p12 not named" \
+         "<name>-{signature,encryption}[.<sha1>].p12 were ignored"
 fi
 
 R_TREE=() R_FILE=() R_NAME=() R_SRC=() R_LINE=() R_START=() R_END=()
@@ -351,7 +358,8 @@ for ((c = 0; c < ${#C_FILE[@]}; c++)); do
         pw=""
         st=$(index_status "${C_TREE[c]}" "${P_SERIAL}")
         if [ "${P_EXPIRED}" -eq 1 ]; then
-            if [ "${st}" = valid ]; then st=expired; else st="expired, ${st}"; fi
+            if [ "${st}" = valid ]; then st=expired
+            else st="expired, ${st}"; fi
         fi
         R_TREE+=("${C_TREE[c]}"); R_FILE+=("${C_FILE[c]}")
         R_NAME+=("${C_NAME[c]}"); R_SRC+=("${SRC_FILE}")
@@ -413,7 +421,10 @@ for ((g = 0; g < ${#G_TREE[@]}; g++)); do
     fi
     case ${label} in Title|UserName|Password|URL|Notes) label+=" (pw)" ;; esac
     base=${label}; n=2
-    while [ -n "${LABEL_TAKEN[${label}]+x}" ]; do label="${base} #${n}"; n=$((n + 1)); done
+    while [ -n "${LABEL_TAKEN[${label}]+x}" ]; do
+        label="${base} #${n}"
+        n=$((n + 1))
+    done
     LABEL_TAKEN[${label}]=1
     G_LABEL[g]=${label}
 done
@@ -430,7 +441,9 @@ else
     newest=""
     for ((i = 0; i < ${#R_FILE[@]}; i++)); do
         for f in "${R_FILE[i]}" "${R_SRC[i]}"; do
-            if [ -z "${newest}" ] || [ "${f}" -nt "${newest}" ]; then newest=${f}; fi
+            if [ -z "${newest}" ] || [ "${f}" -nt "${newest}" ]; then
+                newest=${f}
+            fi
         done
     done
     for tree in "${TREES[@]}"; do
@@ -460,7 +473,7 @@ print_plan() {
         case ${G_KIND[g]} in
             pass)  echo "   password: each .p12.pass file (same in all)" ;;
             line2) echo "   password: smime/private/passphrase.txt line 2" ;;
-            line1) echo "   password: passphrase.txt line 1 = KEY PASSPHRASE" ;;
+            line1) echo "   password: passphrase.txt line 1 (KEY pass)" ;;
         esac
     done
     if [ "${#SKIPPED[@]}" -gt 0 ]; then
@@ -502,7 +515,9 @@ TS_OLD="2000-01-01T00:00:00Z"   # never newer than what the database has
 xml_esc() {
     local s=$1 t=$1
     if [ "$2" -eq 1 ]; then t=${s//$'\n'/}; fi
-    if [[ ${t} =~ [[:cntrl:]] ]]; then die "a value contains a control character"; fi
+    if [[ ${t} =~ [[:cntrl:]] ]]; then
+        die "a value contains a control character"
+    fi
     s=${s//&/'&amp;'}
     s=${s//</'&lt;'}
     s=${s//>/'&gt;'}
@@ -533,7 +548,8 @@ emit_group_open() {   # emit_group_open NAME PATH
     local n u
     n=$(xml_esc "$1" 0)
     u=$(det_uuid "group:$2")
-    printf '\t\t<Group>\n\t\t\t<UUID>%s</UUID>\n\t\t\t<Name>%s</Name>\n' "${u}" "${n}"
+    printf '\t\t<Group>\n\t\t\t<UUID>%s</UUID>\n' "${u}"
+    printf '\t\t\t<Name>%s</Name>\n' "${n}"
     emit_times "${TS_OLD}"
     printf '\t\t\t<IsExpanded>True</IsExpanded>\n'
 }
@@ -565,7 +581,8 @@ build_notes() {
 emit_entry() {
     local g pw notes
     notes=$(build_notes)
-    printf '\t\t<Entry>\n\t\t\t<UUID>%s</UUID>\n' "$(det_uuid "entry:${GROUP}/${TITLE}")"
+    printf '\t\t<Entry>\n\t\t\t<UUID>%s</UUID>\n' \
+        "$(det_uuid "entry:${GROUP}/${TITLE}")"
     printf '\t\t\t<IconID>0</IconID>\n\t\t\t<Tags>pki;smime</Tags>\n'
     emit_times "${MOD}"
     emit_string Title "${TITLE}"
@@ -585,7 +602,8 @@ emit_entry() {
 emit_xml() {
     local parts=() p path=""
     printf '<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n'
-    printf '<KeePassFile>\n\t<Meta>\n\t\t<Generator>%s</Generator>\n' "${0##*/}"
+    printf '<KeePassFile>\n\t<Meta>\n'
+    printf '\t\t<Generator>%s</Generator>\n' "${0##*/}"
     printf '\t</Meta>\n\t<Root>\n'
     emit_group_open Root ""
     if [ -n "${GROUP}" ]; then IFS=/ read -r -a parts <<<"${GROUP}"; fi
@@ -600,7 +618,8 @@ emit_xml() {
 
 if [ -n "${XML_OUT}" ]; then
     if [ -e "${XML_OUT}" ]; then die "${XML_OUT} exists; not overwriting"; fi
-    warn "${XML_OUT} will hold the passwords in PLAIN TEXT; delete it after use"
+    warn "${XML_OUT} will hold the passwords in PLAIN TEXT;" \
+         "delete it after use"
     if ! confirm "Write it?"; then die "Aborted."; fi
     ( set -o noclobber; emit_xml > "${XML_OUT}" )
     echo "Wrote ${XML_OUT} (mode 0600)."
@@ -649,7 +668,8 @@ fi
 kp() {
     local n=$1 i
     shift
-    if [ "${KP_PROMPT}" -eq 1 ] || [ "${NOPASS}" -eq 1 ] || [ "${n}" -eq 0 ]; then
+    if [ "${KP_PROMPT}" -eq 1 ] || [ "${NOPASS}" -eq 1 ] \
+       || [ "${n}" -eq 0 ]; then
         "${KPCLI}" "$@"
     else
         for ((i = 0; i < n; i++)); do printf '%s\n' "${KP_PASS}"; done \

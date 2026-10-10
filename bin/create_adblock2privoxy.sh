@@ -58,11 +58,11 @@ esac
 	-out "${CERTDIR}"/certs/"${CERTNAME}".csr.pem -batch
 
 # Server certificate
-if \
-    "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR##*/}".cnf \
+if "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR##*/}".cnf \
+	-extensions "${CERTDIR##*/}" \
 	-keyfile "${ISSUERCADIR}"/private/"${ISSUERCANAME}".key.pem \
 	-cert "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
-	-days ${DAYS} -notext -md "${HASH_DIGEST}" -extensions server_cert \
+	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \

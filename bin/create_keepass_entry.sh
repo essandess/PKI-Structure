@@ -402,6 +402,7 @@ for ((i = 0; i < ${#R_FILE[@]}; i++)); do
     G_MEM[g]="${G_MEM[g]} ${i}"
 done
 
+ARCHIVED_RE='\.[0-9a-f]{40}\.p12$'
 declare -A LABEL_TAKEN=()
 for ((g = 0; g < ${#G_TREE[@]}; g++)); do
     names=() dates=()
@@ -409,12 +410,17 @@ for ((g = 0; g < ${#G_TREE[@]}; g++)); do
         names+=("${R_NAME[i]}")
         dates+=("$(iso_date "${R_START[i]}")")
     done
+    archived=0
+    for i in ${G_MEM[g]}; do
+        if [[ ${R_FILE[i]##*/} =~ ${ARCHIVED_RE} ]]; then archived=1; fi
+    done
     mapfile -t uniq < <(printf '%s\n' "${names[@]}" | sort -u)
     mapfile -t dsort < <(printf '%s\n' "${dates[@]}" | sort)
     if [ "${G_KIND[g]}" = pass ]; then
         label="${uniq[0]}"
         if [ "${#uniq[@]}" -gt 1 ]; then label+=" +$((${#uniq[@]} - 1))"; fi
         label+=" [${dsort[0]}]"
+        if [ "${archived}" -eq 1 ]; then label+=" archived"; fi
     else
         label="older .p12, passphrase.txt line ${G_LINE[g]}"
         label+=" [$(tree_name "${G_TREE[g]}")]"
@@ -456,7 +462,7 @@ fi
 # ------------------------------------------------------------------- plan
 
 print_plan() {
-    local g i k s base
+    local g i k s base when
     echo "S/MIME .p12 passwords for: ${GLOBS[*]}"
     echo "Entry title: ${TITLE}${GROUP:+  (group ${GROUP})}"
     if [ -n "${DB}" ]; then echo "Database:    ${DB}"; fi
@@ -468,7 +474,9 @@ print_plan() {
         for i in ${G_MEM[g]}; do
             base=${R_FILE[i]##*/}
             echo "   $(abbr "${base}")"
-            echo "       ${R_STATUS[i]}; expires ${R_END[i]}"
+            when=expires
+            if [[ ${R_STATUS[i]} == expired* ]]; then when=ended; fi
+            echo "       ${R_STATUS[i]}; ${when} ${R_END[i]}"
         done
         case ${G_KIND[g]} in
             pass)  echo "   password: each .p12.pass file (same in all)" ;;
@@ -482,7 +490,7 @@ print_plan() {
         for s in "${SKIPPED[@]}"; do
             base=${s%%|*}
             echo "  $(abbr "${base##*/}")"
-            echo "      ${s#*|}"
+            echo "${s#*|}" | fold -s -w 68 | sed 's/^/      /'
         done
     fi
     echo
@@ -573,7 +581,7 @@ build_notes() {
         echo
         echo "${G_LABEL[g]}"
         for i in ${G_MEM[g]}; do
-            echo "  ${R_FILE[i]##*/}: ${R_STATUS[i]}; expires ${R_END[i]}"
+            echo "  ${R_FILE[i]##*/}: ${R_STATUS[i]}; ${R_END[i]}"
         done
     done
 }

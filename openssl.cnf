@@ -14,39 +14,39 @@
 .include ./common_policy.cnf
 
 [ca]
-default_ca        = CA_default
+default_ca                      = CA_default
 
 [ CA_default ]
-dir               = root
-new_certs_dir     = $dir/newcerts
-database          = $dir/index.txt
-serial            = $dir/serial
-private_key       = $dir/private/$dir.key.pem
-certificate       = $dir/certs/$dir.cert.pem
+dir                             = root
+new_certs_dir                   = $dir/newcerts
+serial                          = $dir/serial
+database                        = $dir/index.txt
+private_key                     = $dir/private/$dir.key.pem
+certificate                     = $dir/certs/$dir.cert.pem
 
 # The root only revokes intermediates, so its CRL can last a year and the
 # root key can stay offline. Run bin/create_crl.sh root (and
 # bin/publish_crls.sh --no-regenerate root) before it expires.
-crlnumber         = $dir/crlnumber
-crl_extensions    = crl_ext
-default_crl_days  = 365
+crlnumber                       = $dir/crlnumber
+crl_extensions                  = crl_ext
+default_crl_days                = 365
 
 # SHA-1 is deprecated, so use SHA-2 instead.
-default_md        = sha256
+default_md                      = sha256
 
-name_opt          = ca_default
-cert_opt          = ca_default
-preserve          = no
+name_opt                        = ca_default
+cert_opt                        = ca_default
+preserve                        = no
 # set to policy_loose if state name/abbreviation mismatch on existing CA
-policy            = policy_strict
+policy                          = policy_strict
 
 # allow issuing multiple certificates with the same CN
-unique_subject    = no
+unique_subject                  = no
 
 [req]
 # Options for the `req` tool (`man req`).
-distinguished_name  = req_distinguished_name
-string_mask         = utf8only
+distinguished_name              = req_distinguished_name
+string_mask                     = utf8only
 
 [ req_distinguished_name ]
 # See <https://en.wikipedia.org/wiki/Certificate_signing_request>.
@@ -67,20 +67,20 @@ commonName_default              = $ENV::ORG_NAME Root CA
 
 [ root_ca ]
 # The self-signed root certificate (`man x509v3_config`).
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-basicConstraints = critical, CA:true, pathlen:1
-keyUsage = critical, cRLSign, keyCertSign
+subjectKeyIdentifier            = hash
+authorityKeyIdentifier          = keyid:always
+basicConstraints                = critical, CA:true, pathlen:1
+keyUsage                        = critical, cRLSign, keyCertSign
 
 [ intermediate_ca ]
 # The intermediate certificate, issued by the root.
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-basicConstraints = critical, CA:true, pathlen:0
-keyUsage = critical, cRLSign, keyCertSign
-crlDistributionPoints = URI:http://$ENV::PKI_FQDN/root.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/root.cer
+subjectKeyIdentifier            = hash
+authorityKeyIdentifier          = keyid:always
+basicConstraints                = critical, CA:true, pathlen:0
+keyUsage                        = critical, cRLSign, keyCertSign
+crlDistributionPoints           = URI:http://$ENV::PKI_FQDN/root.crl
+authorityInfoAccess             = caIssuers;URI:http://$ENV::PKI_FQDN/root.cer
 
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).
-authorityKeyIdentifier=keyid:always
+authorityKeyIdentifier          = keyid:always

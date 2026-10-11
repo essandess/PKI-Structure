@@ -91,7 +91,8 @@ fi
 	-new -x509 -days "${DAYS}" -"${HASH_DIGEST}" \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-key "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-	-passin file:"${CERTDIR}"/private/passphrase.txt -batch
+	-passin file:"${CERTDIR}"/private/passphrase.txt \
+        -batch
 REISSUED=1
 
 # CA certificate openssl self-verification

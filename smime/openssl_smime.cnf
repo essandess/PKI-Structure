@@ -12,70 +12,71 @@
 .include ./common_policy.cnf
 
 [ca]
-default_ca        = CA_default
+default_ca                      = CA_default
 
 [ CA_default ]
-dir               = intermediate
-new_certs_dir     = $dir/newcerts
-database          = $dir/index.txt
-serial            = $dir/serial
-private_key       = $dir/private/$dir.key.pem
-certificate       = $dir/certs/$dir.cert.pem
+dir                             = intermediate
+new_certs_dir                   = $dir/newcerts
+database                        = $dir/index.txt
+# serial                          = $dir/serial
+rand_serial                     = yes
+private_key                     = $dir/private/$dir.key.pem
+certificate                     = $dir/certs/$dir.cert.pem
 
 # SHA-1 is deprecated, so use SHA-2 instead.
-default_md        = sha256
+default_md                      = sha256
 
-name_opt          = ca_default
-cert_opt          = ca_default
-preserve          = no
-policy            = policy_strict
+name_opt                        = ca_default
+cert_opt                        = ca_default
+preserve                        = no
+policy                          = policy_strict
 
 # allow issuing multiple certificates with the same CN
-unique_subject    = no
+unique_subject                   = no
 
 [req]
 # Options for the `req` tool (`man req`).
-distinguished_name  = req_distinguished_name
-string_mask         = utf8only
+distinguished_name              = req_distinguished_name
+string_mask                     = utf8only
 
 # note: these settings are overridden by the -subj in bin/create_smime.sh
 [req_distinguished_name]
-countryName = $ENV::ORG_COUNTRY
-countryName_default = $ENV::ORG_COUNTRY
-countryName_min = 2
-countryName_max = 2
-stateOrProvinceName = $ENV::ORG_STATE
-stateOrProvinceName_default = $ENV::ORG_STATE
-localityName = $ENV::ORG_LOCALITY
-localityName_default = $ENV::ORG_LOCALITY
-organizationName = $ENV::ORG_NAME
-organizationName_default = $ENV::ORG_NAME S/MIME
-organizationalUnitName = $ENV::ORG_NAME S/MIME
-commonName = $ENV::ORG_NAME S/MIME
-commonName_default = $ENV::ORG_NAME S/MIME
-commonName_max = 64
-emailAddress = $ENV::ORG_EMAIL
-emailAddress_max = 254
+countryName                     = $ENV::ORG_COUNTRY
+countryName_default             = $ENV::ORG_COUNTRY
+countryName_min                 = 2
+countryName_max                 = 2
+stateOrProvinceName             = $ENV::ORG_STATE
+stateOrProvinceName_default     = $ENV::ORG_STATE
+localityName                    = $ENV::ORG_LOCALITY
+localityName_default            = $ENV::ORG_LOCALITY
+organizationName                = $ENV::ORG_NAME
+organizationName_default        = $ENV::ORG_NAME S/MIME
+organizationalUnitName          = $ENV::ORG_NAME S/MIME
+commonName                      = $ENV::ORG_NAME S/MIME
+commonName_default              = $ENV::ORG_NAME S/MIME
+commonName_max                  = 64
+emailAddress                    = $ENV::ORG_EMAIL
+emailAddress_max                = 254
 
 # S/MIME certificates (`man x509v3_config`). Two certificates per identity:
 # one for signing, one for encryption (create_smime.sh issues both).
 
 [ smime_encryption ]
-basicConstraints = CA:FALSE
-keyUsage = critical, keyEncipherment
-extendedKeyUsage = critical, emailProtection
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-subjectAltName = email:copy
-crlDistributionPoints = URI:http://$ENV::PKI_FQDN/intermediate.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer
+basicConstraints                = CA:FALSE
+keyUsage                        = critical, keyEncipherment
+extendedKeyUsage                = critical, emailProtection
+subjectKeyIdentifier            = hash
+authorityKeyIdentifier          = keyid:always
+subjectAltName                  = email:copy
+crlDistributionPoints           = URI:http://$ENV::PKI_FQDN/intermediate.crl
+authorityInfoAccess     = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer
 
 [ smime_signature ]
-basicConstraints = CA:FALSE
-keyUsage = critical, nonRepudiation, digitalSignature
-extendedKeyUsage = critical, emailProtection
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-subjectAltName = email:copy
-crlDistributionPoints = URI:http://$ENV::PKI_FQDN/intermediate.crl
-authorityInfoAccess = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer
+basicConstraints                = CA:FALSE
+keyUsage                        = critical, nonRepudiation, digitalSignature
+extendedKeyUsage                = critical, emailProtection
+subjectKeyIdentifier            = hash
+authorityKeyIdentifier          = keyid:always
+subjectAltName                  = email:copy
+crlDistributionPoints           = URI:http://$ENV::PKI_FQDN/intermediate.crl
+authorityInfoAccess     = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer

@@ -10,59 +10,60 @@
 .include ./common_policy.cnf
 
 [ca]
-default_ca        = CA_default
+default_ca                      = CA_default
 
 [ CA_default ]
-dir               = privoxy
-new_certs_dir     = $dir/newcerts
-database          = $dir/index.txt
-serial            = $dir/serial
-private_key       = $dir/private/$dir.key.pem
-certificate       = $dir/certs/$dir.cert.pem
+dir                             = privoxy
+new_certs_dir                   = $dir/newcerts
+database                        = $dir/index.txt
+# serial                          = $dir/serial
+rand_serial                     = yes
+private_key                     = $dir/private/$dir.key.pem
+certificate                     = $dir/certs/$dir.cert.pem
 
 # SHA-1 is deprecated, so use SHA-2 instead.
-default_md        = sha256
+default_md                      = sha256
 
-name_opt          = ca_default
-cert_opt          = ca_default
-preserve          = no
-policy            = policy_strict
+name_opt                        = ca_default
+cert_opt                        = ca_default
+preserve                        = no
+policy                          = policy_strict
 
 # allow issuing multiple certificates with the same CN
-unique_subject    = no
+unique_subject                  = no
 
 [req]
 # Options for the `req` tool (`man req`).
-distinguished_name  = req_distinguished_name
-string_mask         = utf8only
+distinguished_name              = req_distinguished_name
+string_mask                     = utf8only
 
 [req_distinguished_name]
-countryName = $ENV::ORG_COUNTRY
-countryName_default = $ENV::ORG_COUNTRY
-countryName_min = 2
-countryName_max = 2
-stateOrProvinceName = $ENV::ORG_STATE
-stateOrProvinceName_default = $ENV::ORG_STATE
-localityName = $ENV::ORG_LOCALITY
-localityName_default = $ENV::ORG_LOCALITY
-organizationName = $ENV::ORG_NAME Privoxy
-organizationName_default = $ENV::ORG_NAME Privoxy
-organizationalUnitName = adblock2privoxy-nginx
-organizationalUnitName_default = adblock2privoxy-nginx
-commonName = adblock2privoxy-nginx
-commonName_default = adblock2privoxy-nginx
-commonName_max = 64
+countryName                     = $ENV::ORG_COUNTRY
+countryName_default             = $ENV::ORG_COUNTRY
+countryName_min                 = 2
+countryName_max                 = 2
+stateOrProvinceName             = $ENV::ORG_STATE
+stateOrProvinceName_default     = $ENV::ORG_STATE
+localityName                    = $ENV::ORG_LOCALITY
+localityName_default            = $ENV::ORG_LOCALITY
+organizationName                = $ENV::ORG_NAME Privoxy
+organizationName_default        = $ENV::ORG_NAME Privoxy
+organizationalUnitName          = adblock2privoxy-nginx
+organizationalUnitName_default  = adblock2privoxy-nginx
+commonName                      = adblock2privoxy-nginx
+commonName_default              = adblock2privoxy-nginx
+commonName_max                  = 64
 # email deprecated, but private intercepting proxy has no AIA
-emailAddress = $ENV::ORG_EMAIL
-emailAddress_default = $ENV::ORG_EMAIL
-emailAddress_max = 254
+emailAddress                    = $ENV::ORG_EMAIL
+emailAddress_default            = $ENV::ORG_EMAIL
+emailAddress_max                = 254
 
 [ adblock2privoxy ]
 # Extensions for the server certificate (`man x509v3_config`).
-basicConstraints = CA:FALSE
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-keyUsage = critical, digitalSignature
-extendedKeyUsage = serverAuth
+basicConstraints                = CA:FALSE
+subjectKeyIdentifier            = hash
+authorityKeyIdentifier          = keyid:always
+keyUsage                        = critical, digitalSignature
+extendedKeyUsage                = serverAuth
 # e.g. DNS:myorganization.org, DNS:hostname.myorganization.org, IP:10.0.1.3
-subjectAltName = $ENV::SUBJECTALTNAME_ADBLOCK2PRIVOXY
+subjectAltName                  = $ENV::SUBJECTALTNAME_ADBLOCK2PRIVOXY

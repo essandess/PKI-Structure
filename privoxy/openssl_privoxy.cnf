@@ -14,65 +14,65 @@
 .include ./common_policy.cnf
 
 [ca]
-default_ca        = CA_default
+default_ca                      = CA_default
 
 [ CA_default ]
-dir               = privoxy
-new_certs_dir     = $dir/newcerts
-database          = $dir/index.txt
-serial            = $dir/serial
-private_key       = $dir/private/$dir.key.pem
-certificate       = $dir/certs/$dir.cert.pem
+dir                             = privoxy
+new_certs_dir                   = $dir/newcerts
+database                        = $dir/index.txt
+serial                          = $dir/serial
+private_key                     = $dir/private/$dir.key.pem
+certificate                     = $dir/certs/$dir.cert.pem
 
 # For certificate revocation lists.
-crlnumber         = $dir/crlnumber
-crl_extensions    = crl_ext
-default_crl_days  = 30
+crlnumber                       = $dir/crlnumber
+crl_extensions                  = crl_ext
+default_crl_days                = 30
 
 # SHA-1 is deprecated, so use SHA-2 instead.
-default_md        = sha256
+default_md                      = sha256
 
-name_opt          = ca_default
-cert_opt          = ca_default
-preserve          = no
-policy            = policy_strict
+name_opt                        = ca_default
+cert_opt                        = ca_default
+preserve                        = no
+policy                          = policy_strict
 
 # allow issuing multiple certificates with the same CN
-unique_subject    = no
+unique_subject                  = no
 
 [req]
 # Options for the `req` tool (`man req`).
-distinguished_name  = req_distinguished_name
-string_mask         = utf8only
+distinguished_name              = req_distinguished_name
+string_mask                     = utf8only
 
 [req_distinguished_name]
-countryName = $ENV::ORG_COUNTRY
-countryName_default = $ENV::ORG_COUNTRY
-countryName_min = 2
-countryName_max = 2
-stateOrProvinceName = $ENV::ORG_STATE
-stateOrProvinceName_default = $ENV::ORG_STATE
-localityName = $ENV::ORG_LOCALITY
-localityName_default = $ENV::ORG_LOCALITY
-organizationName = $ENV::ORG_NAME Privoxy
-organizationName_default = $ENV::ORG_NAME Privoxy
-organizationalUnitName = $ENV::ORG_NAME Privoxy
-organizationalUnitName_default = $ENV::ORG_NAME Privoxy
-commonName = $ENV::ORG_NAME Privoxy Root CA
-commonName_default = $ENV::ORG_NAME Privoxy Root CA
-commonName_max = 64
+countryName                     = $ENV::ORG_COUNTRY
+countryName_default             = $ENV::ORG_COUNTRY
+countryName_min                 = 2
+countryName_max                 = 2
+stateOrProvinceName             = $ENV::ORG_STATE
+stateOrProvinceName_default     = $ENV::ORG_STATE
+localityName                    = $ENV::ORG_LOCALITY
+localityName_default            = $ENV::ORG_LOCALITY
+organizationName                = $ENV::ORG_NAME Privoxy
+organizationName_default        = $ENV::ORG_NAME Privoxy
+organizationalUnitName          = $ENV::ORG_NAME Privoxy
+organizationalUnitName_default  = $ENV::ORG_NAME Privoxy
+commonName                      = $ENV::ORG_NAME Privoxy Root CA
+commonName_default              = $ENV::ORG_NAME Privoxy Root CA
+commonName_max                  = 64
 # email deprecated, but private intercepting proxy has no AIA
-emailAddress = $ENV::ORG_EMAIL
-emailAddress_default = $ENV::ORG_EMAIL
-emailAddress_max = 254
+emailAddress                    = $ENV::ORG_EMAIL
+emailAddress_default            = $ENV::ORG_EMAIL
+emailAddress_max                = 254
 
 [ privoxy_ca ]
 # The self-signed privoxy CA certificate (`man x509v3_config`).
-subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always
-basicConstraints = critical, CA:true, pathlen:1
-keyUsage = critical, cRLSign, keyCertSign
+subjectKeyIdentifier            = hash
+authorityKeyIdentifier          = keyid:always
+basicConstraints                = critical, CA:true, pathlen:1
+keyUsage                        = critical, cRLSign, keyCertSign
 
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).
-authorityKeyIdentifier=keyid:always
+authorityKeyIdentifier          = keyid:always

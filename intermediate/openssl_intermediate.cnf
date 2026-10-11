@@ -15,6 +15,7 @@
 
 [ca]
 default_ca                      = CA_default
+rand_serial                     = yes
 
 [ CA_default ]
 dir                             = intermediate

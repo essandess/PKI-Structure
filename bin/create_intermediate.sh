@@ -117,7 +117,8 @@ if "${OPENSSL}" ca -config openssl.cnf \
 	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	-passin file:"${ISSUERCADIR}"/private/passphrase.txt -batch
+	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
+        -rand_serial -batch
 then
     REISSUED=1
     rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem

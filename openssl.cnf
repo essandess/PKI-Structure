@@ -54,7 +54,7 @@ countryName                     = $ENV::ORG_COUNTRY
 stateOrProvinceName             = $ENV::ORG_STATE
 localityName                    = $ENV::ORG_LOCALITY
 organizationName                = $ENV::ORG_NAME
-organizationalUnitName          = $ENV::ORG_NAME Certification Authority
+organizationalUnitName          = $ENV::ORG_NAME Root Certification Authority
 commonName                      = $ENV::ORG_NAME Root CA
 
 # Optionally, specify some defaults.

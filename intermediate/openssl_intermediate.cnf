@@ -15,11 +15,11 @@
 
 [ca]
 default_ca                      = CA_default
-rand_serial                     = yes
 
 [ CA_default ]
 dir                             = intermediate
 new_certs_dir                   = $dir/newcerts
+rand_serial                     = yes
 database                        = $dir/index.txt
 private_key                     = $dir/private/intermediate.key.pem
 certificate                     = $dir/certs/intermediate.cert.pem

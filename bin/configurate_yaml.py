@@ -18,18 +18,11 @@ run it from.
 SECURITY: YAML files and generated profiles can contain secrets (e.g.
 a Wi-Fi password in a settings payload). Signing a profile does NOT
 encrypt it: any plaintext secret in the YAML is readable in the
-signed .mobileconfig by anyone who has it. Ownership is left alone
-(the script runs as whoever runs it); only permissions are managed:
-  * Generated profiles (mdm-private/mobfileconfigs-*) end up as 0700
-    directories and 0600 files, also on exit when the run failed.
-  * Before anything is read, ALL of mdm-private/ is checked. Loose
-    permissions on the output directories/files produce a warning
-    and are fixed immediately.
-  * Loose permissions on everything else (your YAML, etc.) produce a
-    warning and a prompt offering to fix them; nothing there is
-    changed without a "y".
-  * The YAML must live under mdm-private/, and the output
-    directories must be inside it.
+signed .mobileconfig by anyone who has it. This script does not check or change permissions (that is
+left to create_credentials.sh and the umask); it sets
+umask 077, so what it creates is private. The YAML must
+live under mdm-private/, and the output directories must
+be inside it.
 
 If the YAML has no 'identifier:', it is generated as
 <reverse-DNS of $DOMAIN_VAR>.mdm.<yaml file name>
@@ -222,6 +215,9 @@ Environment overrides (same names/defaults as create_codesign.sh):
     UNSIGNED_DIR  default "mdm-private/mobfileconfigs-unsigned"
     SIGNED_DIR    default "mdm-private/mobfileconfigs-signed"
     IDENTITY_DOMAIN_VAR  see DOMAIN_VAR below
+    PKI_ASSUME_YES  not 0: overwrite existing profiles (same name or
+                  same PayloadIdentifier, unsigned and signed)
+                  without asking
 """
 from __future__ import annotations
 
@@ -233,14 +229,13 @@ import os
 import plistlib
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator
+from typing import Any, Callable, Iterable
 
 import yaml
 from cryptography import x509
@@ -293,7 +288,7 @@ PKI_ROOT = SCRIPT_DIR.parent
 os.chdir(PKI_ROOT)
 os.environ["PKI_ROOT"] = str(PKI_ROOT)  # so $PKI_ROOT works in YAML
 MDM_PRIVATE = PKI_ROOT / "mdm-private"
-# ^ holds secrets: see audit_private() / secure_outputs()
+# ^ holds secrets
 os.umask(0o077)  # anything created here is private from the 1st byte
 
 
@@ -1337,144 +1332,6 @@ def output_dirs() -> tuple[Path, Path]:
     return unsigned, signed
 
 
-def _entries(
-    base: Path, prune: Iterable[Path] = ()
-) -> Iterator[tuple[str, int | None]]:
-    """Yield (path, wanted_mode) for base and everything below it:
-    directories want 0700, files 0600, and wanted_mode None marks a
-    symlink (never followed). Directories in `prune` are skipped."""
-    prune_set = {os.path.abspath(p) for p in prune}
-    for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = [
-            d for d in dirnames
-            if os.path.abspath(os.path.join(dirpath, d)) not in prune_set
-        ]
-        yield dirpath, 0o700
-        for n in dirnames + filenames:
-            if os.path.islink(os.path.join(dirpath, n)):
-                yield os.path.join(dirpath, n), None
-        for n in filenames:
-            if not os.path.islink(os.path.join(dirpath, n)):
-                yield os.path.join(dirpath, n), 0o600
-
-
-LooseEntry = tuple[str, int, os.stat_result]
-
-
-def find_loose(
-    base: Path, prune: Iterable[Path] = ()
-) -> tuple[list[LooseEntry], list[str]]:
-    """Return ([(path, wanted_mode, stat)] whose mode is wrong,
-    [symlinks])."""
-    loose: list[LooseEntry] = []
-    links: list[str] = []
-    for path, want in _entries(base, prune):
-        if want is None:
-            links.append(path)
-            continue
-        st = os.lstat(path)
-        if stat.S_IMODE(st.st_mode) != want:
-            loose.append((path, want, st))
-    return loose, links
-
-
-def apply_fix(loose: list[LooseEntry]) -> None:
-    for path, want, st in loose:
-        try:
-            os.chmod(path, want)
-        except PermissionError as e:
-            die(f"cannot change permissions of {path}: {e}")
-
-
-def secure_outputs(dirs: Iterable[Path]) -> None:
-    """Always applied to the generated profiles: 0700 directories,
-    0600 files."""
-    for d in dirs:
-        if not d.resolve().is_relative_to(MDM_PRIVATE.resolve()):
-            continue  # never touch anything outside mdm-private/
-        if d.is_symlink():
-            die(f"{d} is a symlink; refusing")
-        if not d.is_dir():
-            continue
-        loose, links = find_loose(d)
-        if links:
-            die(f"symlink under {d}: {links[0]} "
-                f"(refusing, chmod would follow it)")
-        if loose:
-            print(f"WARNING: {len(loose)} path(s) under {d} had "
-                  f"loose permissions at exit; set to 0700/0600",
-                  file=sys.stderr)
-        apply_fix(loose)
-
-
-def _under(path: str, directory: Path) -> bool:
-    path = os.path.abspath(path)
-    directory_s = os.path.abspath(directory)
-    return path == directory_s or path.startswith(directory_s + os.sep)
-
-
-def _print_loose(items: list[LooseEntry]) -> None:
-    for path, want, st in items[:25]:
-        print(f"  {stat.S_IMODE(st.st_mode):04o}  (want {want:04o})  "
-              f"{os.path.relpath(path, PKI_ROOT)}", file=sys.stderr)
-    if len(items) > 25:
-        print(f"  ... and {len(items) - 25} more", file=sys.stderr)
-
-
-def audit_private(outputs: Iterable[Path]) -> None:
-    """Check permissions of everything under mdm-private/ before
-    any secret is read.
-      * Generated-profile locations (the output directories and
-        their files): warn, then fix immediately (these are always
-        0700/0600).
-      * Everything else (your YAML, etc.): warn and offer to fix;
-        nothing changes without a y."""
-    if not MDM_PRIVATE.is_dir():
-        return
-    loose, links = find_loose(MDM_PRIVATE)
-    for link in links:
-        print(f"WARNING: symlink under {MDM_PRIVATE.name}/ "
-              f"(not followed, not checked): {link}", file=sys.stderr)
-
-    out_loose = [x for x in loose if any(_under(x[0], d) for d in outputs)]
-    out_paths = {x[0] for x in out_loose}
-    in_loose = [x for x in loose if x[0] not in out_paths]
-
-    if out_loose:
-        print(f"\nWARNING: output paths under {MDM_PRIVATE.name}/ had "
-              f"loose permissions; setting 0700 (dirs) / 0600 (files) "
-              f"now:", file=sys.stderr)
-        _print_loose(out_loose)
-        apply_fix(out_loose)
-
-    if not in_loose:
-        return
-    print(f"\nWARNING: these private paths under {MDM_PRIVATE.name}/ "
-          f"may hold secrets but are not restricted (want 0700 dirs "
-          f"/ 0600 files):", file=sys.stderr)
-    _print_loose(in_loose)
-
-    fix_cmd = (
-        f"find {MDM_PRIVATE.name} -type d -exec chmod 0700 {{}} + && "
-        f"find {MDM_PRIVATE.name} -type f -exec chmod 0600 {{}} +"
-    )
-    if not sys.stdin.isatty():
-        print(f"Not changed (no terminal to prompt on). To fix, "
-              f"from {PKI_ROOT}:\n  {fix_cmd}\n", file=sys.stderr)
-        return
-    try:
-        answer = input("Change them now? [y/N] ").strip().lower()
-    except EOFError:
-        answer = ""
-    if answer in ("y", "yes"):
-        apply_fix(in_loose)
-        print(f"  permissions fixed on {len(in_loose)} path(s)")
-    else:
-        print(f"WARNING: continuing with loose permissions. "
-              f"To fix later, from {PKI_ROOT}:\n  {fix_cmd}\n",
-              file=sys.stderr)
-
-
 def collect_crls() -> list[tuple[Path, x509.CertificateRevocationList]]:
     """Load every CRL under PKI_ROOT/*/crl/. In each directory
     prefer '*.crl.pem'; if there is none, use '*.crl' (DER or PEM).
@@ -1854,14 +1711,25 @@ def main() -> None:
                     help="only write the unsigned profile")
     args = ap.parse_args()
 
-    outputs = output_dirs()
-    # warn (+ prompt for the YAML) before any secret is read
-    audit_private(outputs)
+    build(args)
+
+
+def confirm(question: str) -> bool:
+    """y/N question on the terminal. PKI_ASSUME_YES (anything but 0)
+    answers yes, as in the bash scripts."""
+    if os.environ.get("PKI_ASSUME_YES", "0") != "0":
+        print(f"{question} [y/N] y (PKI_ASSUME_YES)")
+        return True
+    print("(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted "
+          "runs.)", file=sys.stderr)
     try:
-        build(args)
-    finally:
-        # generated profiles: 0700/0600, even after a failure
-        secure_outputs(outputs)
+        with open("/dev/tty", "r+") as tty:
+            tty.write(f"{question} [y/N] ")
+            tty.flush()
+            reply = tty.readline()
+    except OSError:
+        return False   # no terminal to ask on
+    return reply.strip().lower() in ("y", "yes")
 
 
 def build(args: argparse.Namespace) -> None:
@@ -1927,9 +1795,19 @@ def build(args: argparse.Namespace) -> None:
                 f"(profiles can contain secrets)")
     unsigned_dir.mkdir(parents=True, exist_ok=True)
     unsigned = unsigned_dir / (ypath.stem + ".mobileconfig")
+    signed = signed_dir / unsigned.name
 
-    # Two profiles with the same PayloadIdentifier replace each
-    # other on the device: refuse.
+    # What this run replaces: this profile's own files, and any other
+    # profile with the same PayloadIdentifier (two such profiles replace
+    # each other on a device). Both the unsigned and the signed copy go.
+    old: dict[Path, str] = {}
+
+    def mark(p: Path, why: str) -> None:
+        if p.exists() or p.is_symlink():
+            old.setdefault(p, why)
+
+    mark(unsigned, "same file name")
+    mark(signed, "same file name")
     for other in unsigned_dir.glob("*.mobileconfig"):
         if other.resolve() == unsigned.resolve():
             continue
@@ -1940,10 +1818,20 @@ def build(args: argparse.Namespace) -> None:
         except Exception:
             continue
         if other_id == profile["PayloadIdentifier"]:
-            die(f"PayloadIdentifier '{other_id}' is already used by "
-                f"{other.name}. Profiles with the same identifier "
-                f"replace each other on a device; set a different "
-                f"'identifier:' in {ypath.name}.")
+            why = f"same PayloadIdentifier '{other_id}'"
+            mark(other, why)
+            mark(signed_dir / other.name, why)
+
+    if old:
+        print("\nThese existing profile files would be replaced:",
+              file=sys.stderr)
+        for p, why in old.items():
+            print(f"  {p.relative_to(PKI_ROOT)}  ({why})", file=sys.stderr)
+        if not confirm("Overwrite them (unsigned and signed)?"):
+            die("not overwriting; nothing was changed.")
+        for p in old:
+            p.unlink()
+
     unsigned.write_bytes(plistlib.dumps(profile, fmt=plistlib.FMT_XML))
     plistlib.loads(unsigned.read_bytes())  # round-trip sanity check
     if shutil.which("plutil"):
@@ -1951,7 +1839,6 @@ def build(args: argparse.Namespace) -> None:
     print(f"  wrote {unsigned}")
 
     if not args.no_sign:
-        signed = signed_dir / unsigned.name
         sign(unsigned, signed)
         print(f"  wrote {signed}")
 

@@ -1,52 +1,64 @@
 #!/usr/bin/env bash
 
-# create_keepass_entry.sh -- store S/MIME .p12 passwords in KeePassXC.
+# create_keepass_entry.sh -- store a credentials installer's passwords in KeePassXC.
 #
 # Usage: create_keepass_entry.sh --db FILE [--key-file FILE | --no-password]
-#            [--title TITLE] [--group PATH] [--extra-pki-dir DIR]...
-#            [--allow-line1] [--force-update] [--no-backup] [--kp-prompt]
-#            [-n|--dry-run] 'NAME_GLOB' ...
+#            [--title TITLE] [--group PATH] [--individual-smime-passwords]
+#            [--force-update] [--no-backup] [--kp-prompt] [-n|--dry-run]
+#            INSTALLER
 #        create_keepass_entry.sh --xml-out FILE [--title TITLE]
-#            [--group PATH] [--extra-pki-dir DIR]... 'NAME_GLOB' ...
+#            [--group PATH] [--individual-smime-passwords] INSTALLER
 #
-# Selects .p12 files as create_credentials.sh does: single-quote each
-# 'NAME_GLOB'. It is a bash glob with brace expansion, for example
-# 'persona_*' or 'personb_{gmail,comcast}_2026', matched against <name> in
-# smime/private/<name>-{signature,encryption}[.<sha1>].p12. --extra-pki-dir
-# DIR (repeatable) also searches DIR/smime, a tree with the same layout.
+# Example:
+#   bin/create_keepass_entry.sh --db MYDBFILE.keypass \
+#       mdm-private/credentials/install_credentials_persona_S.sh
 #
-# Each password is checked against its .p12 before it is stored. It is
-#   <p12>.pass      one per issuance, shared by that issuance's signature
-#                   and encryption .p12 (written by create_smime.sh), or,
-#                   for an older .p12 that has no .pass file,
-#   passphrase.txt  line 2 of the tree's smime/private/passphrase.txt.
-# Line 1 is the private-key passphrase and stays in the PKI tree. It is
-# stored only with --allow-line1, for a .p12 that opens with nothing else.
+# INSTALLER is an encrypted installer made by create_credentials.sh, e.g.
+# install_credentials_persona_S.sh, with the installer password in
+# INSTALLER.pass (line 1). Nothing is searched for in the PKI tree: the
+# installer and its .pass file are the only inputs. The installer password
+# is used to decrypt the payload (the same openssl steps the installer
+# runs; the installer itself is never executed), which proves the password
+# is right and gives the contents.
 #
-# Result: ONE entry in an existing KeePassXC database, with one protected
-# custom attribute per issuance, labeled '<name> [<issued>]'. Its Notes list
-# the .p12 files each one opens, never a password. Title: --title, default
-# 'S/MIME .p12 passwords: NAME_GLOB ...'. Copy one password with
-#   keepassxc-cli clip -a 'ATTRIBUTE' DB 'TITLE'
+# Default: ONE entry in an existing KeePassXC database whose Password is the
+# installer password (INSTALLER.pass). Nothing else secret is stored. Its
+# Notes list what the installer contains, never a password.
+#
+# --individual-smime-passwords: also store the password of each S/MIME .p12
+# in the payload, as one protected custom attribute per issuance, labeled
+# '<certname> [<issued>]'. Both come from the decrypted payload (the
+# <name>.p12 and <name>.p12.pass files and the manifest); each password is
+# checked against its .p12 before it is stored. The .p12 files of one
+# issuance share one password and so one attribute.
+#
+# Title: --title, default 'S/MIME installer: <installer file name>'. Copy:
+#   keepassxc-cli clip DB 'TITLE'                  (installer password)
+#   keepassxc-cli clip -a 'ATTRIBUTE' DB 'TITLE'   (one issuance's .p12)
 #
 # How it gets there: keepassxc-cli can only import XML into a NEW database,
 # so the entry is written as KeePass 2 XML, imported into a staging database
 # with the same credentials, and merged into --db. The merge is shown with
 # --dry-run first, and --db is copied to DB.bak-<time> unless --no-backup.
 # Entry and group UUIDs are derived from title and group path, and the
-# entry's modification time from its source files, so a re-run updates the
-# entry in place and changes nothing when the sources did not change.
-# --force-update stamps it with the current time instead.
+# entry's modification time from the installer and its .pass file, so a
+# re-run updates the entry in place and changes nothing when they did not
+# change. --force-update stamps it with the current time instead.
+#
+# Relative paths are relative to the PKI root (the parent of bin/).
 #
 # Secrets: never in argv or the environment; the master password is read
 # once from the terminal and piped to keepassxc-cli (--kp-prompt lets
-# keepassxc-cli ask itself). The plain-text XML exists only in a private
-# temporary directory, removed on exit. --xml-out FILE writes that XML to
-# FILE (mode 0600, never overwritten) and stops: delete it after use.
+# keepassxc-cli ask itself). The decrypted payload and the plain-text XML
+# exist only in a private temporary directory, removed on exit. --xml-out
+# FILE writes that XML to FILE (mode 0600) and stops: delete it after use.
+# An existing FILE is replaced only after a y/N prompt (PKI_ASSUME_YES=1
+# answers yes).
 #
 # -n lists what would be stored and stops. PKI_ASSUME_YES=1 skips the
 # prompts and makes any .p12 that cannot be opened an error.
-# Needs bash 4.4+, openssl (bin/define_openssl.sh), keepassxc-cli.
+# Needs bash 4.4+, openssl (bin/define_openssl.sh), tar with xz,
+# keepassxc-cli.
 
 set -Eeuo pipefail
 shopt -s nullglob
@@ -72,10 +84,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}" || exit
 
-# Same helpers as pki_structure.sh, when present
-if [ -f "${SCRIPT_DIR}/pki_common.sh" ]; then
-    . "${SCRIPT_DIR}/pki_common.sh"
-fi
 if [ -f "${SCRIPT_DIR}/define_openssl.sh" ]; then
     . "${SCRIPT_DIR}/define_openssl.sh"
 fi
@@ -85,16 +93,26 @@ die()  { echo "Error: $*" >&2; exit 1; }
 warn() { echo "Warning: $*" >&2; }
 
 usage() {
-    sed -n '3,9p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '3,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     echo "See the comments at the top of ${0##*/} for details."
 }
+
+# Private temporary directory: holds the decrypted payload and the XML
+TMPD=""
+KP_PASS=""
+cleanup() {
+    KP_PASS=""
+    if [ -n "${TMPD}" ]; then rm -rf "${TMPD}"; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
 # ---------------------------------------------------------------- options
 
 DB="" KEYFILE="" NOPASS=0 TITLE="" GROUP="" XML_OUT=""
-ALLOW_LINE1=0 FORCE=0 BACKUP=1 KP_PROMPT=0 DRYRUN=0
-EXTRA=()
-GLOBS=()
+FORCE=0 BACKUP=1 KP_PROMPT=0 DRYRUN=0 INDIVIDUAL=0
+ARGS=()
 
 need_arg() { if [ "$1" -lt 2 ]; then die "$2 needs an argument"; fi; }
 
@@ -105,21 +123,22 @@ while [ $# -gt 0 ]; do
         --no-password)   NOPASS=1; shift ;;
         --title)         need_arg $# "$1"; TITLE=$2; shift 2 ;;
         --group)         need_arg $# "$1"; GROUP=$2; shift 2 ;;
-        --extra-pki-dir) need_arg $# "$1"; EXTRA+=("$2"); shift 2 ;;
         --xml-out)       need_arg $# "$1"; XML_OUT=$2; shift 2 ;;
-        --allow-line1)   ALLOW_LINE1=1; shift ;;
+        --individual-smime-passwords) INDIVIDUAL=1; shift ;;
         --force-update)  FORCE=1; shift ;;
         --no-backup)     BACKUP=0; shift ;;
         --kp-prompt)     KP_PROMPT=1; shift ;;
         -n|--dry-run)    DRYRUN=1; shift ;;
         -h|--help)       usage; exit 0 ;;
-        --)              shift; GLOBS+=("$@"); break ;;
+        --)              shift; ARGS+=("$@"); break ;;
         -*)              usage >&2; die "unknown option: $1" ;;
-        *)               GLOBS+=("$1"); shift ;;
+        *)               ARGS+=("$1"); shift ;;
     esac
 done
 
-if [ "${#GLOBS[@]}" -eq 0 ]; then usage >&2; die "no NAME_GLOB given"; fi
+if [ "${#ARGS[@]}" -eq 0 ]; then usage >&2; die "no INSTALLER given"; fi
+if [ "${#ARGS[@]}" -gt 1 ]; then die "give exactly one INSTALLER"; fi
+INSTALLER=${ARGS[0]}
 if [ -n "${XML_OUT}" ] && [ -n "${DB}" ]; then
     die "--xml-out and --db are alternatives"
 fi
@@ -135,42 +154,15 @@ fi
 GROUP=${GROUP#/}; GROUP=${GROUP%/}
 if [[ ${GROUP} == *//* ]]; then die "--group has an empty path part"; fi
 
-GLOB_OK='^[][A-Za-z0-9_.*?,{}-]+$'
-for g in "${GLOBS[@]}"; do
-    if ! [[ ${g} =~ ${GLOB_OK} ]]; then
-        die "bad NAME_GLOB '${g}': letters, digits and _ . - * ? [] {} , only"
-    fi
-done
+if [ ! -f "${INSTALLER}" ] || [ ! -r "${INSTALLER}" ]; then
+    die "cannot read installer ${INSTALLER}"
+fi
+INST_BASE=${INSTALLER##*/}
+PASSFILE="${INSTALLER}.pass"
 
-TREES=("${PKI_ROOT}")
-for d in "${EXTRA[@]}"; do
-    if [ ! -d "${d}" ]; then die "--extra-pki-dir: not a directory: ${d}"; fi
-    TREES+=("$(cd "${d}" && pwd)")
-done
-
-if [ -z "${TITLE}" ]; then TITLE="S/MIME .p12 passwords: ${GLOBS[*]}"; fi
+if [ -z "${TITLE}" ]; then TITLE="S/MIME installer: ${INST_BASE}"; fi
 
 # ---------------------------------------------------------------- helpers
-
-# Brace expansion only (no pathname expansion) of a validated glob
-expand_braces() { ( set -f; eval "printf '%s\n' $1" ); }
-
-GLOB_EXP=()
-GLOB_HITS=()
-for g in "${GLOBS[@]}"; do
-    GLOB_EXP+=("$(expand_braces "${g}")")
-    GLOB_HITS+=(0)
-done
-
-# match_glob NAME INDEX: does NAME match the INDEXth glob?
-match_glob() {
-    local pat
-    while IFS= read -r pat; do
-        # shellcheck disable=SC2053  # unquoted on purpose: a glob
-        if [[ $1 == ${pat} ]]; then return 0; fi
-    done <<<"${GLOB_EXP[$2]}"
-    return 1
-}
 
 declare -A MONTH=([Jan]=01 [Feb]=02 [Mar]=03 [Apr]=04 [May]=05 [Jun]=06
                   [Jul]=07 [Aug]=08 [Sep]=09 [Oct]=10 [Nov]=11 [Dec]=12)
@@ -197,9 +189,8 @@ LEGACY=()
 OPENSSL_HELP=$("${OPENSSL}" pkcs12 -help 2>&1 || true)
 if [[ ${OPENSSL_HELP} == *-legacy* ]]; then LEGACY=(-legacy); fi
 
-# PROBE_ERR, P_SERIAL, P_START, P_END, P_EXPIRED describe the last .p12
-# opened by probe
-PROBE_ERR="" P_SERIAL="" P_START="" P_END="" P_EXPIRED=0
+# PROBE_ERR, P_START, P_END describe the last .p12 opened by probe
+PROBE_ERR="" P_START="" P_END=""
 
 # probe FILE PASSWORD: succeed if PASSWORD opens FILE. The password goes to
 # openssl on a pipe (fd 3), never in argv.
@@ -216,21 +207,16 @@ probe() {
     if [ -z "${pem}" ]; then
         PROBE_ERR="no certificate in the .p12"; return 1
     fi
-    if ! info=$("${OPENSSL}" x509 -noout -serial -startdate -enddate \
+    if ! info=$("${OPENSSL}" x509 -noout -startdate -enddate \
                     <<<"${pem}" 2>/dev/null); then
         PROBE_ERR="unreadable certificate"; return 1
     fi
     while IFS='=' read -r key val; do
         case ${key} in
-            serial)    P_SERIAL=${val^^} ;;
             notBefore) P_START=${val} ;;
             notAfter)  P_END=${val} ;;
         esac
     done <<<"${info}"
-    P_EXPIRED=0
-    if ! "${OPENSSL}" x509 -noout -checkend 0 <<<"${pem}" >/dev/null 2>&1; then
-        P_EXPIRED=1
-    fi
     return 0
 }
 
@@ -241,189 +227,132 @@ read_pw() {
     printf '%s' "${v%$'\r'}"
 }
 
-# index_status TREE SERIAL: status of the serial in the CA's index.txt
-index_status() {
-    local idx="$1/${ISSUERCADIR:-intermediate}/index.txt"
-    if [ ! -f "${idx}" ]; then
-        idx="${PKI_ROOT}/${ISSUERCADIR:-intermediate}/index.txt"
-    fi
-    if [ ! -f "${idx}" ]; then echo "not checked"; return 0; fi
-    awk -F'\t' -v s="$2" '
-        BEGIN { sub(/^0+/, "", s) }
-        { a = toupper($4); sub(/^0+/, "", a) }
-        a == s {
-            if ($1 == "V") out = "valid"
-            else if ($1 == "R") {
-                out = "revoked"
-                c = index($3, ",")
-                if (c) out = out " (" substr($3, c + 1) ")"
-            } else if ($1 == "E") out = "expired"
-            else out = $1
-            print out; found = 1; exit
-        }
-        END { if (!found) print "not in index" }' "${idx}"
+# parse_name NAME: split a payload file name made by create_credentials.sh,
+# "common name :: YYYY-MM-DD :: id", into CN, EXPIRY and ID
+parse_name() {
+    local rest
+    CN="${1%% :: *}"
+    rest="${1#* :: }"
+    EXPIRY="${rest%% :: *}"
+    ID="${rest#* :: }"
 }
 
-# resolve_password P12 TREE: find the password that opens P12. On success
-# SRC_FILE and SRC_LINE say where it is; on failure FAIL says why.
-SRC_FILE="" SRC_LINE="" FAIL=""
-resolve_password() {
-    local p12=$1 tree=$2 pw f
-    SRC_FILE="" SRC_LINE="" FAIL=""
-    if [ -f "${p12}.pass" ]; then
-        pw=$(read_pw "${p12}.pass" 1)
-        if [ -z "${pw}" ]; then FAIL="${p12##*/}.pass is empty"; return 1; fi
-        if probe "${p12}" "${pw}"; then
-            SRC_FILE="${p12}.pass"; SRC_LINE=1; return 0
-        fi
-        FAIL="its .pass file does not open it (${PROBE_ERR})"
-        return 1
-    fi
-    f="${tree}/smime/private/passphrase.txt"
-    if [ ! -f "${f}" ]; then
-        FAIL="no .pass file, and no ${f#"${PKI_ROOT}"/}"
-        return 1
-    fi
-    pw=$(read_pw "${f}" 2)
-    if [ -n "${pw}" ] && probe "${p12}" "${pw}"; then
-        SRC_FILE=${f}; SRC_LINE=2; return 0
-    fi
-    pw=$(read_pw "${f}" 1)
-    if [ -n "${pw}" ] && probe "${p12}" "${pw}"; then
-        if [ "${ALLOW_LINE1}" -eq 1 ]; then
-            SRC_FILE=${f}; SRC_LINE=1; return 0
-        fi
-        FAIL="opens only with passphrase.txt line 1, the key passphrase:"
-        FAIL="${FAIL} not stored (--allow-line1)"
-        return 1
-    fi
-    FAIL="no .pass file; passphrase.txt line 2 does not open it (${PROBE_ERR})"
-    return 1
+# --------------------------------------------- the installer and its payload
+
+# hdr_val NAME: value of NAME="..." in the installer's header lines
+HDR=$(sed -n '1,20p' "${INSTALLER}")
+hdr_val() {
+    sed -n "s/^$1=\"\{0,1\}\([^\"]*\)\"\{0,1\}\$/\1/p" <<<"${HDR}" | head -n 1
 }
 
-# tree_name TREE: short name for display
-tree_name() {
-    if [ "$1" = "${PKI_ROOT}" ]; then echo "PKI_ROOT"; else echo "${1##*/}"; fi
-}
-
-# abbr FILENAME: shorten the 40-hex SHA1 in a name, for display
-abbr() {
-    local s=$1
-    if [[ $s =~ ^(.*\.)([0-9a-f]{8})[0-9a-f]{32}(\.p12)$ ]]; then
-        s="${BASH_REMATCH[1]}${BASH_REMATCH[2]}~${BASH_REMATCH[3]}"
-    fi
-    printf '%s' "${s}"
-}
-
-# ------------------------------------------------- find and open the .p12
-
-C_TREE=() C_FILE=() C_NAME=()
-IGNORED=0
-NAME_RE='^(.+)-(signature|encryption)(\.[0-9a-f]{40})?\.p12$'
-for tree in "${TREES[@]}"; do
-    if [ ! -d "${tree}/smime/private" ]; then
-        warn "no ${tree}/smime/private"
-        continue
-    fi
-    for p12 in "${tree}"/smime/private/*.p12; do
-        if [[ ${p12##*/} =~ ${NAME_RE} ]]; then
-            C_TREE+=("${tree}")
-            C_FILE+=("${p12}")
-            C_NAME+=("${BASH_REMATCH[1]}")
-        else
-            IGNORED=$((IGNORED + 1))
-        fi
-    done
-done
-if [ "${IGNORED}" -gt 0 ]; then
-    warn "${IGNORED} .p12 not named" \
-         "<name>-{signature,encryption}[.<sha1>].p12 were ignored"
+if ! grep -q '^__PAYLOAD_BELOW__$' "${INSTALLER}" \
+   || [ -z "$(hdr_val PAYLOAD_ENCRYPTED)" ]; then
+    die "${INSTALLER} is not an installer made by create_credentials.sh"
+fi
+if [ "$(hdr_val PAYLOAD_ENCRYPTED)" != 1 ]; then
+    die "${INST_BASE} is not encrypted (a --ca-only or CA-only installer):" \
+        "it has no installer password and holds no .p12 passwords"
+fi
+ENC_CIPHER=$(hdr_val ENC_CIPHER)
+ENC_ITER=$(hdr_val ENC_ITER)
+if ! [[ ${ENC_CIPHER} =~ ^[a-z0-9-]+$ ]] || ! [[ ${ENC_ITER} =~ ^[0-9]+$ ]]; then
+    die "cannot read the payload encryption settings from ${INST_BASE}"
 fi
 
-R_TREE=() R_FILE=() R_NAME=() R_SRC=() R_LINE=() R_START=() R_END=()
-R_STATUS=() R_HASH=()
-SKIPPED=()
-for ((c = 0; c < ${#C_FILE[@]}; c++)); do
-    matched=0
-    for ((gi = 0; gi < ${#GLOBS[@]}; gi++)); do
-        if match_glob "${C_NAME[c]}" "${gi}"; then
-            matched=1
-            GLOB_HITS[gi]=$((GLOB_HITS[gi] + 1))
-        fi
-    done
-    if [ "${matched}" -eq 0 ]; then continue; fi
-    if resolve_password "${C_FILE[c]}" "${C_TREE[c]}"; then
-        pw=$(read_pw "${SRC_FILE}" "${SRC_LINE}")
-        h=$(printf '%s' "${pw}" | "${OPENSSL}" dgst -sha256 | sed 's/^.* //')
-        pw=""
-        st=$(index_status "${C_TREE[c]}" "${P_SERIAL}")
-        if [ "${P_EXPIRED}" -eq 1 ]; then
-            if [ "${st}" = valid ]; then st=expired
-            else st="expired, ${st}"; fi
-        fi
-        R_TREE+=("${C_TREE[c]}"); R_FILE+=("${C_FILE[c]}")
-        R_NAME+=("${C_NAME[c]}"); R_SRC+=("${SRC_FILE}")
-        R_LINE+=("${SRC_LINE}"); R_START+=("${P_START}"); R_END+=("${P_END}")
-        R_STATUS+=("${st}"); R_HASH+=("${h}")
-    else
-        SKIPPED+=("${C_FILE[c]}|${FAIL}")
-    fi
-done
+if [ ! -f "${PASSFILE}" ] || [ ! -r "${PASSFILE}" ]; then
+    die "cannot read ${PASSFILE} (made along with the installer)"
+fi
+if [ -z "$(read_pw "${PASSFILE}" 1)" ]; then die "${PASSFILE} line 1 is empty"; fi
 
-for ((gi = 0; gi < ${#GLOBS[@]}; gi++)); do
-    if [ "${GLOB_HITS[gi]}" -eq 0 ]; then
-        warn "'${GLOBS[gi]}' matches no .p12"
+# extract_payload DIR: the installer's own steps (its payload function, then
+# tar -xJf): base64, openssl enc -d with the installer password on fd 3 (never
+# in argv), unpack into DIR.
+extract_payload() {
+    sed '1,/^__PAYLOAD_BELOW__$/d' "${INSTALLER}" | "${OPENSSL}" base64 -d \
+        | "${OPENSSL}" enc -d "-${ENC_CIPHER}" -pbkdf2 -md sha256 \
+              -iter "${ENC_ITER}" \
+              -pass fd:3 3< <(printf '%s\n' "$(read_pw "${PASSFILE}" 1)") \
+        | tar -xJf - -C "$1"
+}
+
+TMPD=$(mktemp -d "${TMPDIR:-/tmp}/kpentry.XXXXXX")
+WORK="${TMPD}/payload"
+mkdir "${WORK}"
+if ! extract_payload "${WORK}" 2>/dev/null; then
+    die "cannot decrypt the payload of ${INST_BASE} with ${PASSFILE##*/}"
+fi
+if [ ! -f "${WORK}/manifest" ]; then
+    die "the decrypted payload has no manifest: wrong password file?"
+fi
+
+# manifest: type, group, sha1, haskey, name, note (tab separated)
+M_TYPE=() M_GROUP=() M_KEY=() M_FILE=() M_NOTE=()
+while IFS=$'\t' read -r type group sha1 haskey file note; do
+    M_TYPE+=("${type}"); M_GROUP+=("${group}"); M_KEY+=("${haskey}")
+    M_FILE+=("${file}"); M_NOTE+=("${note}")
+done < "${WORK}/manifest"
+
+# -------------------------------------- open the payload's .p12 (individual)
+
+R_FILE=() R_GROUP=() R_SRC=() R_START=() R_END=() R_NOTE=() R_HASH=()
+SKIPPED=()
+
+if [ "${INDIVIDUAL}" -eq 1 ]; then
+    for ((m = 0; m < ${#M_TYPE[@]}; m++)); do
+        if [ "${M_TYPE[m]}" != smime ] || [ "${M_KEY[m]}" != 1 ]; then continue; fi
+        p12="${WORK}/smime/${M_FILE[m]}.p12"
+        if [ ! -f "${p12}" ]; then
+            SKIPPED+=("${M_FILE[m]}.p12|listed in the manifest, not in the payload")
+            continue
+        fi
+        if [ ! -f "${p12}.pass" ]; then
+            SKIPPED+=("${M_FILE[m]}.p12|the payload holds no password file for it")
+            continue
+        fi
+        pw=$(read_pw "${p12}.pass" 1)
+        if [ -z "${pw}" ]; then
+            SKIPPED+=("${M_FILE[m]}.p12|its password file is empty")
+        elif probe "${p12}" "${pw}"; then
+            h=$(printf '%s' "${pw}" | "${OPENSSL}" dgst -sha256 | sed 's/^.* //')
+            R_FILE+=("${M_FILE[m]}.p12"); R_GROUP+=("${M_GROUP[m]}")
+            R_SRC+=("${p12}.pass"); R_START+=("${P_START}"); R_END+=("${P_END}")
+            R_NOTE+=("${M_NOTE[m]}"); R_HASH+=("${h}")
+        else
+            SKIPPED+=("${M_FILE[m]}.p12|its password does not open it (${PROBE_ERR})")
+        fi
+        pw=""
+    done
+    if [ "${#R_FILE[@]}" -eq 0 ] && [ "${#SKIPPED[@]}" -eq 0 ]; then
+        die "${INST_BASE} holds no S/MIME .p12 files"
     fi
-done
-if [ "${#R_FILE[@]}" -eq 0 ] && [ "${#SKIPPED[@]}" -eq 0 ]; then
-    echo "Names found:" >&2
-    printf '  %s\n' "${C_NAME[@]}" | sort -u | sed -n '1,30p' >&2
-    die "no .p12 matches ${GLOBS[*]}"
 fi
 
 # ------------------------------------- group by password (= by issuance)
 
 declare -A GIDX=()
-G_TREE=() G_MEM=() G_KIND=() G_LINE=() G_SRC=() G_LABEL=()
+G_MEM=() G_SRC=() G_GROUP=() G_LABEL=()
 for ((i = 0; i < ${#R_FILE[@]}; i++)); do
-    key="${R_TREE[i]}|${R_HASH[i]}"
+    key="${R_HASH[i]}"
     if [ -z "${GIDX[${key}]+x}" ]; then
-        GIDX[${key}]=${#G_TREE[@]}
-        G_TREE+=("${R_TREE[i]}"); G_MEM+=(""); G_SRC+=("${R_SRC[i]}")
-        G_LINE+=("${R_LINE[i]}")
-        if [[ ${R_SRC[i]} == *.pass ]]; then
-            G_KIND+=(pass)
-        else
-            G_KIND+=("line${R_LINE[i]}")
-        fi
+        GIDX[${key}]=${#G_MEM[@]}
+        G_MEM+=(""); G_SRC+=("${R_SRC[i]}"); G_GROUP+=("${R_GROUP[i]}")
         G_LABEL+=("")
     fi
     g=${GIDX[${key}]}
     G_MEM[g]="${G_MEM[g]} ${i}"
 done
 
-ARCHIVED_RE='\.[0-9a-f]{40}\.p12$'
+# The manifest group of a per-issuance password is smime[-dir]/CERTNAME/ID.
+GROUP_RE='^[^/]+/(.+)/[0-9a-f]{6}$'
 declare -A LABEL_TAKEN=()
-for ((g = 0; g < ${#G_TREE[@]}; g++)); do
-    names=() dates=()
-    for i in ${G_MEM[g]}; do
-        names+=("${R_NAME[i]}")
-        dates+=("$(iso_date "${R_START[i]}")")
-    done
-    archived=0
-    for i in ${G_MEM[g]}; do
-        if [[ ${R_FILE[i]##*/} =~ ${ARCHIVED_RE} ]]; then archived=1; fi
-    done
-    mapfile -t uniq < <(printf '%s\n' "${names[@]}" | sort -u)
+for ((g = 0; g < ${#G_MEM[@]}; g++)); do
+    dates=()
+    for i in ${G_MEM[g]}; do dates+=("$(iso_date "${R_START[i]}")"); done
     mapfile -t dsort < <(printf '%s\n' "${dates[@]}" | sort)
-    if [ "${G_KIND[g]}" = pass ]; then
-        label="${uniq[0]}"
-        if [ "${#uniq[@]}" -gt 1 ]; then label+=" +$((${#uniq[@]} - 1))"; fi
-        label+=" [${dsort[0]}]"
-        if [ "${archived}" -eq 1 ]; then label+=" archived"; fi
+    if [[ ${G_GROUP[g]} =~ ${GROUP_RE} ]]; then
+        label="${BASH_REMATCH[1]} [${dsort[0]}]"
     else
-        label="older .p12, passphrase.txt line ${G_LINE[g]}"
-        label+=" [$(tree_name "${G_TREE[g]}")]"
+        label="older .p12, shared password [${G_GROUP[g]}]"
     fi
     case ${label} in Title|UserName|Password|URL|Notes) label+=" (pw)" ;; esac
     base=${label}; n=2
@@ -435,66 +364,64 @@ for ((g = 0; g < ${#G_TREE[@]}; g++)); do
     G_LABEL[g]=${label}
 done
 
+ORDER=()
 mapfile -t ORDER < <(
     for ((g = 0; g < ${#G_LABEL[@]}; g++)); do
         printf '%s\t%s\n' "${G_LABEL[g]}" "${g}"
     done | sort -t$'\t' -k1,1 | cut -f2)
 
-# Entry time: the newest source file, so unchanged sources mean no update
+# Entry time: the newer of the installer and its .pass file, so unchanged
+# sources mean no update
 if [ "${FORCE}" -eq 1 ]; then
     MOD=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 else
-    newest=""
-    for ((i = 0; i < ${#R_FILE[@]}; i++)); do
-        for f in "${R_FILE[i]}" "${R_SRC[i]}"; do
-            if [ -z "${newest}" ] || [ "${f}" -nt "${newest}" ]; then
-                newest=${f}
-            fi
-        done
-    done
-    for tree in "${TREES[@]}"; do
-        f="${tree}/${ISSUERCADIR:-intermediate}/index.txt"
-        if [ -f "${f}" ] && [ "${f}" -nt "${newest}" ]; then newest=${f}; fi
-    done
+    newest=${INSTALLER}
+    if [ "${PASSFILE}" -nt "${newest}" ]; then newest=${PASSFILE}; fi
     MOD=$(file_mtime_iso "${newest}")
 fi
 
 # ------------------------------------------------------------------- plan
 
 print_plan() {
-    local g i k s base when
-    echo "S/MIME .p12 passwords for: ${GLOBS[*]}"
+    local g i k s m
+    echo "S/MIME installer: ${INSTALLER}"
     echo "Entry title: ${TITLE}${GROUP:+  (group ${GROUP})}"
     if [ -n "${DB}" ]; then echo "Database:    ${DB}"; fi
+    echo
+    echo "Password field: installer password (${PASSFILE##*/}, line 1);" \
+         "it decrypts the payload"
+    echo "The payload holds ${#M_TYPE[@]} item(s):"
+    for ((m = 0; m < ${#M_TYPE[@]}; m++)); do
+        parse_name "${M_FILE[m]}"
+        echo "   ${M_TYPE[m]}: '${CN}' (expires ${EXPIRY})"
+    done
+    if [ "${INDIVIDUAL}" -eq 0 ]; then
+        echo
+        echo "Individual .p12 passwords: not stored" \
+             "(--individual-smime-passwords)"
+        return 0
+    fi
     echo
     k=0
     for g in "${ORDER[@]}"; do
         k=$((k + 1))
         echo "${k}) ${G_LABEL[g]}"
         for i in ${G_MEM[g]}; do
-            base=${R_FILE[i]##*/}
-            echo "   $(abbr "${base}")"
-            when=expires
-            if [[ ${R_STATUS[i]} == expired* ]]; then when=ended; fi
-            echo "       ${R_STATUS[i]}; ${when} ${R_END[i]}"
+            echo "   ${R_FILE[i]}"
+            echo "       ${R_NOTE[i]}; ends ${R_END[i]}"
         done
-        case ${G_KIND[g]} in
-            pass)  echo "   password: each .p12.pass file (same in all)" ;;
-            line2) echo "   password: smime/private/passphrase.txt line 2" ;;
-            line1) echo "   password: passphrase.txt line 1 (KEY pass)" ;;
-        esac
+        echo "   password: the .p12.pass file(s) in the payload"
     done
     if [ "${#SKIPPED[@]}" -gt 0 ]; then
         echo
         echo "NOT stored (cannot be opened):"
         for s in "${SKIPPED[@]}"; do
-            base=${s%%|*}
-            echo "  $(abbr "${base##*/}")"
+            echo "  ${s%%|*}"
             echo "${s#*|}" | fold -s -w 68 | sed 's/^/      /'
         done
     fi
     echo
-    echo "${#G_TREE[@]} password(s) for ${#R_FILE[@]} .p12 file(s)."
+    echo "${#G_MEM[@]} individual password(s) for ${#R_FILE[@]} .p12 file(s)."
 }
 
 print_plan
@@ -503,7 +430,6 @@ if [ "${DRYRUN}" -eq 1 ]; then exit 0; fi
 if [ "${#SKIPPED[@]}" -gt 0 ] && [ "${PKI_ASSUME_YES:-0}" != "0" ]; then
     die "${#SKIPPED[@]} .p12 cannot be opened (see above)"
 fi
-if [ "${#G_TREE[@]}" -eq 0 ]; then die "nothing to store"; fi
 
 confirm() {
     local ans
@@ -572,16 +498,27 @@ emit_string() {   # emit_string KEY VALUE [protect]
 }
 
 build_notes() {
-    local g i
-    echo "S/MIME .p12 passwords. This Notes text holds no passwords."
-    echo "Each custom attribute is the password of one issuance."
+    local g i m
+    echo "S/MIME credentials installer. This Notes text holds no passwords."
+    echo "Installer: ${INST_BASE}"
+    echo "The Password field is the installer password (${INST_BASE}.pass);"
+    echo "it decrypts the installer's payload."
     echo "Data as of ${MOD} (newest source file)."
+    echo
+    echo "The installer contains:"
+    for ((m = 0; m < ${#M_TYPE[@]}; m++)); do
+        parse_name "${M_FILE[m]}"
+        echo "  ${M_TYPE[m]}: ${CN} (expires ${EXPIRY}) [${M_NOTE[m]}]"
+    done
+    if [ "${INDIVIDUAL}" -eq 0 ]; then return 0; fi
+    echo
+    echo "Each custom attribute is the password of one issuance's .p12 files."
     echo "Copy one: keepassxc-cli clip -a 'ATTRIBUTE' DB 'TITLE'"
     for g in "${ORDER[@]}"; do
         echo
         echo "${G_LABEL[g]}"
         for i in ${G_MEM[g]}; do
-            echo "  ${R_FILE[i]##*/}: ${R_STATUS[i]}; ${R_END[i]}"
+            echo "  ${R_FILE[i]}: ${R_NOTE[i]}; ends ${R_END[i]}"
         done
     done
 }
@@ -595,12 +532,13 @@ emit_entry() {
     emit_times "${MOD}"
     emit_string Title "${TITLE}"
     emit_string UserName ""
-    emit_string Password "" protect
+    pw=$(read_pw "${PASSFILE}" 1)
+    emit_string Password "${pw}" protect
     emit_string URL ""
     printf '\t\t\t<String><Key>Notes</Key><Value>%s</Value></String>\n' \
         "$(xml_esc "${notes}" 1)"
     for g in "${ORDER[@]}"; do
-        pw=$(read_pw "${G_SRC[g]}" "${G_LINE[g]}")
+        pw=$(read_pw "${G_SRC[g]}" 1)
         emit_string "${G_LABEL[g]}" "${pw}" protect
     done
     pw=""
@@ -625,10 +563,17 @@ emit_xml() {
 }
 
 if [ -n "${XML_OUT}" ]; then
-    if [ -e "${XML_OUT}" ]; then die "${XML_OUT} exists; not overwriting"; fi
+    if [ -d "${XML_OUT}" ]; then die "${XML_OUT} is a directory"; fi
     warn "${XML_OUT} will hold the passwords in PLAIN TEXT;" \
          "delete it after use"
-    if ! confirm "Write it?"; then die "Aborted."; fi
+    if [ -e "${XML_OUT}" ] || [ -L "${XML_OUT}" ]; then
+        if ! confirm "${XML_OUT} exists. Overwrite it?"; then
+            die "Aborted; ${XML_OUT} is unchanged."
+        fi
+        rm -f -- "${XML_OUT}"   # replaced, not written through: new file, 0600
+    elif ! confirm "Write it?"; then
+        die "Aborted."
+    fi
     ( set -o noclobber; emit_xml > "${XML_OUT}" )
     echo "Wrote ${XML_OUT} (mode 0600)."
     exit 0
@@ -651,16 +596,6 @@ if [ ! -f "${DB}" ]; then
         "to start one: keepassxc-cli db-create -p ${DB}"
 fi
 if [ ! -w "${DB}" ]; then die "cannot write ${DB}"; fi
-
-TMPD=""
-KP_PASS=""
-cleanup() {
-    KP_PASS=""
-    if [ -n "${TMPD}" ]; then rm -rf "${TMPD}"; fi
-}
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM HUP
 
 if ! confirm "Merge this entry into ${DB##*/}?"; then die "Aborted."; fi
 
@@ -693,7 +628,6 @@ if [ -n "${KEYFILE}" ]; then
 fi
 if [ "${NOPASS}" -eq 1 ]; then DB_ARGS+=(--no-password); fi
 
-TMPD=$(mktemp -d "${TMPDIR:-/tmp}/kpentry.XXXXXX")
 STAGE="${TMPD}/staging.kdbx"
 XML="${TMPD}/entry.xml"
 
@@ -701,6 +635,7 @@ emit_xml > "${XML}"
 kp "${IMP_LINES}" import "${IMPORT_ARGS[@]}" "${XML}" "${STAGE}" >/dev/null \
     || die "keepassxc-cli import failed"
 rm -f "${XML}"      # the plain-text XML is gone as soon as it is imported
+rm -rf "${WORK}"    # and so is the decrypted payload
 
 echo "Preview of the merge into ${DB##*/}:"
 kp 1 merge --dry-run -s "${DB_ARGS[@]}" "${DB}" "${STAGE}" | sed 's/^/  /' \

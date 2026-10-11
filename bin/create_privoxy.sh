@@ -16,8 +16,11 @@
 # privoxy/README.md) and trust the new certificate on the devices that use
 # the proxy.
 
-# 10 years (plus leap days, half of root)
-DAYS=3653
+# simply replicate the relative short expiration of a private server cert
+# because the server cert must be reissued anyway and longer Root CA lifetime
+# doesn't offer any real advantage
+# https://support.apple.com/en-us/HT210176
+DAYS=825
 
 CATRUE=${CATRUE:-1}
 CERTDIR=${CERTDIR:-privoxy}

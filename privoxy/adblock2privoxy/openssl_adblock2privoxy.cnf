@@ -15,9 +15,8 @@ default_ca                      = CA_default
 [ CA_default ]
 dir                             = privoxy
 new_certs_dir                   = $dir/newcerts
-database                        = $dir/index.txt
-# serial                          = $dir/serial
 rand_serial                     = yes
+database                        = $dir/index.txt
 private_key                     = $dir/private/$dir.key.pem
 certificate                     = $dir/certs/$dir.cert.pem
 

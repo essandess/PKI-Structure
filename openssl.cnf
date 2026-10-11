@@ -19,7 +19,7 @@ default_ca                      = CA_default
 [ CA_default ]
 dir                             = root
 new_certs_dir                   = $dir/newcerts
-serial                          = $dir/serial
+rand_serial                     = yes
 database                        = $dir/index.txt
 private_key                     = $dir/private/$dir.key.pem
 certificate                     = $dir/certs/$dir.cert.pem
@@ -62,7 +62,7 @@ countryName_default             = $ENV::ORG_COUNTRY
 stateOrProvinceName_default     = $ENV::ORG_STATE
 localityName_default            = $ENV::ORG_LOCALITY
 organizationName_default        = $ENV::ORG_NAME
-organizationalUnitName_default  = $ENV::ORG_NAME Certification Authority
+organizationalUnitName_default  = $ENV::ORG_NAME Root Certification Authority
 commonName_default              = $ENV::ORG_NAME Root CA
 
 [ root_ca ]

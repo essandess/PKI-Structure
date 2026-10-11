@@ -285,12 +285,13 @@ if ! [ "${CATRUE}" == "0" ]; then
 	    touch "${f}"
 	fi
     done
-    for f in "${CERTDIR}"/serial; do
-	if ! [ -f "${f}" ]; then
-	    # serial must have an *even* number of characters
-	    echo '01' > "${f}"
-	fi
-    done
+# superceded by rand_serial
+#     for f in "${CERTDIR}"/serial; do
+#	if ! [ -f "${f}" ]; then
+#	    # serial must have an *even* number of characters
+#	    echo '01' > "${f}"
+#	fi
+#     done
 fi
 
 # check for existence of passphrase

@@ -3,15 +3,28 @@
 # create_credentials.sh -- build a macOS credential installer from the PKI tree.
 #
 # Usage: create_credentials.sh [--user-keychain] [--extra-pki-dir DIR]...
-#                              [--allow-expired-encryption]
-#                              [--allow-superseded-encryption] ['NAME_GLOB' ...]
+#                              [--exclude-expired-encryption]
+#                              [--exclude-superseded-encryption] ['NAME_GLOB' ...]
 #        create_credentials.sh --ca-only [--user-keychain]
+#        create_credentials.sh --ca-certs-only [--user-keychain]
 #
-# Writes ONE installer, credentials/install_credentials_<stem>.sh, after
-# listing its payload and asking for confirmation (PKI_ASSUME_YES=1 skips
-# the prompt). The payload is a tar.xz, base64-encoded with openssl, appended
-# to the script. <stem> is the globs with glob characters spelled out (see
-# installer_name), "nosmimes" without globs, "caonly" with --ca-only.
+# Writes ONE installer, mdm-private/credentials/install_credentials_<stem>.sh,
+# for every mode, after listing its payload and asking for
+# confirmation (PKI_ASSUME_YES=1 skips the prompt). The payload is a tar.xz,
+# base64-encoded with openssl, appended to the script. <stem> is the globs
+# with glob characters spelled out (see installer_name), "nosmimes" without
+# globs, "caonly" with --ca-only.
+#
+# Without --ca-only, when S/MIME .p12 files are included, the tar also holds
+# their SECRET password files (<name>.p12.pass) and is therefore encrypted
+# (openssl enc, PBKDF2) with a new random password. That password is written
+# next to the installer as install_credentials_<stem>.sh.pass (mode 0600) and
+# the installer asks for it on the terminal, as create_keepass_entry.sh asks
+# for its master password: never in argv or the environment. Treat the
+# installer and its .pass file as secrets and send them by different
+# channels. mdm-private/ holds secrets; keep it out of version control.
+# --ca-only is never encrypted and never includes passwords: CA secret keys
+# are not distributed this way.
 #
 # Always single-quote each 'NAME_GLOB': the shell must not expand it. The
 # script matches it, as a bash glob with brace expansion, against the S/MIME
@@ -37,13 +50,22 @@
 #                    into the login keychain.
 # Server certificates are not included: the installed CAs already validate
 # them. Items that do not exist are reported and left out of the payload.
-# The installer confirms each item and stores no passwords; .p12 passwords
-# are prompted for or read from PKI_P12_PASSWORD_<GROUP>. Its --tar-only
-# flag writes the payload to credentials_<stem>.txz in the current directory.
+# The installer confirms each item and stores no passwords. With --ca-only
+# the .p12 passwords are prompted for or read from PKI_P12_PASSWORD_<GROUP>;
+# otherwise they come from the encrypted payload and only the installer
+# password is asked for. Its --tar-only flag writes the payload, still
+# encrypted when it is, to credentials_<stem>.txz[.enc] in the current
+# directory.
 #
 # --ca-only: the payload holds only root.p12 and the valid intermediate .p12
 # (password protected), imported and trusted like the CA certificates above.
 # Creating it needs no sudo.
+#
+# --ca-certs-only: the payload holds only the public CA certificates (root,
+# valid intermediate, privoxy CA): no .p12 files, no passwords. They are
+# imported like the CA certificates above and the root is trusted. The
+# installer is not encrypted. Takes no 'NAME_GLOB'
+# and no --extra-pki-dir.
 #
 # Validation, before anything enters the payload (unexpired CRLs found in
 # root/ and intermediate/, or named by PKI_ROOT_CRL / PKI_INTERMEDIATE_CRL):
@@ -53,16 +75,15 @@
 #   S/MIME        must verify against the root through a valid intermediate,
 #                 CRLs of the whole chain checked (openssl verify
 #                 -crl_check_all)
-# Opt-in exceptions, for decrypting old mail only. An S/MIME ENCRYPTION
-# certificate is rejected when it is expired or revoked with reason
-# "superseded" (what create_smime.sh sets on reissue) unless you ask for it:
-#   --allow-expired-encryption      include expired encryption certificates
-#   --allow-superseded-encryption   include those revoked as superseded
-# (both, for one that is both). Without the flag it is left out, with a
-# reminder to opt in. Included ones carry a warning. A signature
-# certificate is never accepted when expired or revoked, nor an encryption
-# certificate whose keyUsage allows signing or that is revoked for any
-# other reason.
+# Old encryption certificates, for decrypting old mail. An S/MIME ENCRYPTION
+# certificate that is expired, or revoked with reason "superseded" (what
+# create_smime.sh sets on reissue), is included by default, with a warning,
+# because its key is still needed. To leave them out:
+#   --exclude-expired-encryption      exclude expired encryption certificates
+#   --exclude-superseded-encryption   exclude those revoked as superseded
+# (one that is both is excluded by either flag). A signature certificate is
+# never accepted when expired or revoked, nor an encryption certificate
+# whose keyUsage allows signing or that is revoked for any other reason.
 #
 # Environment: PKI_ASSUME_YES, PKI_ROOT_CRL, PKI_INTERMEDIATE_CRL,
 # PKI_PRIVOXY_DIRS (default privoxy).
@@ -87,12 +108,14 @@ cd "${PKI_ROOT}" || exit
 . "${SCRIPT_DIR}/pki_common.sh"
 . "${PKI_ROOT}/bin/define_openssl.sh"
 
-for fn in cert_sha1 cert_smime_role cert_is_ca; do
+for fn in cert_sha1 cert_smime_role cert_is_ca pki_random_password; do
     declare -F "${fn}" >/dev/null \
         || { echo "Error: ${fn} is not defined by bin/pki_common.sh (append pki_common_additions.sh to it)." >&2; exit 1; }
 done
 
-OUTDIR=credentials
+OUTDIR=mdm-private/credentials
+ENC_CIPHER=aes-256-cbc   # payload encryption (openssl enc), without --ca-only
+ENC_ITER=600000          # PBKDF2 iterations (needs OpenSSL 1.1.1+/LibreSSL 3.1+)
 ROOT_CERT=root/certs/root.cert.pem
 ROOT_P12=root/private/root.p12
 PRIVOXY_DIRS=${PKI_PRIVOXY_DIRS:-privoxy}
@@ -102,10 +125,9 @@ SMIME_RE='^(.+)-(signature|encryption)(\.[0-9a-fA-F]{40})?\.cert\.pem$'
 NAME_GLOB_RE='^[][A-Za-z0-9_.,*?{}!^-]+$'
 
 CA_ONLY=0
-ALLOW_EXPIRED_ENC=0
-ALLOW_SUPERSEDED_ENC=0
-OPTIN_EXPIRED=0       # certificates left out for want of --allow-expired-encryption
-OPTIN_SUPERSEDED=0    # ... and of --allow-superseded-encryption
+CA_CERTS_ONLY=0
+EXCLUDE_EXPIRED_ENC=0
+EXCLUDE_SUPERSEDED_ENC=0
 USER_KEYCHAIN=0
 CA_DOMAIN=system   # payload directory and keychain of the CA certificates
 HELP=0
@@ -136,17 +158,21 @@ while [[ $# -gt 0 ]]; do
             CA_ONLY=1
             shift
             ;;
+        --ca-certs-only)
+            CA_CERTS_ONLY=1
+            shift
+            ;;
         --user-keychain)
             USER_KEYCHAIN=1
             CA_DOMAIN=user
             shift
             ;;
-        --allow-expired-encryption)
-            ALLOW_EXPIRED_ENC=1
+        --exclude-expired-encryption)
+            EXCLUDE_EXPIRED_ENC=1
             shift
             ;;
-        --allow-superseded-encryption)
-            ALLOW_SUPERSEDED_ENC=1
+        --exclude-superseded-encryption)
+            EXCLUDE_SUPERSEDED_ENC=1
             shift
             ;;
         --extra-pki-dir)
@@ -178,9 +204,10 @@ if [ "${HELP}" != "0" ]; then
     cat <<USEAGE
 Useage:
 
-$(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--allow-expired-encryption]
-    [--allow-superseded-encryption] ['NAME_GLOB' ...]
+$(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--exclude-expired-encryption]
+    [--exclude-superseded-encryption] ['NAME_GLOB' ...]
 $(basename "$0") --ca-only [--user-keychain]
+$(basename "$0") --ca-certs-only [--user-keychain]
 
 Creates ONE installer, ./${OUTDIR}/install_credentials_<stem>.sh, with the
 root, intermediate and privoxy CA certificates (those that exist) and the
@@ -197,14 +224,22 @@ Without 'NAME_GLOB' no S/MIME certificates are included.
 The payload is listed and confirmed (y/N) before the installer is written;
 PKI_ASSUME_YES=1 skips the prompt.
 
+The installer is written to mdm-private/credentials. When
+it includes S/MIME certificates, its payload also holds the secret .p12
+password files, so the payload is encrypted with a new random password,
+saved next to the installer as install_credentials_<stem>.sh.pass (mode
+0600). The installer asks for that password; send it by a different channel
+than the installer. With --ca-only the installer is not encrypted and
+contains no passwords.
+
 Every certificate is validated first: the intermediate against the root, the
 S/MIME certificates against the root through a valid intermediate, with the
 CRLs checked (an unexpired CRL is required). An S/MIME ENCRYPTION certificate
 that is expired, or revoked as "superseded" (what create_smime.sh sets when
-it reissues one), is left out unless you opt in, to decrypt old mail:
-  --allow-expired-encryption      include expired encryption certificates
-  --allow-superseded-encryption   include those revoked as superseded
-You are reminded when certificates were left out for want of a flag.
+it reissues one), is included by default, with a warning, to decrypt old
+mail. To leave them out:
+  --exclude-expired-encryption      exclude expired encryption certificates
+  --exclude-superseded-encryption   exclude those revoked as superseded
 Expired or revoked signature certificates are always rejected.
 
   --user-keychain         install the CA certificates into the user's login
@@ -219,9 +254,15 @@ Expired or revoked signature certificates are always rejected.
   --ca-only               create an installer whose payload is only root.p12
                           and the valid intermediate .p12; running that
                           installer imports them and trusts the root
+  --ca-certs-only         create an installer with only the public CA
+                          certificates (root, valid intermediate, privoxy
+                          CA): no .p12 files, no passwords; the root is
+                          trusted. Not encrypted.
+                          Takes no 'NAME_GLOB' or --extra-pki-dir.
 
 Server certificates are not included. The installer's --tar-only flag writes
-its payload to credentials_<stem>.txz in the current directory.
+its payload (still encrypted, if it is) to credentials_<stem>.txz, or
+credentials_<stem>.txz.enc when encrypted, in the current directory.
 USEAGE
     exit 0
 fi
@@ -231,6 +272,11 @@ if [ "${CA_ONLY}" = "1" ] && [ "${#NAMES[@]}" -gt 0 ]; then
 fi
 if [ "${CA_ONLY}" = "1" ] && [ "${#EXTRA_DIRS[@]}" -gt 0 ]; then
     die "--ca-only does not use --extra-pki-dir"
+fi
+if [ "${CA_CERTS_ONLY}" = "1" ]; then
+    [ "${CA_ONLY}" = "0" ] || die "--ca-certs-only and --ca-only are alternatives"
+    [ "${#NAMES[@]}" -eq 0 ] || die "--ca-certs-only does not take 'NAME_GLOB' arguments"
+    [ "${#EXTRA_DIRS[@]}" -eq 0 ] || die "--ca-certs-only does not use --extra-pki-dir"
 fi
 
 : "${OPENSSL:?OPENSSL is not set by bin/define_openssl.sh}"
@@ -548,13 +594,13 @@ crl_revocation_reason() {
 # The certificate must verify against the root through a valid intermediate,
 # with the CRLs of the whole chain checked. A signature certificate must pass
 # outright. An ENCRYPTION certificate, whose key is still needed to decrypt
-# old mail, may in addition be
-#   expired                         if --allow-expired-encryption is given
-#   revoked as "superseded"         if --allow-superseded-encryption is given
-# (what create_smime.sh sets when it reissues a certificate). Without the
-# flag it is rejected and counted, so that the caller can remind the user.
+# old mail, is also accepted when it is
+#   expired                         unless --exclude-expired-encryption
+#   revoked as "superseded"         unless --exclude-superseded-encryption
+# (what create_smime.sh sets when it reissues a certificate). An excluded
+# one is rejected.
 validate_smime_cert() {
-    local f="$1" role="$2" out err out2 err2 reason expired=0 superseded=0 need="" what
+    local f="$1" role="$2" out err out2 err2 reason expired=0 superseded=0 excl="" what
 
     CERT_STATE="valid"
     if [ "${role}" != signature ] && [ "${role}" != encryption ]; then
@@ -605,17 +651,15 @@ validate_smime_cert() {
         fi
     fi
 
-    # Needs an opt-in
-    if [ "${superseded}" = 1 ] && [ "${ALLOW_SUPERSEDED_ENC}" != 1 ]; then
-        need="${need} --allow-superseded-encryption"
-        OPTIN_SUPERSEDED=$((OPTIN_SUPERSEDED + 1))
+    # Excluded by flag
+    if [ "${superseded}" = 1 ] && [ "${EXCLUDE_SUPERSEDED_ENC}" = 1 ]; then
+        excl="${excl} --exclude-superseded-encryption"
     fi
-    if [ "${expired}" = 1 ] && [ "${ALLOW_EXPIRED_ENC}" != 1 ]; then
-        need="${need} --allow-expired-encryption"
-        OPTIN_EXPIRED=$((OPTIN_EXPIRED + 1))
+    if [ "${expired}" = 1 ] && [ "${EXCLUDE_EXPIRED_ENC}" = 1 ]; then
+        excl="${excl} --exclude-expired-encryption"
     fi
-    if [ -n "${need}" ]; then
-        warn "rejecting ${f}: ${what}; add${need} to include it (only to decrypt old mail)"
+    if [ -n "${excl}" ]; then
+        warn "rejecting ${f}: ${what}; excluded by${excl}"
         return 1
     fi
 
@@ -700,6 +744,17 @@ note_group_password() {
     elif [ "${GROUP_LINE[${g}]}" != "${line}" ]; then
         GROUP_LINE[${g}]="mixed"
     fi
+}
+
+# stage_p12_password PWFILE LINE DEST: write line LINE of PWFILE, alone, to
+# DEST (mode 0600 by umask). It is the secret that opens the .p12 next to it.
+stage_p12_password() {
+    local pw
+
+    pw=$(sed -n "${2}p" "$1")
+    pw=${pw%$'\r'}
+    [ -n "${pw}" ] || die "no password on line $2 of $1"
+    printf '%s\n' "${pw}" > "$3"
 }
 
 # ---------------------------------------------------------------------
@@ -961,6 +1016,8 @@ build_payload_dir() {
             # and hold this certificate together with its private key
             pf="${sd}/smime/private/passphrase.txt"
             grp="${group}"
+            pwfile=""
+            line=""
             rc=0
             psrc=$(p12_password_source "${p12}" "${pf}") || rc=$?
             case "${rc}" in
@@ -1007,6 +1064,13 @@ build_payload_dir() {
             [ ! -e "${dir}/smime/${name}.p12" ] \
                 || die "payload file name '${name}' is used twice (a clash of the last six sha1 digits)."
             cp "${p12}" "${dir}/smime/${name}.p12"
+            if [ -n "${pwfile}" ]; then
+                # the secret that opens this .p12; the payload is encrypted
+                stage_p12_password "${pwfile}" "${line}" "${dir}/smime/${name}.p12.pass"
+                if [[ "${pwfile}" != *.p12.pass ]] && [ "${line}" = 1 ]; then
+                    warn "${p12} opens only with line 1 of ${pwfile} (the key passphrase); that line goes into the encrypted payload"
+                fi
+            fi
             printf 'smime\t%s\t%s\t1\t%s\t%s\n' "${grp}" "${sha1}" "${name}" \
                    "${role}, ${state}${src}" >> "${dir}/manifest"
             count=$((count + 1))
@@ -1015,17 +1079,6 @@ build_payload_dir() {
 
     SMIME_COUNT="${count}"
     echo "${count} S/MIME certificate(s) selected, ${rejected} rejected" >&2
-
-    if [ $((OPTIN_EXPIRED + OPTIN_SUPERSEDED)) -gt 0 ]; then
-        echo "Reminder: encryption certificates were left out because you have not opted in" >&2
-        echo "(they are only useful to decrypt old mail). To include them, add:" >&2
-        if [ "${OPTIN_EXPIRED}" -gt 0 ]; then
-            echo "  --allow-expired-encryption       (${OPTIN_EXPIRED} expired)" >&2
-        fi
-        if [ "${OPTIN_SUPERSEDED}" -gt 0 ]; then
-            echo "  --allow-superseded-encryption    (${OPTIN_SUPERSEDED} revoked as superseded)" >&2
-        fi
-    fi
 }
 
 # show_payload OUT DIR: list what goes into the tar payload
@@ -1043,12 +1096,24 @@ show_payload() {
         items=$((items + 1))
         printf '  %-12s %-11s %s\n' "${kind}" "${type}" "$(describe "${file}" "${note}")" >&2
     done 3< "${dir}/manifest"
-    echo "  ${items} item(s), ${keys} private key(s), password-protected; no passwords are included." >&2
+    if [ "${ENCRYPT}" = 1 ]; then
+        pws=0
+        for f in "${dir}"/smime/*.p12.pass; do
+            pws=$((pws + 1))
+        done
+        echo "  ${items} item(s), ${keys} private key(s), ${pws} SECRET .p12 password file(s)." >&2
+        echo "  The payload will be encrypted with a new installer password, saved as" >&2
+        echo "  ${out}.pass" >&2
+    else
+        echo "  ${items} item(s), ${keys} private key(s), password-protected; no passwords are included." >&2
+    fi
 }
 
-# write_installer LABEL DIR OUT TARNAME
+# write_installer LABEL DIR OUT TARNAME [PASSWORD]
+# With a PASSWORD the tar.xz is encrypted with it (openssl enc); the password
+# goes to openssl on fd 3, never in argv or the environment.
 write_installer() {
-    local label="$1" dir="$2" out="$3" tarname="$4"
+    local label="$1" dir="$2" out="$3" tarname="$4" password="${5:-}"
 
     export COPYFILE_DISABLE=1   # no AppleDouble files in the tar on macOS
     {
@@ -1061,6 +1126,13 @@ write_installer() {
         printf 'INSTALL_FOR="%s"\n' "${label}"
         printf 'SYSTEM_KEYCHAIN="%s"\n' /Library/Keychains/System.keychain
         printf 'TAR_NAME="%s"\n' "${tarname}"
+        if [ -n "${password}" ]; then
+            printf 'PAYLOAD_ENCRYPTED=1\n'
+            printf 'ENC_CIPHER="%s"\n' "${ENC_CIPHER}"
+            printf 'ENC_ITER="%s"\n' "${ENC_ITER}"
+        else
+            printf 'PAYLOAD_ENCRYPTED=0\n'
+        fi
         cat <<'INSTALLER'
 
 set -eo pipefail
@@ -1078,13 +1150,19 @@ Run it as yourself (not with sudo); sudo is requested only for the System keycha
   --user-only    only the login keychain items: S/MIME identities, and the
                  CA certificates if the payload has them in user/ (no sudo)
   --list         show what is included and exit
-  --tar-only     only write the payload to ./${TAR_NAME} and exit
+  --tar-only     only write the payload (still encrypted, if it is) to
+                 ./${TAR_NAME} and exit
 
 You are asked (y/N) before each certificate is added; set PKI_ASSUME_YES=1
 to answer yes to everything. Each .p12 password is asked for when needed;
 to avoid the prompt set PKI_P12_PASSWORD_<GROUP>, for example
 PKI_P12_PASSWORD_SMIME (GROUP is the name shown in the prompt, upper-cased,
 with other characters replaced by _).
+
+An encrypted payload (PAYLOAD_ENCRYPTED=1 in this script) asks for the
+installer password, which comes in a separate .pass file. It is read from the
+terminal only, never from the environment, and it also supplies the .p12
+passwords, which are inside the payload.
 USAGE
 }
 
@@ -1166,10 +1244,42 @@ get_password() {
 }
 
 
+# get_installer_password -> sets INSTALLER_PASSWORD. Read from the terminal
+# only (as create_keepass_entry.sh reads its master password): not from argv,
+# not from the environment.
+INSTALLER_PASSWORD=""
+
+get_installer_password() {
+    local pw
+
+    if [ ! -r /dev/tty ]; then
+        echo "No terminal to ask for the installer password." >&2
+        return 1
+    fi
+    IFS= read -r -s -p "Installer password (from the .pass file): " pw </dev/tty \
+        || return 1
+    echo >&2
+    [ -n "${pw}" ] || return 1
+    INSTALLER_PASSWORD="${pw}"
+}
+
+
 # The payload: a base64 encoded tar.xz appended to this script. Plain
 # openssl, so that the macOS-native one is enough.
-payload() {
+payload_raw() {
     sed '1,/^__PAYLOAD_BELOW__$/d' "$0" | openssl base64 -d
+}
+
+
+# payload: the tar.xz, decrypted first when the payload is encrypted. The
+# password reaches openssl on fd 3, never in argv.
+payload() {
+    if [ "${PAYLOAD_ENCRYPTED}" = 1 ]; then
+        payload_raw | openssl enc -d "-${ENC_CIPHER}" -pbkdf2 -md sha256 \
+            -iter "${ENC_ITER}" -pass fd:3 3< <(printf '%s\n' "${INSTALLER_PASSWORD}")
+    else
+        payload_raw
+    fi
 }
 
 
@@ -1196,7 +1306,7 @@ if [ "${TAR_ONLY}" = 1 ]; then
         echo "${TAR_NAME} already exists; not overwriting it." >&2
         exit 1
     fi
-    if ! payload > "${TAR_NAME}.part"; then
+    if ! payload_raw > "${TAR_NAME}.part"; then
         rm -f "${TAR_NAME}.part"
         echo "Could not decode the payload." >&2
         exit 1
@@ -1220,7 +1330,25 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/pki-install.XXXXXX")
 trap 'rm -rf "${WORK}"' EXIT
 export COPYFILE_DISABLE=1
 
-payload | tar -xJf - -C "${WORK}"
+if [ "${PAYLOAD_ENCRYPTED}" = 1 ]; then
+    ATTEMPTS=0
+    while :; do
+        get_installer_password || { echo "No installer password given." >&2; exit 1; }
+        if { payload | tar -xJf - -C "${WORK}"; } 2>/dev/null; then
+            break
+        fi
+        ATTEMPTS=$((ATTEMPTS + 1))
+        if [ "${ATTEMPTS}" -ge 3 ]; then
+            echo "Could not decrypt the payload: wrong password?" >&2
+            exit 1
+        fi
+        echo "Could not decrypt the payload: wrong password? Try again." >&2
+        rm -rf "${WORK:?}"/*
+    done
+    INSTALLER_PASSWORD=""
+else
+    payload | tar -xJf - -C "${WORK}"
+fi
 
 MANIFEST="${WORK}/manifest"
 grep -q '^system-' "${MANIFEST}" || DO_SYSTEM=0
@@ -1373,7 +1501,15 @@ install_keychain() {
         if [ "${present}" = 1 ]; then
             echo "    already present"
         elif [ "${haskey}" = 1 ]; then
-            if ! get_password "${group}"; then
+            if [ -f "${path}.pass" ]; then
+                # one password per .p12, from the encrypted payload
+                PASSWORD=$(sed -n 1p "${path}.pass")
+                PASSWORD=${PASSWORD%$'\r'}
+                if [ -z "${PASSWORD}" ]; then
+                    fail "empty password file for ${desc}"
+                    continue
+                fi
+            elif ! get_password "${group}"; then
                 fail "no password available for '${group}'"
                 continue
             fi
@@ -1441,7 +1577,14 @@ echo "Done."
 exit 0
 INSTALLER
         printf '__PAYLOAD_BELOW__\n'
-        tar -cJf - -C "${dir}" . | "${OPENSSL}" base64
+        if [ -n "${password}" ]; then
+            tar -cJf - -C "${dir}" . \
+                | "${OPENSSL}" enc "-${ENC_CIPHER}" -pbkdf2 -md sha256 \
+                      -iter "${ENC_ITER}" -salt -pass fd:3 3< <(printf '%s\n' "${password}") \
+                | "${OPENSSL}" base64
+        else
+            tar -cJf - -C "${dir}" . | "${OPENSSL}" base64
+        fi
     } > "${out}"
     chmod 0750 "${out}"   # the project's mode for scripts; the contents are encrypted
 }
@@ -1451,7 +1594,7 @@ INSTALLER
 # ---------------------------------------------------------------------
 
 mkdir -p "${OUTDIR}"
-chmod 0755 "${OUTDIR}"
+chmod 0700 "${OUTDIR%/*}" "${OUTDIR}"   # mdm-private holds secrets
 
 SEL_CERTNAMES=()
 
@@ -1492,6 +1635,9 @@ else
 
     if [ "${#NAMES[@]}" -eq 0 ]; then
         stem=nosmimes
+        if [ "${CA_CERTS_ONLY}" = "1" ]; then
+            stem=cacerts
+        fi
         label="CA certificates"
     else
         stem=""
@@ -1504,21 +1650,43 @@ fi
 
 build_payload_dir
 if [ "${CA_ONLY}" != "1" ] && [ "${#NAMES[@]}" -gt 0 ] && [ "${SMIME_COUNT}" -eq 0 ]; then
-    die "none of the matching S/MIME certificates can be included (no .p12, or rejected by validation or for want of an opt-in flag: see above)."
+    die "none of the matching S/MIME certificates can be included (no .p12, or rejected by validation or by an --exclude flag: see above)."
 fi
 if [ ! -s "${STAGE}/payload/manifest" ]; then
     warn "nothing to include in the payload; no installer created."
     exit 0
 fi
 
+# The payload is secret, and so encrypted, when it holds .p12 password files
+ENCRYPT=0
+if [ "${CA_ONLY}" != "1" ] && [ "${SMIME_COUNT}" -gt 0 ]; then
+    ENCRYPT=1
+fi
+
 out="${OUTDIR}/install_credentials_${stem}.sh"
 show_payload "${out}" "${STAGE}/payload"
 
 if confirm "Create ${out}?"; then
-    write_installer "${label}" "${STAGE}/payload" "${out}" "credentials_${stem}.txz"
+    tarname="credentials_${stem}.txz"
+    installer_pw=""
+    if [ "${ENCRYPT}" = 1 ]; then
+        tarname="${tarname}.enc"
+        installer_pw=$(pki_random_password)
+    fi
+    write_installer "${label}" "${STAGE}/payload" "${out}" "${tarname}" "${installer_pw}"
     echo "Created ${out}" >&2
+    if [ "${ENCRYPT}" = 1 ]; then
+        printf '%s\n' "${installer_pw}" > "${out}.pass"
+        chmod 0600 "${out}.pass"
+        installer_pw=""
+        echo "Created ${out}.pass: the installer password (SECRET)." >&2
+        echo "Send it to the user by a different channel than ${out##*/}; both are secret." >&2
+    fi
 
-    groups=$(awk -F'\t' '$4 == 1 { print $2 }' "${STAGE}/payload/manifest" | sort -u)
+    groups=""
+    if [ "${ENCRYPT}" != 1 ]; then   # otherwise the passwords are in the payload
+        groups=$(awk -F'\t' '$4 == 1 { print $2 }' "${STAGE}/payload/manifest" | sort -u)
+    fi
     if [ -n "${groups}" ]; then
         echo "Send these .p12 passwords separately; the installer contains none:" >&2
         while IFS= read -r g; do

@@ -118,7 +118,7 @@ if "${OPENSSL}" ca -config openssl.cnf \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
-        -rand_serial -batch
+        -batch
 then
     REISSUED=1
     rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem

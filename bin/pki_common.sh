@@ -305,3 +305,66 @@ pki_assert_ca_scope() {
             ;;
     esac
 }
+
+# ---------------------------------------------------------------------
+# Finishing a certificate
+# ---------------------------------------------------------------------
+
+# pki_finish_cert CERTDIR CERTNAME ISSUERDIR ISSUERNAME [P12_PASS_FILE]
+# Chain, verify, DER and .p12 of CERTDIR/certs/CERTNAME.cert.pem. Self-signed
+# (issuer is the certificate itself): no chain file. P12_PASS_FILE holds the
+# .p12 password; default is line 2 of CERTDIR/private/passphrase.txt.
+pki_finish_cert() {
+    local certdir="$1" certname="$2" issuerdir="$3" issuername="$4" p12pass="${5:-}"
+    local cert="${certdir}/certs/${certname}.cert.pem"
+    local chain="${certdir}/certs/${certname}.chain.pem"
+    local cafile="${issuerdir}/certs/${issuername}.cert.pem"
+    local keypass="${certdir}/private/passphrase.txt"
+    local p12="${certdir}/private/${certname}.p12" passout p12in
+
+    if [ "${issuerdir}/${issuername}" != "${certdir}/${certname}" ]; then
+        if [ -f "${issuerdir}/certs/${issuername}.chain.pem" ]; then
+            cafile="${issuerdir}/certs/${issuername}.chain.pem"
+        fi
+        cat "${cert}" "${cafile}" > "${chain}"
+        "${OPENSSL}" verify -CAfile "${cafile}" "${chain}"
+    fi
+    "${OPENSSL}" verify -CAfile "${cafile}" "${cert}"
+
+    "${OPENSSL}" x509 -outform der -in "${cert}" -out "${certdir}/certs/${certname}.cer"
+
+    # Same file for -passin and -passout: line 1 opens the key, line 2 is
+    # the .p12 password (man openssl-passphrase-options).
+    if [ -n "${p12pass}" ]; then
+        passout="file:${p12pass}"
+        p12in="file:${p12pass}"
+    else
+        passout="file:${keypass}"
+        p12in="pass:$(sed -n 2p "${keypass}")"
+    fi
+    "${OPENSSL}" pkcs12 -legacy -export -out "${p12}" \
+        -inkey "${certdir}/private/${certname}.key.pem" -in "${cert}" \
+        -passin "file:${keypass}" -passout "${passout}"
+    "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin "${p12in}"
+}
+
+# pki_sha1_files MODE CERTDIR CERTNAME NEWNAME "SUBDIR/SUFFIX ..."
+# mv or cp CERTNAME.<suffix> to NEWNAME.<sha1>.<suffix>; sets PKI_LEAF_SHA1.
+pki_sha1_files() {
+    local mode="$1" certdir="$2" certname="$3" newname="$4" files="$5"
+    local item dir suffix src dst
+
+    PKI_LEAF_SHA1=$(cert_sha1 "${certdir}/certs/${certname}.cert.pem")
+    for item in ${files}; do
+        dir=${item%%/*}
+        suffix=${item#*/}
+        src="${certdir}/${dir}/${certname}.${suffix}"
+        dst="${certdir}/${dir}/${newname}.${PKI_LEAF_SHA1}.${suffix}"
+        [ -f "${src}" ] || { echo "Error: '${src}' is missing." >&2; return 1; }
+        case "${mode}" in
+            mv) mv -f "${src}" "${dst}" ;;
+            cp) cp -p "${src}" "${dst}" ;;
+            *) echo "Error: pki_sha1_files mode must be mv or cp." >&2; return 1 ;;
+        esac
+    done
+}

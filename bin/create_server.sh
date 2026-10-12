@@ -151,50 +151,7 @@ else
     exit 1
 fi
 
-# Server chain
-if [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem ]; then
-    cat "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	"${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem \
-	> "${CERTDIR}"/certs/"${CERTNAME}".chain.pem
-else
-    cat "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	"${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
-	> "${CERTDIR}"/certs/"${CERTNAME}".chain.pem
-fi
-
-# Intermediate CA chain openssl verification
-if [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem ]; then
-    "${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem \
-	"${CERTDIR}"/certs/"${CERTNAME}".chain.pem
-else
-    "${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
-	"${CERTDIR}"/certs/"${CERTNAME}".chain.pem
-fi
-
-# CA certificate openssl self-verification
-if [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem ]; then
-    "${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem \
-	"${CERTDIR}"/certs/"${CERTNAME}".cert.pem
-else
-    "${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
-	"${CERTDIR}"/certs/"${CERTNAME}".cert.pem
-fi
-
-# Convert to .cer and .p12 for storage
-"${OPENSSL}" x509 -outform der -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	-out "${CERTDIR}"/certs/"${CERTNAME}".cer
-
-# N.b. passphrase.txt holds two independent secrets: line 1 (-passin)
-# unlocks the private key, line 2 (-passout) is the .p12 export password.
-# man openssl-passphrase-options
-"${OPENSSL}" pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
-	-inkey "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-	-in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	-passin file:"${CERTDIR}"/private/passphrase.txt \
-	-passout file:"${CERTDIR}"/private/passphrase.txt
-# verify .p12 passphrase
-"${OPENSSL}" pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
-	-passin "pass:$(sed -n 2p "${CERTDIR}"/private/passphrase.txt)"
+pki_finish_cert "${CERTDIR}" "${CERTNAME}" "${ISSUERCADIR}" "${ISSUERCANAME}"
 
 # decrypt private key
 case ${ALGORITHM} in
@@ -210,16 +167,5 @@ case ${ALGORITHM} in
 esac
 
 # rename certificate
-CERTSHA1=$("${OPENSSL}" x509 -noout -fingerprint -sha1 -inform pem \
-		   -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	       | sed -e 's|^sha1 Fingerprint=||' \
-	       | sed -e 's|:||g' \
-	       | tr '[:upper:]' '[:lower:]' \
-	)
-
-mv "${CERTDIR}"/private/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.key.pem
-mv "${CERTDIR}"/private/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.key.pem.decrypted
-mv "${CERTDIR}"/private/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.p12
-mv "${CERTDIR}"/certs/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.cer
-mv "${CERTDIR}"/certs/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.cert.pem
-mv "${CERTDIR}"/certs/{"${CERTNAME}","${SERVER_FQDN}"."${CERTSHA1}"}.chain.pem
+pki_sha1_files mv "${CERTDIR}" "${CERTNAME}" "${SERVER_FQDN}" \
+    "private/key.pem private/key.pem.decrypted private/p12 certs/cer certs/cert.pem certs/chain.pem"

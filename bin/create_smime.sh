@@ -186,57 +186,14 @@ for EXTENSION in signature encryption; do
 	exit 1
     fi
 
-    # Server chain
-    if [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem ]; then
-	cat "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
-	    "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem \
-	    > "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.chain.pem
-    else
-	cat "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
-	    "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
-	    > "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.chain.pem
-    fi
-
-    # Intermediate CA chain openssl verification
-    if [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem ]; then
-	"${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem \
-	    "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.chain.pem
-    else
-	"${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
-	    "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.chain.pem
-    fi
-
-    # CA certificate openssl self-verification
-    if [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem ]; then
-	"${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".chain.pem \
-	    "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem
-    else
-	"${OPENSSL}" verify -CAfile "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
-	    "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem
-    fi
-
-    # Convert to .cer and .p12 for storage
-    "${OPENSSL}" x509 -outform der \
-	    -in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
-	    -out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cer
-
     # The .p12 export password of this issuance (see the top of this file),
     # in a file of its own next to the .p12. umask 077 keeps it private.
     printf '%s\n' "${P12_PASSWORD}" > "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12.pass
     chmod 0600 "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12.pass
 
-    # The key is opened with passphrase.txt line 1 (-passin); the .p12 is
-    # protected by its own password (-passout).
-    # man openssl-passphrase-options
-    "${OPENSSL}" pkcs12 -legacy -export \
-		-out "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12 \
-		-inkey "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \
-		-in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
-		-passin file:"${CERTDIR}"/private/passphrase.txt \
-		-passout file:"${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12.pass
-    # verify .p12 passphrase
-    "${OPENSSL}" pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12 \
-	    -passin file:"${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12.pass
+    # chain, verify, DER and .p12 (password from the file above)
+    pki_finish_cert "${CERTDIR}" "${CERTNAME}-${EXTENSION}" "${ISSUERCADIR}" "${ISSUERCANAME}" \
+        "${CERTDIR}/private/${CERTNAME}-${EXTENSION}.p12.pass"
 done
 
 # Both certificates were issued; the previous pair no longer needs restoring.
@@ -244,13 +201,7 @@ REISSUED=1
 
 # Copy the new certificates to SHA1-named files, as create_intermediate.sh does.
 for EXTENSION in signature encryption; do
-    CERTSHA1=$(cert_sha1 "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem)
-    for item in ${SMIME_FILES}; do
-	dir=${item%%/*}
-	suffix=${item#*/}
-	cp -p "${CERTDIR}/${dir}/${CERTNAME}-${EXTENSION}.${suffix}" \
-	   "${CERTDIR}/${dir}/${CERTNAME}-${EXTENSION}.${CERTSHA1}.${suffix}"
-    done
+    pki_sha1_files cp "${CERTDIR}" "${CERTNAME}-${EXTENSION}" "${CERTNAME}-${EXTENSION}" "${SMIME_FILES}"
 done
 
 # Only now, with both replacements complete, revoke what they supersede.

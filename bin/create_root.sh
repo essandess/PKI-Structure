@@ -98,28 +98,11 @@ fi
 	-passin file:"${CERTDIR}"/private/passphrase.txt -batch
 REISSUED=1
 
-# CA certificate openssl self-verification
-"${OPENSSL}" verify -CAfile "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	"${CERTDIR}"/certs/"${CERTNAME}".cert.pem
+# verify, .cer and .p12 (self-signed: no chain file)
+pki_finish_cert "${CERTDIR}" "${CERTNAME}" "${CERTDIR}" "${CERTNAME}"
 
 # cert text
 show_cert_text "${CERTDIR}"/certs/"${CERTNAME}".cert.pem
-
-# Convert to .cer and .p12 for storage
-"${OPENSSL}" x509 -outform der -in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	-out "${CERTDIR}"/certs/"${CERTNAME}".cer
-
-# N.b. passphrase.txt holds two independent secrets: line 1 (-passin)
-# unlocks the private key, line 2 (-passout) is the .p12 export password.
-# man openssl-passphrase-options
-"${OPENSSL}" pkcs12 -legacy -export -out "${CERTDIR}"/private/"${CERTNAME}".p12 \
-	-inkey "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-	-in "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	-passin file:"${CERTDIR}"/private/passphrase.txt \
-	-passout file:"${CERTDIR}"/private/passphrase.txt
-# verify .p12 passphrase
-"${OPENSSL}" pkcs12 -legacy -noout -in "${CERTDIR}"/private/"${CERTNAME}".p12 \
-	-passin "pass:$(sed -n 2p "${CERTDIR}"/private/passphrase.txt)"
 
 # Generate the CA's CRL as soon as the CA exists, so the
 # crlDistributionPoints URL in every cert it signs resolves immediately.

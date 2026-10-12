@@ -309,7 +309,7 @@ Environment: `PKI_PRIVOXY_DIRS` (default `privoxy`),
 Running an installer (macOS, as the target user, not root):
 
 ```sh
-./install_credentials_<stem>.sh [--system-only | --user-only] [--list] [--tar-only] [--validate-signature]
+./install_credentials_<stem>.sh [--system-only | --user-only] [--list] [--tar-only] [--check-signature-integrity]
 ```
 
 Order: installer password (if encrypted), signature check, root-anchor check,
@@ -323,7 +323,7 @@ login keychain.
 | `--system-only`, `--user-only` | Install only the System or only the login keychain items |
 | `--list` | Verify the signature, list the payload, and exit |
 | `--tar-only` | Write the payload (still encrypted, if it is) to `credentials_<stem>.txz[.enc]` in the current directory and exit |
-| `--validate-signature` | Decrypt the payload, run the signature check only, and exit 0 if valid, non-zero if not. Installs nothing; needs only `openssl`, not macOS or a non-root user |
+| `--check-signature-integrity` | Decrypt the payload, run the signature check only, and exit 0 if valid, non-zero if not. Installs nothing; needs only `openssl`, not macOS or a non-root user |
 
 Installer environment: `PKI_ASSUME_YES`, `PKI_ROOT_SHA256`, and
 `PKI_P12_PASSWORD_<GROUP>` (for a `.p12` whose password the payload lacks;

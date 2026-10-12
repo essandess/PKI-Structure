@@ -9,6 +9,7 @@ Accepted: prints the state, exit 0. Rejected: reasons on stderr, exit 1.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -18,7 +19,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 SIGN = ("digital_signature", "content_commitment")
@@ -100,7 +100,7 @@ def _openssl_verify(cert_file: Path, trust: Trust, *, crl: str | None = None,
                     no_time: bool = False) -> str | None:
     """None if `openssl verify` passes, else its error line.
     crl: None, "leaf" (-crl_check) or "all" (-crl_check_all)."""
-    cmd = ["openssl", "verify", "-CAfile", str(trust.ca_bundle)]
+    cmd = [os.environ.get("OPENSSL", "openssl"), "verify", "-CAfile", str(trust.ca_bundle)]
     if crl:
         cmd += ["-crl_check_all" if crl == "all" else "-crl_check",
                 "-CRLfile", str(trust.crl_bundle)]

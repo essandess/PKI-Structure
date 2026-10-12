@@ -118,9 +118,6 @@ cd "${PKI_ROOT}" || exit
 . "${PKI_ROOT}/bin/define_openssl.sh"
 . "${PKI_ROOT}/bin/define_python.sh"
 
-"${PYTHON}" -c 'import cryptography' 2>/dev/null \
-    || die "${PYTHON} with the 'cryptography' package is required (certificate validation)."
-
 for fn in cert_sha1 cert_is_ca pki_random_password; do
     declare -F "${fn}" >/dev/null \
         || { echo "Error: ${fn} is not defined by bin/pki_common.sh (append pki_common_additions.sh to it)." >&2; exit 1; }
@@ -151,6 +148,9 @@ die() {
     echo "Error: $*" >&2
     exit 1
 }
+
+"${PYTHON}" -c 'import cryptography' 2>/dev/null \
+    || die "${PYTHON} with the 'cryptography' package is required (certificate validation)."
 
 warn() {
     echo "Warning: $*" >&2
@@ -213,8 +213,8 @@ if [ "${HELP}" != "0" ]; then
     cat <<USEAGE
 Useage:
 
-+$(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--allow-expired-encryption]
-+    [--allow-superseded-encryption] ['NAME_GLOB' ...]
+$(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--allow-expired-encryption]
+    [--allow-superseded-encryption] ['NAME_GLOB' ...]
 $(basename "$0") --ca-certs-only [--user-keychain]
 
 Creates ONE installer, ./${OUTDIR}/install_credentials_<stem>.sh, with the
@@ -563,11 +563,6 @@ pick_main_intermediate() {
 verify_chain() {
     "${OPENSSL}" verify -crl_check_all -CRLfile "${CRL_ALL}" -CAfile "${ANCHORS}" \
         -untrusted "${INTS}" "$@" 2>&1
-}
-
-# The same without any CRL or validity period check (signatures and chain only).
-verify_chain_only() {
-    "${OPENSSL}" verify -no_check_time -CAfile "${ANCHORS}" -untrusted "${INTS}" "$@" 2>&1
 }
 
 # validate_smime_cert CERT ROLE: 0 accepted, 1 rejected; sets CERT_STATE.
@@ -1141,7 +1136,7 @@ umask 077
 
 usage() {
     cat <<USAGE
-Usage: $(basename "$0") [--system-only | --user-only] [--list] [--tar-only] [--validate-signature]
+Usage: $(basename "$0") [--system-only | --user-only] [--list] [--tar-only] [--check-signature-integrity]
 
 Installs the credentials bundled in this script (${INSTALL_FOR}).
 Run it as yourself (not with sudo); sudo is requested only for the System keychain.
@@ -1152,7 +1147,7 @@ Run it as yourself (not with sudo); sudo is requested only for the System keycha
   --list         show what is included and exit
   --tar-only     only write the payload (still encrypted, if it is) to
                  ./${TAR_NAME} and exit
-  --validate-signature
+  --check-signature-integrity
                  only check the signature of this script against the
                  payload (asks for the installer password if the payload
                  is encrypted) and exit: 0 if valid, non-zero if not.
@@ -1339,7 +1334,7 @@ while [ $# -gt 0 ]; do
         --user-only) DO_SYSTEM=0 ;;
         --list) LIST=1 ;;
         --tar-only) TAR_ONLY=1 ;;
-        --validate-signature) VALIDATE_ONLY=1 ;;
+        --check-signature-integrity) VALIDATE_ONLY=1 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 1 ;;
     esac
@@ -1722,7 +1717,7 @@ install_keychain() {
 
 verify_signature
 if [ "${VALIDATE_ONLY}" = 1 ]; then
-    echo "Validation only (--validate-signature): the signature is valid; nothing was installed."
+    echo "Integrity check only (--check-signature-integrity): the file is unchanged since it was signed; nothing was installed."
     exit 0
 fi
 

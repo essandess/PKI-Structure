@@ -11,7 +11,9 @@
 #
 # Also: renewal of a CA certificate with its existing key (pki_ca_prepare),
 # validity capped at the issuer's remaining life (pki_cap_days), random
-# per-identity .p12 passwords (pki_random_password), and cert_is_ca.
+# per-identity .p12 passwords (pki_random_password), cert_is_ca, and the
+# shared finishing steps of every certificate (pki_finish_cert,
+# pki_sha1_files).
 
 # How close to expiry a self-signed CA certificate must be before a new one
 # is issued in its place (see pki_ca_prepare).
@@ -320,7 +322,7 @@ pki_finish_cert() {
     local chain="${certdir}/certs/${certname}.chain.pem"
     local cafile="${issuerdir}/certs/${issuername}.cert.pem"
     local keypass="${certdir}/private/passphrase.txt"
-    local p12="${certdir}/private/${certname}.p12" passout p12in
+    local p12="${certdir}/private/${certname}.p12" passout
 
     if [ "${issuerdir}/${issuername}" != "${certdir}/${certname}" ]; then
         if [ -f "${issuerdir}/certs/${issuername}.chain.pem" ]; then
@@ -337,15 +339,19 @@ pki_finish_cert() {
     # the .p12 password (man openssl-passphrase-options).
     if [ -n "${p12pass}" ]; then
         passout="file:${p12pass}"
-        p12in="file:${p12pass}"
     else
         passout="file:${keypass}"
-        p12in="pass:$(sed -n 2p "${keypass}")"
     fi
     "${OPENSSL}" pkcs12 -legacy -export -out "${p12}" \
         -inkey "${certdir}/private/${certname}.key.pem" -in "${cert}" \
         -passin "file:${keypass}" -passout "${passout}"
-    "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin "${p12in}"
+    # verify the .p12; a shared password goes by environment, never argv
+    if [ -n "${p12pass}" ]; then
+        "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin "file:${p12pass}"
+    else
+        PKI_P12_PW=$(sed -n 2p "${keypass}") \
+            "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin env:PKI_P12_PW
+    fi
 }
 
 # pki_sha1_files MODE CERTDIR CERTNAME NEWNAME "SUBDIR/SUFFIX ..."

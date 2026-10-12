@@ -120,7 +120,7 @@ cd "${PKI_ROOT}" || exit
 
 for fn in cert_sha1 cert_is_ca pki_random_password; do
     declare -F "${fn}" >/dev/null \
-        || { echo "Error: ${fn} is not defined by bin/pki_common.sh (append pki_common_additions.sh to it)." >&2; exit 1; }
+        || { echo "Error: ${fn} is not defined by bin/pki_common.sh." >&2; exit 1; }
 done
 
 OUTDIR=mdm-private/credentials
@@ -662,7 +662,7 @@ stage_p12_password() {
 
 # find_codesign_signer -- pick the code-signing certificate for create_credentials.sh.
 #
-# Bash version of find_signer() / cert_problems() in configurate_yaml.py:
+# Bash counterpart of find_signer() in configurate_yaml.py:
 # the NEWEST certificate named ${CODESIGN_NAME}.<sha1>.cert.pem in
 # ${CODESIGN_DIR}/certs that is
 #   * in date (not expired, not yet valid),

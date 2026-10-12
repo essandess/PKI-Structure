@@ -15,7 +15,7 @@ passwords; and signed MDM profiles. Private keys are passphrase protected.
 | `create_organization_{smime,mdm,credentials}.sh` | Per-deployment driver scripts, seeded from `.sample` |
 | `certs_that_expire_soon.sh`, `updatedb_and_delete_expired_certs.sh` | Expiry reports and cleanup |
 | `replicate_pki_structure.sh`, `clean_everything_and_create_pki.sh` | New deployment; full clean or rebuild |
-| `pki_structure.sh`, `pki_common.sh`, `define_openssl.sh` | Shared libraries |
+| `pki_structure.sh`, `pki_common.sh`, `define_openssl.sh`, `pki_validate.py` | Shared libraries; `pki_validate.py` is the one certificate validator |
 
 ## Requirements
 
@@ -24,7 +24,7 @@ passwords; and signed MDM profiles. Private keys are passphrase protected.
   `OPENSSL=/path`. Apple's LibreSSL is rejected (`openssl.cnf` uses `.include`).
   Generated installers run on the macOS-native `openssl`, `tar` with xz, and
   `security`.
-* Python 3.9+ with `PyYAML` and `cryptography` 39+ (MDM profiles only).
+* Python 3.9+ with `cryptography` 39+ (certificate validation) and `PyYAML` (MDM profiles).
 * `keepassxc-cli` (KeePassXC integration only; `KEEPASSXC_CLI` overrides lookup).
 * `rsync` (deployment); `sf-pwgen` (optional; falls back to `openssl rand`).
 
@@ -271,12 +271,19 @@ CA private keys are never included.
 * **Validation.** Root and privoxy CA must verify against themselves; the
   intermediate against the root. S/MIME certificates must verify through a
   valid intermediate with `-crl_check_all`; an unexpired CRL is required
-  (`PKI_ROOT_CRL`, `PKI_INTERMEDIATE_CRL` name CRL files explicitly). A
-  signature certificate is rejected if expired or revoked. An encryption
-  certificate that is expired or revoked as `superseded` is **included** by
-  default, with a warning (its key decrypts old mail); the `--exclude-*` flags
-  drop them. Any other revocation, or a keyUsage that allows signing, is always
-  rejected. A certificate's role comes from its keyUsage, not its file name.
+  (`PKI_ROOT_CRL`, `PKI_INTERMEDIATE_CRL` name CRL files explicitly).
+  Policy is one table in `bin/pki_validate.py`, shared with
+  `configurate_yaml.py`:
+
+  | State | signature, codesign | encryption |
+  |---|---|---|
+  | valid | accept | accept |
+  | expired | reject | `--allow-expired-encryption` |
+  | revoked: superseded | reject | `--allow-superseded-encryption` |
+  | expired and superseded | reject | both flags |
+  | other revocation, not yet valid, wrong keyUsage/EKU | reject | reject |
+
+  The file name gives the role; a keyUsage that does not fit it is rejected.
 * **Encryption.** A payload with `.p12` files also holds their password files,
   so it is encrypted (`openssl enc -aes-256-cbc -pbkdf2`, 600000 iterations)
   with a random 24-character password written to `<installer>.pass` (0600).
@@ -397,8 +404,9 @@ required.
   issuer's `index.txt`, pass the CRL check, and have a keyUsage matching its
   role. Signing certificates must be current; an expired or `superseded`
   encryption certificate needs `allow_expired_encryption` /
-  `allow_superseded_encryption` on the entry (the opposite default of
-  `create_credentials.sh`). Other revocations are refused.
+  `allow_superseded_encryption` on the entry (same policy as
+  `create_credentials.sh`'s `--allow-*-encryption`). Other revocations
+  are refused.
 * **Accounts.** Translated to payloads and merged like hand-written ones (a
   payload with the same `id` overrides field by field); `smime.identity` must
   be in `identities`. A `settings:` mapping on an entry takes Apple keys.

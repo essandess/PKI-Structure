@@ -3,8 +3,8 @@
 # create_credentials.sh -- build a macOS credential installer from the PKI tree.
 #
 # Usage: create_credentials.sh [--user-keychain] [--extra-pki-dir DIR]...
-#                              [--exclude-expired-encryption]
-#                              [--exclude-superseded-encryption] ['NAME_GLOB' ...]
+#                              [--allow-expired-encryption]
+#                              [--allow-superseded-encryption] ['NAME_GLOB' ...]
 #        create_credentials.sh --ca-certs-only [--user-keychain]
 #
 # Writes ONE installer, mdm-private/credentials/install_credentials_<stem>.sh,
@@ -86,14 +86,11 @@
 #                 CRLs of the whole chain checked (openssl verify
 #                 -crl_check_all)
 # Old encryption certificates, for decrypting old mail. An S/MIME ENCRYPTION
-# certificate that is expired, or revoked with reason "superseded" (what
-# create_smime.sh sets on reissue), is included by default, with a warning,
-# because its key is still needed. To leave them out:
-#   --exclude-expired-encryption      exclude expired encryption certificates
-#   --exclude-superseded-encryption   exclude those revoked as superseded
-# (one that is both is excluded by either flag). A signature certificate is
-# never accepted when expired or revoked, nor an encryption certificate
-# whose keyUsage allows signing or that is revoked for any other reason.
+# certificate that is expired, or revoked as "superseded" (create_smime.sh sets
+# this on reissue), is left out unless you opt in:
+#   --allow-expired-encryption      include expired encryption certificates
+#   --allow-superseded-encryption   include those revoked as superseded
+# (one that is both needs both). Policy table: bin/pki_validate.py.
 #
 # Environment: PKI_ASSUME_YES, PKI_ROOT_CRL, PKI_INTERMEDIATE_CRL,
 # PKI_PRIVOXY_DIRS (default privoxy), PKI_CODESIGN_DIR (default codesign),
@@ -120,7 +117,7 @@ cd "${PKI_ROOT}" || exit
 . "${SCRIPT_DIR}/pki_common.sh"
 . "${PKI_ROOT}/bin/define_openssl.sh"
 
-for fn in cert_sha1 cert_smime_role cert_is_ca pki_random_password; do
+for fn in cert_sha1 cert_is_ca pki_random_password; do
     declare -F "${fn}" >/dev/null \
         || { echo "Error: ${fn} is not defined by bin/pki_common.sh (append pki_common_additions.sh to it)." >&2; exit 1; }
 done
@@ -138,8 +135,8 @@ SMIME_RE='^(.+)-(signature|encryption)(\.[0-9a-fA-F]{40})?\.cert\.pem$'
 NAME_GLOB_RE='^[][A-Za-z0-9_.,*?{}!^-]+$'
 
 CA_CERTS_ONLY=0
-EXCLUDE_EXPIRED_ENC=0
-EXCLUDE_SUPERSEDED_ENC=0
+ALLOW_EXPIRED_ENC=0
+ALLOW_SUPERSEDED_ENC=0
 USER_KEYCHAIN=0
 CA_DOMAIN=system   # payload directory and keychain of the CA certificates
 HELP=0
@@ -154,6 +151,10 @@ die() {
 warn() {
     echo "Warning: $*" >&2
 }
+
+PYTHON=${PYTHON:-python3}
+"${PYTHON}" -c 'import cryptography' 2>/dev/null \
+    || die "${PYTHON} with the 'cryptography' package is required (certificate validation)."
 
 # add_extra_dir DIR: remember DIR (relative to where the script was run)
 add_extra_dir() {
@@ -175,12 +176,12 @@ while [[ $# -gt 0 ]]; do
             CA_DOMAIN=user
             shift
             ;;
-        --exclude-expired-encryption)
-            EXCLUDE_EXPIRED_ENC=1
+        --allow-expired-encryption)
+            ALLOW_EXPIRED_ENC=1
             shift
             ;;
-        --exclude-superseded-encryption)
-            EXCLUDE_SUPERSEDED_ENC=1
+        --allow-superseded-encryption)
+            ALLOW_SUPERSEDED_ENC=1
             shift
             ;;
         --extra-pki-dir)
@@ -212,8 +213,8 @@ if [ "${HELP}" != "0" ]; then
     cat <<USEAGE
 Useage:
 
-$(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--exclude-expired-encryption]
-    [--exclude-superseded-encryption] ['NAME_GLOB' ...]
++$(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--allow-expired-encryption]
++    [--allow-superseded-encryption] ['NAME_GLOB' ...]
 $(basename "$0") --ca-certs-only [--user-keychain]
 
 Creates ONE installer, ./${OUTDIR}/install_credentials_<stem>.sh, with the
@@ -246,10 +247,10 @@ Every certificate is validated first: the intermediate and the code signing
 certificate against the root, the S/MIME certificates against the root
 through a valid intermediate, with the CRLs checked (an unexpired CRL is
 required). An S/MIME ENCRYPTION certificate that is expired, or revoked as
-"superseded" (what create_smime.sh sets when it reissues one), is included
-by default, with a warning, to decrypt old mail. To leave them out:
-  --exclude-expired-encryption      exclude expired encryption certificates
-  --exclude-superseded-encryption   exclude those revoked as superseded
+"superseded" (what create_smime.sh sets when it reissues one), is left out
+unless you opt in, to decrypt old mail:
+  --allow-expired-encryption      include expired encryption certificates
+  --allow-superseded-encryption   include those revoked as superseded
 Expired or revoked signature certificates are always rejected.
 
   --user-keychain         install the CA certificates into the user's login
@@ -510,6 +511,21 @@ collect_intermediates() {
     done
 }
 
+# collect_index_args: --index FILE for each tree's S/MIME and TLS intermediate.
+collect_index_args() {
+    local tree f
+
+    INDEX_ARGS=()
+    for tree in "${SM_DIRS[@]}"; do
+        for f in "${tree}/intermediate_smime/index.txt" "${tree}/intermediate/index.txt"; do
+            if [ -f "${f}" ]; then
+                INDEX_ARGS+=(--index "${f}")
+            fi
+        done
+    done
+    [ "${#INDEX_ARGS[@]}" -gt 0 ] || die "no intermediate index.txt found; cannot check revocation status."
+}
+
 # Every installer is signed and carries the root and the intermediate, so
 # the trust context is always needed.
 build_trust_context() {
@@ -520,6 +536,10 @@ build_trust_context() {
     fi
     collect_crls
     collect_intermediates
+    # roots + valid intermediates, and every issuer database, for pki_validate.py
+    CA_BUNDLE="${STAGE}/trust/ca_bundle.pem"
+    cat "${ANCHORS}" "${INTS}" > "${CA_BUNDLE}"
+    collect_index_args
 }
 
 # Sets INTERMEDIATE_PEM to the valid intermediate of this tree expiring last.
@@ -550,117 +570,25 @@ verify_chain_only() {
     "${OPENSSL}" verify -no_check_time -CAfile "${ANCHORS}" -untrusted "${INTS}" "$@" 2>&1
 }
 
-# crl_revocation_reason CERT: the reason (e.g. Superseded) under which a CRL
-# issued by the certificate's issuer lists it; Unspecified if none is given.
-crl_revocation_reason() {
-    local f="$1" serial issuer c r
-
-    serial=$(cert_serial "${f}")
-    issuer=$("${OPENSSL}" x509 -noout -issuer -in "${f}")
-    for c in "${CRL_PEMS[@]}"; do
-        [ "$("${OPENSSL}" crl -noout -issuer -in "${c}")" = "${issuer}" ] || continue
-        r=$("${OPENSSL}" crl -noout -text -in "${c}" | awk -v s="${serial}" '
-            /Serial Number:/ { cur = $NF; next }
-            cur == s && /Revocation Date/ { seen = 1 }
-            cur == s && /CRL Reason Code/ {
-                getline
-                gsub(/^[ \t]+|[ \t]+$/, "")
-                print
-                found = 1
-                exit
-            }
-            END { if (!found && seen) print "Unspecified" }')
-        if [ -n "${r}" ]; then
-            printf '%s' "${r}"
-            return 0
-        fi
-    done
-}
-
-# validate_smime_cert CERT ROLE -> 0 accepted, 1 rejected; sets CERT_STATE.
-# ROLE (signature or encryption) comes from cert_smime_role, i.e. from the
-# certificate's own properties, not from its file name.
-# The certificate must verify against the root through a valid intermediate,
-# with the CRLs of the whole chain checked. A signature certificate must pass
-# outright. An ENCRYPTION certificate, whose key is still needed to decrypt
-# old mail, is also accepted when it is
-#   expired                         unless --exclude-expired-encryption
-#   revoked as "superseded"         unless --exclude-superseded-encryption
-# (what create_smime.sh sets when it reissues a certificate). An excluded
-# one is rejected.
+# validate_smime_cert CERT ROLE: 0 accepted, 1 rejected; sets CERT_STATE.
+# ROLE is the file-name role (signature|encryption); policy: bin/pki_validate.py.
 validate_smime_cert() {
-    local f="$1" role="$2" out err out2 err2 reason expired=0 superseded=0 excl="" what
+    local f="$1" role="$2" args=()
 
-    CERT_STATE="valid"
-    if [ "${role}" != signature ] && [ "${role}" != encryption ]; then
-        warn "rejecting ${f}: neither an S/MIME signature nor an encryption certificate (keyUsage/extendedKeyUsage)"
-        return 1
+    if [ "${role}" = encryption ]; then
+        if [ "${ALLOW_EXPIRED_ENC}" = 1 ]; then args+=(--allow-expired); fi
+        if [ "${ALLOW_SUPERSEDED_ENC}" = 1 ]; then args+=(--allow-superseded); fi
     fi
-
-    if out=$(verify_chain "${f}"); then
+    if CERT_STATE=$("${PYTHON}" "${SCRIPT_DIR}/pki_validate.py" "${role}" "${f}" \
+            --ca-bundle "${CA_BUNDLE}" --crl-bundle "${CRL_ALL}" \
+            "${INDEX_ARGS[@]}" ${args[@]+"${args[@]}"} 2>"${STAGE}/validate.err"); then
+        if [ "${CERT_STATE}" != valid ]; then
+            warn "accepting ${CERT_STATE} ${role} certificate ${f} (for decrypting old mail only)"
+        fi
         return 0
     fi
-    err=$(verify_error "${out}")
-    if ! cert_is_current "${f}"; then
-        expired=1
-    fi
-
-    if [ "${role}" = signature ]; then
-        if [ "${expired}" = 1 ]; then
-            warn "rejecting ${f}: expired signature certificate"
-        else
-            warn "rejecting ${f}: ${err}"
-        fi
-        return 1
-    fi
-
-    # Encryption certificate: is the validity period the only problem, or is
-    # it revoked as superseded (and otherwise sound)?
-    if out2=$(verify_chain -no_check_time "${f}"); then
-        if [ "${expired}" != 1 ]; then
-            warn "rejecting ${f}: ${err}"
-            return 1
-        fi
-        what="expired encryption certificate"
-    else
-        err2=$(verify_error "${out2}")
-        if [ "${err2}" != "certificate revoked" ]; then
-            warn "rejecting ${f}: ${err2}"
-            return 1
-        fi
-        reason=$(crl_revocation_reason "${f}")
-        if ! [[ "${reason}" == [Ss]uperseded ]] || ! verify_chain_only "${f}" >/dev/null; then
-            warn "rejecting ${f}: revoked (${reason:-reason unknown})"
-            return 1
-        fi
-        superseded=1
-        what="encryption certificate revoked as superseded"
-        if [ "${expired}" = 1 ]; then
-            what="expired encryption certificate revoked as superseded"
-        fi
-    fi
-
-    # Excluded by flag
-    if [ "${superseded}" = 1 ] && [ "${EXCLUDE_SUPERSEDED_ENC}" = 1 ]; then
-        excl="${excl} --exclude-superseded-encryption"
-    fi
-    if [ "${expired}" = 1 ] && [ "${EXCLUDE_EXPIRED_ENC}" = 1 ]; then
-        excl="${excl} --exclude-expired-encryption"
-    fi
-    if [ -n "${excl}" ]; then
-        warn "rejecting ${f}: ${what}; excluded by${excl}"
-        return 1
-    fi
-
-    CERT_STATE="expired"
-    if [ "${superseded}" = 1 ]; then
-        CERT_STATE="revoked: superseded"
-        if [ "${expired}" = 1 ]; then
-            CERT_STATE="expired, revoked: superseded"
-        fi
-    fi
-    warn "accepting ${what} ${f} (for decrypting old mail only)"
-    return 0
+    warn "rejecting ${f}: $(cat "${STAGE}/validate.err")"
+    return 1
 }
 
 # p12_password_source P12 FALLBACK_PASSPHRASE_FILE: prints "FILE<TAB>LINE",
@@ -1115,11 +1043,8 @@ build_payload_dir() {
                     ;;
             esac
 
-            # what the certificate itself says it is, not what its file is called
-            role=$(cert_smime_role "${f}")
-            if [ "${role}" != "${ext}" ]; then
-                warn "${f}: named -${ext}, but its keyUsage/extendedKeyUsage give it the role '${role}'; using '${role}'"
-            fi
+            # the name gives the role; a keyUsage that does not fit it is rejected
+            role="${ext}"
 
             # must verify against the root through a valid intermediate, CRLs checked
             if ! validate_smime_cert "${f}" "${role}"; then

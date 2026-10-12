@@ -11,8 +11,7 @@
 #
 # Also: renewal of a CA certificate with its existing key (pki_ca_prepare),
 # validity capped at the issuer's remaining life (pki_cap_days), random
-# per-identity .p12 passwords (pki_random_password), and certificate
-# property checks (cert_smime_role, cert_is_ca).
+# per-identity .p12 passwords (pki_random_password), and cert_is_ca.
 
 # How close to expiry a self-signed CA certificate must be before a new one
 # is issued in its place (see pki_ca_prepare).
@@ -257,8 +256,7 @@ pki_random_password() {
 }
 
 # ---------------------------------------------------------------------
-# Certificate properties (what a certificate says it is, whatever its file
-# is called). Both need OpenSSL >= 1.1.1 for `x509 -ext`.
+# Certificate properties. Needs OpenSSL >= 1.1.1 for `x509 -ext`.
 # ---------------------------------------------------------------------
 
 # cert_smime_role CERT: print the S/MIME role the certificate itself declares,

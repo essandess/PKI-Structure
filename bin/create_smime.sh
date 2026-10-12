@@ -113,6 +113,15 @@ fi
 EMAIL="$1"
 CERTNAME="$2"
 
+# The CN is "EMAIL - ROLE" and X.509 caps a CN at 64 characters (OpenSSL
+# enforces it whatever the cnf says): refuse now, before any key or
+# certificate exists. "encryption" is the longer role, so it decides.
+CN_LONGEST="${EMAIL} - encryption"
+if [ "${#CN_LONGEST}" -gt 64 ]; then
+    echo "Error: EMAIL '${EMAIL}' is too long: the CN '${CN_LONGEST}' would be ${#CN_LONGEST} characters and X.509 allows 64, so EMAIL may have at most 51." >&2
+    exit 1
+fi
+
 # Never longer than the intermediate's remaining life
 DAYS=$(pki_cap_days "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem" "${DAYS}")
 

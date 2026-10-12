@@ -139,6 +139,9 @@ nothing is revoked and the previous files are restored.
 
 ### S/MIME
 
+`EMAIL` may have at most 51 characters: the CN `EMAIL - encryption` is
+capped at 64 by X.509.
+
 `CN=EMAIL - signature` is EC P-256 (`-a RSA` for RSA); `CN=EMAIL - encryption`
 is always RSA (Apple Mail does not support ECDH encryption certificates). Each
 issuance has a random `.p12` password shared by its two `.p12` files and stored

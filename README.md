@@ -76,7 +76,7 @@ checks read them. Do not delete them. Configuration is
 |---|---|
 | `ORG_COUNTRY`, `ORG_STATE`, `ORG_LOCALITY`, `ORG_NAME`, `ORG_EMAIL` | Subject fields |
 | `DOMAIN_NAME` | Organization domain |
-| `SERVER_FQDN` | Server certificate CN and SAN |
+| `SERVER_FQDN` | Server certificate CN and SAN; `create_server.sh --server-fqdn NAME` overrides it per run (must be within `DOMAIN_NAME`) |
 | `PKI_FQDN` | Host serving CRLs and CA certificates; embedded in issued certificates |
 | `SUBJECTALTNAME_ADBLOCK2PRIVOXY` | adblock2privoxy SAN |
 

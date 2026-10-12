@@ -116,6 +116,10 @@ cd "${PKI_ROOT}" || exit
 
 . "${SCRIPT_DIR}/pki_common.sh"
 . "${PKI_ROOT}/bin/define_openssl.sh"
+. "${PKI_ROOT}/bin/define_python.sh"
+
+"${PYTHON}" -c 'import cryptography' 2>/dev/null \
+    || die "${PYTHON} with the 'cryptography' package is required (certificate validation)."
 
 for fn in cert_sha1 cert_is_ca pki_random_password; do
     declare -F "${fn}" >/dev/null \
@@ -151,10 +155,6 @@ die() {
 warn() {
     echo "Warning: $*" >&2
 }
-
-PYTHON=${PYTHON:-python3}
-"${PYTHON}" -c 'import cryptography' 2>/dev/null \
-    || die "${PYTHON} with the 'cryptography' package is required (certificate validation)."
 
 # add_extra_dir DIR: remember DIR (relative to where the script was run)
 add_extra_dir() {

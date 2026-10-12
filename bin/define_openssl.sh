@@ -2,7 +2,7 @@
 
 # define_openssl.sh
 
-# Resolve the openssl binary: honor a preset $OPENSSL, else use the first one on PATH.
+# Resolve the openssl binary: honor preset $OPENSSL, else use PATH
 OPENSSL="${OPENSSL:-$(command -v openssl || true)}"
 
 if [ -z "${OPENSSL}" ] || [ ! -x "${OPENSSL}" ]; then

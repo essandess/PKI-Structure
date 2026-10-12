@@ -5,7 +5,7 @@ PortGroup           github 1.0
 PortGroup           openssl 1.0
 
 # github.setup        essandess PKI-Structure 1.0.0 v
-github.setup        essandess pki-structure d03ca590fb5038669812608d05b65cf7c4504973
+github.setup        essandess pki-structure 081080999168de0d35ca5720971f79bafc8aa98e
 version             1.0.0
 revision            0
 categories          security
@@ -14,23 +14,51 @@ maintainers         {ieee.org:s.t.smith @essandess}
 supported_archs     noarch
 platforms-append    any
 
-description         Private PKI shell toolkit with signed iOS MDM
+description         Private, configurable PKI toolkit with signed MDM, \
+                    install scripts.
 long_description    {*}${description}. Creates a root and intermediate \
                     certificate authority, server, S/MIME, code-signing, \
                     and privoxy/adblock2privoxy certificates, with CRL \
                     generation, publishing, and hosting daemons. Converts \
                     user-defined yaml profiles into signed iOS MDM  \
-                    Apple Configurator.app .mobileconfig's packaged with PKI.
+                    Apple Configurator.app .mobileconfig's packaged with PKI. \
+                    Creates signed PKI installer scripts and KeePassXC items \
+                    for deployment.
 
-checksums           rmd160  2e05bbf3ce8a4980115bb5d5beca9badcbc6f2f7 \
-                    sha256  337ffeb06c09f6db50301ab4bb5367d4c7e5a74287beaf525f87701974adcae3 \
-                    size    62294
+checksums           rmd160  1462bc55a735a1078204b279de45f443cedf0815 \
+                    sha256  8bb1f1f6db1f5aabe2a07ffc6375f27a621bca4810cafb2bf06e3820e3fae04e \
+                    size    108046
 
-depends_run-append  port:nginx \
-                    path:bin/openssl:openssl \
-                    port:sf-pwgen
+# ${prefix}/var/macports/sources/rsync.macports.org/macports/release/tarballs/ports/_resources/port1.0/group/python-1.0.tcl
+set python_version  314
+set python_branch   [string index ${python_version} 0].[string range ${python_version} 1 end]
+set python_prefix   ${frameworks_dir}/Python.framework/Versions/${python_branch}
+# set python_bin      ${python_prefix}/bin/python${python_branch}
+set python_bin      ${prefix}/bin/python${python_branch}
+set python_bin_name python${python_branch}
 
-post-extract {
+depends_lib-append  path:bin/openssl:openssl \
+                    port:python${python_version} \
+                    port:py${python_version}-cryptography \
+                    port:py${python_version}-yaml
+
+depends_run-append  port:nginx
+
+depends_test-append port:KeePassXC
+
+post-patch {
+    foreach pyfile {configurate_yaml.py pki_validate.py}  {
+        reinplace -W ${worksrcpath} \
+                    "s|^#!/usr/bin/env python3|#!${python_bin}|" \
+                    bin/${pyfile}
+    }
+
+    reinplace -W ${worksrcpath} \
+                    "s|^PYTHON_DEFAULT=\"python3\"|PYTHON_DEFAULT=\"${python_bin_name}\"|" \
+                    bin/define_python.sh
+}
+
+post-patch {
     reinplace "s|@PREFIX@|${prefix}|g" \
                     ${worksrcpath}/etc/nginx.conf.sample
 }
@@ -85,13 +113,16 @@ set pki_etc_dir_str {${prefix}/etc/pki-structure}
 set pki_etc_dir     [subst ${pki_etc_dir_str}]
 set pki_log_dir_str {${prefix}/var/log/pki-structure}
 set pki_log_dir     [subst ${pki_log_dir_str}]
-set mdm_private_yaml    mdm-private/yaml
+set pki_test_dir    ${workpath}/tmp/${name}
+set mdm_private_credentials     mdm-private/credentials
+set mdm_private_yaml            mdm-private/yaml
 
 destroot {
     # reference in share, live deployment in etc
-    xinstall -d ${destroot}${pki_share_dir}
-    xinstall -d ${destroot}${pki_etc_dir}/${mdm_private_yaml}
-    xinstall -d ${destroot}${prefix}/var/log/nginx
+    xinstall -d     ${destroot}${pki_share_dir} \
+                    ${destroot}${pki_etc_dir}/${mdm_private_credentials} \
+                    ${destroot}${pki_etc_dir}/${mdm_private_yaml} \
+                    ${destroot}${prefix}/var/log/nginx \
 
     # reference scripts and configurations in share
     system -W ${worksrcpath} \
@@ -126,10 +157,12 @@ post-destroot {
 # The deployment directory is where the user's actual PKI (keys, certs,
 # index files) will be created - keep it even though destroot itself
 # only populates it with the replicated scripts/configs
-destroot.keepdirs-append ${destroot}${pki_etc_dir}
-destroot.keepdirs-append ${destroot}${pki_etc_dir}/${mdm_private_yaml}
-destroot.keepdirs-append ${destroot}${pki_log_dir}
-destroot.keepdirs-append ${destroot}${prefix}/var/log/nginx
+destroot.keepdirs-append \
+                    ${destroot}${pki_etc_dir} \
+                    ${destroot}${pki_etc_dir}/${mdm_private_credentials} \
+                    ${destroot}${pki_etc_dir}/${mdm_private_yaml} \
+                    ${destroot}${pki_log_dir} \
+                    ${destroot}${prefix}/var/log/nginx
 
 # A dedicated launchd job for the PKI's nginx instance, parallel to the
 # nginx port's own startupitem but pointed at nginx-pki.conf and a
@@ -157,7 +190,7 @@ startupitems \
                     {PKI_SITE_DIR="${prefix}/var/www/${PKI_FQDN}"} \
                     {/bin/mkdir -p "${PKI_SITE_DIR}"} \
                     {echo "CRL update started on $(${DATE[@]})…"} \
-                    {for ca in root intermediate; do} \
+                    {for ca in root intermediate intermediate_smime; do} \
                     "\t\"\${PKI_ROOT}/bin/create_crl.sh\" \"\$ca\" > /dev/null" \
                     "\tSRC=\"\${PKI_ROOT}/\$ca/certs/\$ca.cer\"" \
                     "\tDST=\"\${PKI_SITE_DIR}/\$ca.cer\"" \
@@ -242,6 +275,23 @@ post-destroot {
         ${destroot}${prefix}/etc/${startupitem.location}/org.macports.${name}-nginx/org.macports.${name}-nginx.plist
 }
 
+
+pre-test {
+    xinstall -d     ${pki_test_dir}
+    system -W       ${pki_test_dir} \
+        "${destroot}${pki_share_dir}/bin/replicate_pki_structure.sh \
+                    ${pki_test_dir}"
+}
+
+test.run            yes
+test.asroot         yes
+test.dir            ${pki_test_dir}
+test.env-append     CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1 \
+                    PKI_ASSUME_YES=1
+
+test.cmd            {printf "%s\n" "yes" | sh}
+test.target         test/pki_test.sh
+
 post-activate {
     # deployed scripts and configurations in etc
     # existing files will not be overwritten without --overwrite flag    
@@ -256,6 +306,7 @@ post-activate {
     foreach personalized [list \
         pki_identity.env \
         bin/create_organization_smime.sh \
+        bin/create_organization_credentials.sh \
         bin/create_organization_mdm.sh \
         etc/nginx.conf \
         etc/pf.conf \
@@ -279,6 +330,7 @@ post-activate {
     foreach personalized [list \
         pki_identity.env \
         bin/create_organization_smime.sh \
+        bin/create_organization_credentials.sh \
         bin/create_organization_mdm.sh \
         "${mdm_private_yaml}/ios-restrictions-baseline.yaml" \
     ] {
@@ -341,6 +393,9 @@ Destructive clean of PKI:
     sudo bash -c 'PKI_ASSUME_YES=1 \\
         ${pki_etc_dir}/bin/clean_everything_and_create_pki.sh \\
             \[--create-pki]'
+
+    ${pki_share_dir}/test/pki_test.sh
+        Test script and example usage.
 
 port load ${name} launches an nginx web server that listens\
     on port 80 in the CRL endpoint directory specified by\

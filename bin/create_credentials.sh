@@ -5,26 +5,14 @@
 # Usage: create_credentials.sh [--user-keychain] [--extra-pki-dir DIR]...
 #                              [--exclude-expired-encryption]
 #                              [--exclude-superseded-encryption] ['NAME_GLOB' ...]
-#        create_credentials.sh --ca-only [--user-keychain]
 #        create_credentials.sh --ca-certs-only [--user-keychain]
 #
 # Writes ONE installer, mdm-private/credentials/install_credentials_<stem>.sh,
-# for every mode, after listing its payload and asking for
-# confirmation (PKI_ASSUME_YES=1 skips the prompt). The payload is a tar.xz,
-# base64-encoded with openssl, appended to the script. <stem> is the globs
-# with glob characters spelled out (see installer_name), "nosmimes" without
-# globs, "caonly" with --ca-only.
-#
-# Without --ca-only, when S/MIME .p12 files are included, the tar also holds
-# their SECRET password files (<name>.p12.pass) and is therefore encrypted
-# (openssl enc, PBKDF2) with a new random password. That password is written
-# next to the installer as install_credentials_<stem>.sh.pass (mode 0600) and
-# the installer asks for it on the terminal, as create_keepass_entry.sh asks
-# for its master password: never in argv or the environment. Treat the
-# installer and its .pass file as secrets and send them by different
-# channels. mdm-private/ holds secrets; keep it out of version control.
-# --ca-only is never encrypted and never includes passwords: CA secret keys
-# are not distributed this way.
+# after listing its payload and asking for confirmation (PKI_ASSUME_YES=1
+# skips the prompt). The payload is a tar.xz, base64-encoded with openssl,
+# appended to the script. <stem> is the globs with glob characters spelled
+# out (see installer_name), "nosmimes" without globs, "cacerts" with
+# --ca-certs-only.
 #
 # Always single-quote each 'NAME_GLOB': the shell must not expand it. The
 # script matches it, as a bash glob with brace expansion, against the S/MIME
@@ -33,45 +21,66 @@
 # matching any 'NAME_GLOB'; with none, no S/MIME certificates are included.
 # --extra-pki-dir DIR (repeatable) also searches DIR/smime, a PKI tree with
 # the same layout, e.g. an older one holding expired certificates. Its root,
-# intermediate and CRLs, if present, are used for validation too. Each such
-# tree gets its own password prompt in the installer.
+# intermediate and CRLs, if present, are used for validation too.
 # Each .p12 must open with its own password file, <p12>.pass (one password
-# per issuance, written by create_smime.sh; the installer asks once per
-# issuance), or, for older .p12 files, with line 2 (else line 1) of its
-# tree's smime/private/passphrase.txt (one prompt per tree). The script
+# per issuance, written by create_smime.sh), or, for older .p12 files, with
+# line 2 (else line 1) of its tree's smime/private/passphrase.txt. The script
 # reports which file and line, never the password.
 #
 # Installer contents:
 #   CA certificates  root (trusted), valid intermediate, privoxy CA; public
-#                    certificates only. They go to the System keychain (sudo,
+#                    certificates only. The root and the intermediate are
+#                    always included: the installer's signature is checked
+#                    against them. They go to the System keychain (sudo,
 #                    payload directory system/), or with --user-keychain to
 #                    the user's login keychain (no sudo, directory user/).
 #   S/MIME           matching .p12 files, including expired ones, imported
-#                    into the login keychain.
+#                    into the login keychain, with their SECRET password
+#                    files (<name>.p12.pass).
 # Server certificates are not included: the installed CAs already validate
-# them. Items that do not exist are reported and left out of the payload.
-# The installer confirms each item and stores no passwords. With --ca-only
-# the .p12 passwords are prompted for or read from PKI_P12_PASSWORD_<GROUP>;
-# otherwise they come from the encrypted payload and only the installer
-# password is asked for. Its --tar-only flag writes the payload, still
-# encrypted when it is, to credentials_<stem>.txz[.enc] in the current
-# directory.
+# them. Items that do not exist are reported and left out of the payload,
+# except the root and the intermediate, which are required. The installer
+# confirms each item and stores no passwords. Its --tar-only flag writes the
+# payload, still encrypted when it is, to credentials_<stem>.txz[.enc] in the
+# current directory.
 #
-# --ca-only: the payload holds only root.p12 and the valid intermediate .p12
-# (password protected), imported and trusted like the CA certificates above.
-# Creating it needs no sudo.
+# Encryption: when S/MIME .p12 files are included, the tar holds their secret
+# password files and is therefore encrypted (openssl enc, PBKDF2) with a new
+# random password (pki_random_password). That password is written next to the
+# installer as install_credentials_<stem>.sh.pass (mode 0600) and the
+# installer asks for it on the terminal, as create_keepass_entry.sh asks for
+# its master password: never in argv or the environment. Treat the installer
+# and its .pass file as secrets and send them by different channels.
+# mdm-private/ holds secrets; keep it out of version control. CA secret keys
+# and their passwords are never included.
 #
 # --ca-certs-only: the payload holds only the public CA certificates (root,
-# valid intermediate, privoxy CA): no .p12 files, no passwords. They are
-# imported like the CA certificates above and the root is trusted. The
-# installer is not encrypted. Takes no 'NAME_GLOB'
-# and no --extra-pki-dir.
+# valid intermediate, privoxy CA): no .p12 files, no passwords, not
+# encrypted. They are imported as above and the root is trusted. Takes no
+# 'NAME_GLOB' and no --extra-pki-dir.
+#
+# Signature: every installer is signed with the code signing certificate
+# (the newest valid codesign/certs/codesign.<sha1>.cert.pem and its
+# codesign/private/codesign.<sha1>.key.pem,
+# key passphrase on line 1 of codesign/private/passphrase.txt; see
+# PKI_CODESIGN_DIR and PKI_CODESIGN_NAME). It must be valid, chain to the
+# root, and allow code signing. The signature is a detached PKCS#7 (DER)
+# block inside the installer, between __SIGNATURE_BELOW__ and
+# __PAYLOAD_BELOW__. It covers all of the installer except that block: the
+# script text and the encrypted payload. The installer checks it, after
+# decrypting the payload and before installing anything, against the root and
+# intermediate in that payload. A chain carried inside the file cannot prove
+# who made the file, so the installer also anchors the root: it must already
+# be installed on the machine, or match PKI_ROOT_SHA256, or be confirmed by
+# the user against a fingerprint received separately.
 #
 # Validation, before anything enters the payload (unexpired CRLs found in
 # root/ and intermediate/, or named by PKI_ROOT_CRL / PKI_INTERMEDIATE_CRL):
 #   root          must verify against itself
 #   intermediate  must verify against the root, root CRL checked
 #   privoxy CA    must verify against itself (it is self-signed)
+#   code signing  must verify against the root through a valid intermediate,
+#                 CRLs checked, and carry the codeSigning extendedKeyUsage
 #   S/MIME        must verify against the root through a valid intermediate,
 #                 CRLs of the whole chain checked (openssl verify
 #                 -crl_check_all)
@@ -86,7 +95,9 @@
 # whose keyUsage allows signing or that is revoked for any other reason.
 #
 # Environment: PKI_ASSUME_YES, PKI_ROOT_CRL, PKI_INTERMEDIATE_CRL,
-# PKI_PRIVOXY_DIRS (default privoxy).
+# PKI_PRIVOXY_DIRS (default privoxy), PKI_CODESIGN_DIR (default codesign),
+# PKI_CODESIGN_NAME (default codesign). The installer reads PKI_ASSUME_YES,
+# PKI_ROOT_SHA256 and PKI_P12_PASSWORD_<GROUP>.
 
 # exit when any command fails
 set -e
@@ -114,17 +125,17 @@ for fn in cert_sha1 cert_smime_role cert_is_ca pki_random_password; do
 done
 
 OUTDIR=mdm-private/credentials
-ENC_CIPHER=aes-256-cbc   # payload encryption (openssl enc), without --ca-only
+ENC_CIPHER=aes-256-cbc   # payload encryption (openssl enc)
 ENC_ITER=600000          # PBKDF2 iterations (needs OpenSSL 1.1.1+/LibreSSL 3.1+)
 ROOT_CERT=root/certs/root.cert.pem
-ROOT_P12=root/private/root.p12
 PRIVOXY_DIRS=${PKI_PRIVOXY_DIRS:-privoxy}
+CODESIGN_DIR=${PKI_CODESIGN_DIR:-codesign}
+CODESIGN_NAME=${PKI_CODESIGN_NAME:-codesign}
 SMIME_RE='^(.+)-(signature|encryption)(\.[0-9a-fA-F]{40})?\.cert\.pem$'
 # Characters allowed in a NAME_GLOB. Nothing that is shell syntax, because
 # brace expansion is done with eval (see expand_name_glob).
 NAME_GLOB_RE='^[][A-Za-z0-9_.,*?{}!^-]+$'
 
-CA_ONLY=0
 CA_CERTS_ONLY=0
 EXCLUDE_EXPIRED_ENC=0
 EXCLUDE_SUPERSEDED_ENC=0
@@ -154,10 +165,6 @@ add_extra_dir() {
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --ca-only)
-            CA_ONLY=1
-            shift
-            ;;
         --ca-certs-only)
             CA_CERTS_ONLY=1
             shift
@@ -206,14 +213,14 @@ Useage:
 
 $(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--exclude-expired-encryption]
     [--exclude-superseded-encryption] ['NAME_GLOB' ...]
-$(basename "$0") --ca-only [--user-keychain]
 $(basename "$0") --ca-certs-only [--user-keychain]
 
 Creates ONE installer, ./${OUTDIR}/install_credentials_<stem>.sh, with the
-root, intermediate and privoxy CA certificates (those that exist) and the
-S/MIME certificates matching any 'NAME_GLOB'. <stem> is the globs with
-glob characters spelled out (* S, ? Q, { LB, } RB, [ LBK, ] RBK, , C, !/^ N);
-nosmimes without globs; caonly with --ca-only.
+root, intermediate and privoxy CA certificates (those that exist; the root
+and the intermediate are required) and the S/MIME certificates matching any
+'NAME_GLOB'. <stem> is the globs with glob characters spelled out
+(* S, ? Q, { LB, } RB, [ LBK, ] RBK, , C, !/^ N); nosmimes without globs;
+cacerts with --ca-certs-only.
 
 Single-quote every 'NAME_GLOB' so the shell does not expand it against the
 current directory. The script matches it, as a bash glob with brace
@@ -224,20 +231,22 @@ Without 'NAME_GLOB' no S/MIME certificates are included.
 The payload is listed and confirmed (y/N) before the installer is written;
 PKI_ASSUME_YES=1 skips the prompt.
 
-The installer is written to mdm-private/credentials. When
-it includes S/MIME certificates, its payload also holds the secret .p12
-password files, so the payload is encrypted with a new random password,
-saved next to the installer as install_credentials_<stem>.sh.pass (mode
-0600). The installer asks for that password; send it by a different channel
-than the installer. With --ca-only the installer is not encrypted and
-contains no passwords.
+When it includes S/MIME certificates, the installer's payload also holds the
+secret .p12 password files, so the payload is encrypted with a new random
+password, saved next to the installer as install_credentials_<stem>.sh.pass
+(mode 0600). The installer asks for that password; send it by a different
+channel than the installer.
 
-Every certificate is validated first: the intermediate against the root, the
-S/MIME certificates against the root through a valid intermediate, with the
-CRLs checked (an unexpired CRL is required). An S/MIME ENCRYPTION certificate
-that is expired, or revoked as "superseded" (what create_smime.sh sets when
-it reissues one), is included by default, with a warning, to decrypt old
-mail. To leave them out:
+Every installer is signed with the code signing certificate (codesign/ by
+default; PKI_CODESIGN_DIR, PKI_CODESIGN_NAME). The installer checks the
+signature before it installs anything.
+
+Every certificate is validated first: the intermediate and the code signing
+certificate against the root, the S/MIME certificates against the root
+through a valid intermediate, with the CRLs checked (an unexpired CRL is
+required). An S/MIME ENCRYPTION certificate that is expired, or revoked as
+"superseded" (what create_smime.sh sets when it reissues one), is included
+by default, with a warning, to decrypt old mail. To leave them out:
   --exclude-expired-encryption      exclude expired encryption certificates
   --exclude-superseded-encryption   exclude those revoked as superseded
 Expired or revoked signature certificates are always rejected.
@@ -249,11 +258,6 @@ Expired or revoked signature certificates are always rejected.
                           PKI tree with the same layout (for example an older
                           one with expired certificates); repeatable. Its
                           root, intermediate and CRLs also serve validation.
-                          The installer asks for a separate .p12 password for
-                          each tree (and for each issuance with a .p12.pass).
-  --ca-only               create an installer whose payload is only root.p12
-                          and the valid intermediate .p12; running that
-                          installer imports them and trusts the root
   --ca-certs-only         create an installer with only the public CA
                           certificates (root, valid intermediate, privoxy
                           CA): no .p12 files, no passwords; the root is
@@ -267,14 +271,7 @@ USEAGE
     exit 0
 fi
 
-if [ "${CA_ONLY}" = "1" ] && [ "${#NAMES[@]}" -gt 0 ]; then
-    die "--ca-only does not take 'NAME_GLOB' arguments"
-fi
-if [ "${CA_ONLY}" = "1" ] && [ "${#EXTRA_DIRS[@]}" -gt 0 ]; then
-    die "--ca-only does not use --extra-pki-dir"
-fi
 if [ "${CA_CERTS_ONLY}" = "1" ]; then
-    [ "${CA_ONLY}" = "0" ] || die "--ca-certs-only and --ca-only are alternatives"
     [ "${#NAMES[@]}" -eq 0 ] || die "--ca-certs-only does not take 'NAME_GLOB' arguments"
     [ "${#EXTRA_DIRS[@]}" -eq 0 ] || die "--ca-certs-only does not use --extra-pki-dir"
 fi
@@ -288,7 +285,6 @@ trap 'rm -rf "${STAGE}"' EXIT
 # is a separate password group because each tree has its own passphrase.txt.
 SM_DIRS=("${PKI_ROOT}")
 SM_GROUPS=(smime)
-declare -A GROUP_FILE=() GROUP_LINE=()   # where each password group's password lives
 for d in "${EXTRA_DIRS[@]}"; do
     base="smime-${d##*/}"
     g="${base}"
@@ -509,26 +505,13 @@ collect_intermediates() {
     done
 }
 
-# Builds the trust context when something needs validating: an intermediate
-# in this tree, S/MIME certificates, or --ca-only.
+# Every installer is signed and carries the root and the intermediate, so
+# the trust context is always needed.
 build_trust_context() {
-    local f need=0
-
-    if [ "${CA_ONLY}" = 1 ] || [ "${#NAMES[@]}" -gt 0 ]; then
-        need=1
-    fi
-    for f in intermediate/certs/*.cert.pem; do
-        need=1
-    done
-    [ "${need}" = 1 ] || return 0
-
     mkdir -p "${STAGE}/trust"
     collect_anchors
     if [ "${ANCHOR_COUNT}" -eq 0 ]; then
-        if [ "${CA_ONLY}" = 1 ] || [ "${#NAMES[@]}" -gt 0 ]; then
-            die "no valid root certificate to validate against (${ROOT_CERT})."
-        fi
-        return 0
+        die "no valid root certificate to validate against (${ROOT_CERT})."
     fi
     collect_crls
     collect_intermediates
@@ -733,19 +716,6 @@ p12_check_content() {
     fi
 }
 
-# note_group_password GROUP PASSPHRASE_FILE LINE: remember where a password
-# group's password comes from (shown at the end; never put in the installer).
-note_group_password() {
-    local g="$1" pf="$2" line="$3"
-
-    if [ -z "${GROUP_FILE[${g}]:-}" ]; then
-        GROUP_FILE[${g}]="${pf}"
-        GROUP_LINE[${g}]="${line}"
-    elif [ "${GROUP_LINE[${g}]}" != "${line}" ]; then
-        GROUP_LINE[${g}]="mixed"
-    fi
-}
-
 # stage_p12_password PWFILE LINE DEST: write line LINE of PWFILE, alone, to
 # DEST (mode 0600 by umask). It is the secret that opens the .p12 next to it.
 stage_p12_password() {
@@ -758,17 +728,160 @@ stage_p12_password() {
 }
 
 # ---------------------------------------------------------------------
+# The signature
+# ---------------------------------------------------------------------
+
+# find_codesign_signer -- pick the code-signing certificate for create_credentials.sh.
+#
+# Bash version of find_signer() / cert_problems() in configurate_yaml.py:
+# the NEWEST certificate named ${CODESIGN_NAME}.<sha1>.cert.pem in
+# ${CODESIGN_DIR}/certs that is
+#   * in date (not expired, not yet valid),
+#   * 'V' in the issuing CA's index.txt (revoked, superseded and 'E'
+#     certificates are never accepted for signing),
+#   * allowed to sign code (ExtendedKeyUsage, when present),
+#   * verified against the root through a valid, verified intermediate with
+#     the CRLs of the whole chain checked (verify_chain).
+# Sets SIGNER_CERT, SIGNER_SHA1, SIGNER_KEY, SIGNER_PASSFILE. PKI_CODESIGN_SHA1
+# (optional) picks one specific signer. ISSUERCADIR (default intermediate)
+# names the CA whose index.txt is consulted.
+
+# codesign_index_status INDEX SERIAL -> V, R, E, other status letter, or none
+codesign_index_status() {
+    awk -F'\t' -v s="$2" '
+        BEGIN { sub(/^0+/, "", s) }
+        { a = toupper($4); sub(/^0+/, "", a) }
+        a == s { print $1; found = 1; exit }
+        END { if (!found) print "none" }' "$1"
+}
+
+find_codesign_signer() {
+    local certdir=${CODESIGN_DIR:-codesign}
+    local certname=${CODESIGN_NAME:-codesign}
+    local want=${PKI_CODESIGN_SHA1:-}
+    local idx="${ISSUERCADIR:-intermediate}/index.txt"
+    local f b sha1 st out eku epoch best_epoch=0 now usable=0 why
+
+    SIGNER_CERT="" SIGNER_SHA1="" SIGNER_KEY="" SIGNER_PASSFILE=""
+
+    # needs the trust context (ANCHORS, INTS, CRL_ALL): build_trust_context
+    [ -s "${INTS:-}" ] \
+        || die "no valid intermediate to verify the code-signing certificate with."
+    [ -f "${idx}" ] \
+        || die "${idx} not found; cannot check whether code-signing certificates are revoked."
+    now=$(date +%s)
+
+    for f in "${certdir}/certs/${certname}".*.cert.pem; do
+        b=${f##*/}
+        sha1=${b#"${certname}."}
+        sha1=${sha1%.cert.pem}
+        [[ "${sha1}" =~ ^[0-9a-f]{40}$ ]] || continue
+        if [ -n "${want}" ] && [ "${sha1}" != "${want}" ]; then continue; fi
+
+        why=""
+        epoch=$(date_epoch "$("${OPENSSL}" x509 -noout -startdate -in "${f}" | sed 's|^notBefore=||')")
+        if [ "${epoch}" -gt "${now}" ]; then
+            why="not valid yet"
+        elif ! cert_is_current "${f}"; then
+            why="expired"
+        else
+            st=$(codesign_index_status "${idx}" "$(cert_serial "${f}")")
+            case "${st}" in
+                V) ;;
+                R) why="revoked (a signing certificate is never accepted when revoked or superseded)" ;;
+                E) why="index.txt status 'E' (expired)" ;;
+                none) why="serial not in ${idx} (cannot confirm it is not revoked)" ;;
+                *) why="index.txt status '${st}' (expected V)" ;;
+            esac
+        fi
+        if [ -z "${why}" ]; then
+            eku=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage -in "${f}" 2>/dev/null || true)
+            if [ -n "${eku}" ] && ! grep -qi 'Code Signing' <<<"${eku}"; then
+                why="ExtendedKeyUsage does not include codeSigning"
+            fi
+        fi
+        if [ -z "${why}" ]; then
+            if ! out=$(verify_chain "${f}"); then
+                why="failed chain/CRL verification: $(verify_error "${out}")"
+            fi
+        fi
+        if [ -n "${why}" ]; then
+            warn "skipping code-signing certificate ${b}: ${why}"
+            continue
+        fi
+
+        usable=$((usable + 1))
+        if [ "${epoch}" -gt "${best_epoch}" ]; then   # newest notBefore wins
+            best_epoch=${epoch}
+            SIGNER_CERT=${f}
+            SIGNER_SHA1=${sha1}
+        fi
+    done
+
+    if [ -z "${SIGNER_CERT}" ]; then
+        die "no usable code-signing certificate '${certname}.<sha1>.cert.pem' in ${certdir}/certs${want:+ with sha1 ${want}} (see the reasons above)."
+    fi
+    if [ "${usable}" -gt 1 ]; then
+        echo "Note: ${usable} usable code-signing certificates; using the newest (${SIGNER_SHA1}); set PKI_CODESIGN_SHA1 to override." >&2
+    fi
+
+    SIGNER_KEY="${certdir}/private/${certname}.${SIGNER_SHA1}.key.pem"
+    SIGNER_PASSFILE="${certdir}/private/passphrase.txt"
+    [ -f "${SIGNER_KEY}" ] || die "missing ${SIGNER_KEY}"
+    [ -f "${SIGNER_PASSFILE}" ] || die "missing ${SIGNER_PASSFILE}"
+    echo "Code-signing certificate: ${SIGNER_CERT}" >&2
+}
+
+# load_codesign: the certificate that signs the installer: the newest valid
+# ${CODESIGN_NAME}.<sha1>.cert.pem (find_codesign_signer). Sets CS_CERT,
+# CS_KEY, CS_PASS (key passphrase, line 1). It must verify against the root
+# through a valid intermediate, with the CRLs checked, and allow code signing.
+load_codesign() {
+    local f out text
+
+    find_codesign_signer
+    CS_CERT="${SIGNER_CERT}"
+    CS_KEY="${SIGNER_KEY}"
+    CS_PASS="${CODESIGN_DIR}/private/passphrase.txt"
+    for f in "${CS_CERT}" "${CS_KEY}" "${CS_PASS}"; do
+        [ -f "${f}" ] \
+            || die "'${f}' not found. The installer is signed with the code signing certificate (PKI_CODESIGN_DIR, PKI_CODESIGN_NAME)."
+    done
+    if ! out=$(verify_chain "${CS_CERT}"); then
+        die "code signing certificate ${CS_CERT}: $(verify_error "${out}")"
+    fi
+    text=$("${OPENSSL}" x509 -noout -text -in "${CS_CERT}")
+    [[ "${text}" == *"Code Signing"* ]] \
+        || die "${CS_CERT} does not allow code signing (extendedKeyUsage)."
+    if cert_is_ca "${CS_CERT}"; then
+        die "${CS_CERT} is a CA certificate."
+    fi
+}
+
+# sign_content CONTENT SIG: detached PKCS#7 signature (DER) of CONTENT. The
+# signer's certificate and the valid intermediates go into the signature.
+sign_content() {
+    "${OPENSSL}" smime -sign -binary -md sha256 -in "$1" \
+        -signer "${CS_CERT}" -inkey "${CS_KEY}" -passin "file:${CS_PASS}" \
+        -certfile "${INTS}" -outform DER -out "$2"
+    # self-check, as the installer will do it
+    "${OPENSSL}" smime -verify -binary -inform DER -in "$2" -content "$1" \
+        -CAfile "${ANCHORS}" -purpose any -out /dev/null 2>/dev/null \
+        || die "the signature made with ${CS_CERT} does not verify (key does not match the certificate?)."
+}
+
+# ---------------------------------------------------------------------
 # Staging the payload
 # ---------------------------------------------------------------------
 
 MANIFEST="${STAGE}/common/manifest"
 
-# stage_ca_cert TYPE GROUP PEM HASKEY P12
-# TYPE is root or ca. The files go to ${CA_DOMAIN}/ in the payload (system/
-# or user/), named by cert_file_name. The DER certificate is always staged
-# (the root is trusted from it); the .p12 only when HASKEY is 1.
+# stage_ca_cert TYPE GROUP PEM
+# TYPE is root or ca. The public certificate goes to ${CA_DOMAIN}/ in the
+# payload (system/ or user/), as DER, named by cert_file_name. The root is
+# trusted from it. No private key is ever staged for a CA.
 stage_ca_cert() {
-    local type="$1" group="$2" pem="$3" haskey="$4" p12="$5" name sha1
+    local type="$1" group="$2" pem="$3" name sha1
 
     name=$(cert_file_name "${pem}")
     sha1=$(cert_sha1 "${pem}")
@@ -776,10 +889,7 @@ stage_ca_cert() {
         || die "payload file name '${name}' is used twice (the same certificate, or a clash of the last six sha1 digits)."
 
     "${OPENSSL}" x509 -outform der -in "${pem}" -out "${STAGE}/common/${CA_DOMAIN}/${name}.cer"
-    if [ "${haskey}" = 1 ]; then
-        cp "${p12}" "${STAGE}/common/${CA_DOMAIN}/${name}.p12"
-    fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${CA_DOMAIN}-${type}" "${group}" "${sha1}" "${haskey}" "${name}" "" >> "${MANIFEST}"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${CA_DOMAIN}-${type}" "${group}" "${sha1}" 0 "${name}" "" >> "${MANIFEST}"
 }
 
 # stage_ca_dir DIR: stage every unexpired certificate in DIR/certs as a
@@ -810,7 +920,7 @@ stage_ca_dir() {
             continue
         fi
 
-        stage_ca_cert ca "${d}" "${f}" 0 ""
+        stage_ca_cert ca "${d}" "${f}"
         found=1
     done
 
@@ -820,89 +930,33 @@ stage_ca_dir() {
 }
 
 # The CA certificates: the root, the valid intermediate and the privoxy CA.
-# Missing items are noted and skipped.
+# The root and the intermediate are required (the installer's signature is
+# checked against them); the privoxy CA is skipped if it does not exist.
 build_common() {
-    local d f have_root=0 have_int=0
+    local d f have_int=0
 
     mkdir -p "${STAGE}/common/${CA_DOMAIN}"
     : > "${MANIFEST}"
 
-    if [ -f "${ROOT_CERT}" ]; then
-        verify_root
-        stage_ca_cert root root "${ROOT_CERT}" 0 ""
-        have_root=1
-    else
-        echo "Note: the root CA (${ROOT_CERT}) does not exist; it will not be included in the payload." >&2
-    fi
+    [ -f "${ROOT_CERT}" ] \
+        || die "the root CA (${ROOT_CERT}) does not exist; it is always included in the payload."
+    verify_root
+    stage_ca_cert root root "${ROOT_CERT}"
 
     for f in intermediate/certs/intermediate.cert.pem intermediate/certs/intermediate.*.cert.pem; do
         if [ -f "${f}" ]; then
             have_int=1
         fi
     done
-    if [ "${have_int}" = 0 ]; then
-        echo "Note: no intermediate CA exists in intermediate/certs; it will not be included in the payload." >&2
-    elif [ "${have_root}" = 0 ]; then
-        echo "Note: the intermediate CA cannot be validated without the root CA; it will not be included in the payload." >&2
-    else
-        pick_main_intermediate
-        echo "Using intermediate: ${INTERMEDIATE_PEM}" >&2
-        stage_ca_cert ca intermediate "${INTERMEDIATE_PEM}" 0 ""
-    fi
+    [ "${have_int}" = 1 ] \
+        || die "no intermediate CA exists in intermediate/certs; it is always included in the payload."
+    pick_main_intermediate
+    echo "Using intermediate: ${INTERMEDIATE_PEM}" >&2
+    stage_ca_cert ca intermediate "${INTERMEDIATE_PEM}"
 
     for d in ${PRIVOXY_DIRS}; do
         stage_ca_dir "${d}"
     done
-}
-
-# check_ca_p12 GROUP P12 PASSPHRASE_FILE CERT
-check_ca_p12() {
-    local group="$1" p12="$2" pf="$3" cert="$4" src line rc=0 why
-
-    src=$(p12_password_source "${p12}" "${pf}") || rc=$?
-    case "${rc}" in
-        0)
-            line=${src#*$'\t'}
-            pf=${src%%$'\t'*}
-            why=$(p12_check_content "${p12}" "${pf}" "${line}" "${cert}") \
-                || die "'${p12}': ${why}."
-            note_group_password "${group}" "${pf}" "${line}"
-            ;;
-        1)
-            die "'${p12}' does not open with either of the first two lines of ${pf}."
-            ;;
-        *)
-            warn "${pf} not found: cannot check the password, certificate and key of ${p12}"
-            note_group_password "${group}" "${pf}" ""
-            ;;
-    esac
-}
-
-# --ca-only: only root.p12 and the valid intermediate's .p12. Both must exist.
-build_ca_only() {
-    local base int_p12
-
-    mkdir -p "${STAGE}/common/${CA_DOMAIN}"
-    : > "${MANIFEST}"
-
-    verify_root
-    pick_main_intermediate
-    echo "Using intermediate: ${INTERMEDIATE_PEM}" >&2
-
-    base=${INTERMEDIATE_PEM##*/}
-    base=${base%.cert.pem}
-    int_p12="intermediate/private/${base}.p12"
-    [ -f "${ROOT_P12}" ] || die "'${ROOT_P12}' not found."
-    [ -f "${int_p12}" ] || die "'${int_p12}' not found."
-
-
-    # each .p12 must open with the passphrase.txt next to it and hold the
-    # certificate (and its key) that is being installed
-    check_ca_p12 root "${ROOT_P12}" root/private/passphrase.txt "${ROOT_CERT}"
-    check_ca_p12 intermediate "${int_p12}" intermediate/private/passphrase.txt "${INTERMEDIATE_PEM}"
-
-    stage_ca_cert root root "${ROOT_CERT}" 1 "${ROOT_P12}"
-    stage_ca_cert ca intermediate "${INTERMEDIATE_PEM}" 1 "${int_p12}"
 }
 
 # S/MIME certificate names (the part before -signature/-encryption) found in
@@ -972,7 +1026,8 @@ installer_name() {
 }
 
 # build_payload_dir -> ${STAGE}/payload: the staged system items plus the
-# S/MIME .p12 files of SEL_CERTNAMES from every source; sets SMIME_COUNT
+# S/MIME .p12 files of SEL_CERTNAMES from every source, each with its
+# .p12.pass; sets SMIME_COUNT
 build_payload_dir() {
     local dir="${STAGE}/payload" i sd group src f b certname ext role why sha1 name p12 pf line rc state seen=" " count=0 rejected=0
     local psrc pwfile pwid grp
@@ -1030,11 +1085,10 @@ build_payload_dir() {
                         continue
                     fi
                     if [[ "${pwfile}" == *.p12.pass ]]; then
-                        # one password per issuance: one installer prompt per issuance
+                        # one password per issuance
                         pwid=$(sed -n 1p "${pwfile}" | tr -d '\n' | "${OPENSSL}" dgst -sha256 | sed 's/.*= *//' | cut -c1-6)
                         grp="${group}/${certname}/${pwid}"
                     fi
-                    note_group_password "${grp}" "${pwfile}" "${line}"
                     ;;
                 1)
                     warn "skipping ${p12}: it opens with neither ${p12}.pass nor the first two lines of ${pf}"
@@ -1042,8 +1096,7 @@ build_payload_dir() {
                     continue
                     ;;
                 *)
-                    warn "neither ${p12}.pass nor ${pf} found: cannot check the password, certificate and key of ${p12}"
-                    note_group_password "${grp}" "${pf}" ""
+                    warn "neither ${p12}.pass nor ${pf} found: cannot check the password, certificate and key of ${p12}; the installer will ask for its password"
                     ;;
             esac
 
@@ -1083,7 +1136,7 @@ build_payload_dir() {
 
 # show_payload OUT DIR: list what goes into the tar payload
 show_payload() {
-    local out="$1" dir="$2" type group sha1 haskey file note kind keys=0 items=0
+    local out="$1" dir="$2" type group sha1 haskey file note kind keys=0 items=0 pws=0 f
 
     echo >&2
     echo "${out} will contain:" >&2
@@ -1097,7 +1150,6 @@ show_payload() {
         printf '  %-12s %-11s %s\n' "${kind}" "${type}" "$(describe "${file}" "${note}")" >&2
     done 3< "${dir}/manifest"
     if [ "${ENCRYPT}" = 1 ]; then
-        pws=0
         for f in "${dir}"/smime/*.p12.pass; do
             pws=$((pws + 1))
         done
@@ -1105,15 +1157,21 @@ show_payload() {
         echo "  The payload will be encrypted with a new installer password, saved as" >&2
         echo "  ${out}.pass" >&2
     else
-        echo "  ${items} item(s), ${keys} private key(s), password-protected; no passwords are included." >&2
+        echo "  ${items} item(s), ${keys} private key(s); no passwords are included." >&2
     fi
+    echo "  Signed with: '$(cert_cn "${CS_CERT}")' (expires $(cert_expiry_date "${CS_CERT}"))" >&2
 }
 
 # write_installer LABEL DIR OUT TARNAME [PASSWORD]
-# With a PASSWORD the tar.xz is encrypted with it (openssl enc); the password
-# goes to openssl on fd 3, never in argv or the environment.
+# Layout of OUT: the script, __SIGNATURE_BELOW__, the base64 signature,
+# __PAYLOAD_BELOW__, the base64 payload. The signature covers everything but
+# its own lines. With a PASSWORD the tar.xz is encrypted with it (openssl
+# enc); the password goes to openssl on fd 3, never in argv or the
+# environment.
 write_installer() {
     local label="$1" dir="$2" out="$3" tarname="$4" password="${5:-}"
+    local head="${STAGE}/installer.head" payload="${STAGE}/installer.payload"
+    local content="${STAGE}/installer.content" sig="${STAGE}/installer.sig"
 
     export COPYFILE_DISABLE=1   # no AppleDouble files in the tar on macOS
     {
@@ -1122,7 +1180,9 @@ write_installer() {
         printf '# Generated %s. No passwords are stored in this file.\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         printf '\n'
         # label and tarname contain only validated characters (NAME_GLOB_RE
-        # and installer_name), so plain double quotes are enough
+        # and installer_name), so plain double quotes are enough. The
+        # PAYLOAD_ENCRYPTED, ENC_CIPHER and ENC_ITER lines must stay within
+        # the first 20 lines: create_keepass_entry.sh reads them there.
         printf 'INSTALL_FOR="%s"\n' "${label}"
         printf 'SYSTEM_KEYCHAIN="%s"\n' /Library/Keychains/System.keychain
         printf 'TAR_NAME="%s"\n' "${tarname}"
@@ -1141,7 +1201,7 @@ umask 077
 
 usage() {
     cat <<USAGE
-Usage: $(basename "$0") [--system-only | --user-only] [--list] [--tar-only]
+Usage: $(basename "$0") [--system-only | --user-only] [--list] [--tar-only] [--validate-signature]
 
 Installs the credentials bundled in this script (${INSTALL_FOR}).
 Run it as yourself (not with sudo); sudo is requested only for the System keychain.
@@ -1152,12 +1212,24 @@ Run it as yourself (not with sudo); sudo is requested only for the System keycha
   --list         show what is included and exit
   --tar-only     only write the payload (still encrypted, if it is) to
                  ./${TAR_NAME} and exit
+  --validate-signature
+                 only check the signature of this script against the
+                 payload (asks for the installer password if the payload
+                 is encrypted) and exit: 0 if valid, non-zero if not.
+                 Nothing is installed; needs only openssl
+
+Before anything is installed, the signature of this script is checked: it
+must come from a code signing certificate that chains to the root CA in the
+payload. If that root is not already installed on this machine, you are
+asked to compare its SHA-256 fingerprint with one you received separately;
+set PKI_ROOT_SHA256 to that fingerprint to have it checked for you
+(PKI_ASSUME_YES alone never accepts an unknown root).
 
 You are asked (y/N) before each certificate is added; set PKI_ASSUME_YES=1
-to answer yes to everything. Each .p12 password is asked for when needed;
-to avoid the prompt set PKI_P12_PASSWORD_<GROUP>, for example
-PKI_P12_PASSWORD_SMIME (GROUP is the name shown in the prompt, upper-cased,
-with other characters replaced by _).
+to answer yes to everything. A .p12 password the payload does not hold is
+asked for when needed; to avoid the prompt set PKI_P12_PASSWORD_<GROUP>, for
+example PKI_P12_PASSWORD_SMIME (GROUP is the name shown in the prompt,
+upper-cased, with other characters replaced by _).
 
 An encrypted payload (PAYLOAD_ENCRYPTED=1 in this script) asks for the
 installer password, which comes in a separate .pass file. It is read from the
@@ -1183,15 +1255,35 @@ confirm() {
 }
 
 
+# The keychain listings are long: read them into a variable, so that grep -q
+# cannot close the pipe early and fail the pipeline under pipefail.
+
 # kc_has_cert KEYCHAIN SHA1
 kc_has_cert() {
-    security find-certificate -a -Z "$1" 2>/dev/null | grep -qi "^SHA-1 hash: $2\$"
+    local out
+
+    out=$(security find-certificate -a -Z "$1" 2>/dev/null) || true
+    grep -qi "^SHA-1 hash: $2\$" <<<"${out}"
 }
 
 
 # kc_has_identity KEYCHAIN SHA1 (certificate with its private key)
 kc_has_identity() {
-    security find-identity "$1" 2>/dev/null | grep -qi " $2 "
+    local out
+
+    out=$(security find-identity "$1" 2>/dev/null) || true
+    grep -qi " $2 " <<<"${out}"
+}
+
+
+# login_keychain: path of the user's login keychain
+login_keychain() {
+    local k="${HOME}/Library/Keychains/login.keychain-db"
+
+    if [ ! -f "${k}" ]; then
+        k="${HOME}/Library/Keychains/login.keychain"
+    fi
+    printf '%s' "${k}"
 }
 
 
@@ -1264,8 +1356,9 @@ get_installer_password() {
 }
 
 
-# The payload: a base64 encoded tar.xz appended to this script. Plain
-# openssl, so that the macOS-native one is enough.
+# The payload: a base64 encoded tar.xz at the end of this script, after the
+# __PAYLOAD_BELOW__ line. Plain openssl, so that the macOS-native one is
+# enough.
 payload_raw() {
     sed '1,/^__PAYLOAD_BELOW__$/d' "$0" | openssl base64 -d
 }
@@ -1287,6 +1380,7 @@ DO_SYSTEM=1
 DO_USER=1
 LIST=0
 TAR_ONLY=0
+VALIDATE_ONLY=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -1294,6 +1388,7 @@ while [ $# -gt 0 ]; do
         --user-only) DO_SYSTEM=0 ;;
         --list) LIST=1 ;;
         --tar-only) TAR_ONLY=1 ;;
+        --validate-signature) VALIDATE_ONLY=1 ;;
         -h|--help) usage; exit 0 ;;
         *) usage >&2; exit 1 ;;
     esac
@@ -1316,11 +1411,11 @@ if [ "${TAR_ONLY}" = 1 ]; then
     exit 0
 fi
 
-if [ "$(uname -s)" != "Darwin" ]; then
+if [ "${VALIDATE_ONLY}" != 1 ] && [ "$(uname -s)" != "Darwin" ]; then
     echo "This installer is for macOS." >&2
     exit 1
 fi
-if [ "$(id -u)" -eq 0 ]; then
+if [ "${VALIDATE_ONLY}" != 1 ] && [ "$(id -u)" -eq 0 ]; then
     echo "Run this as the target user, not as root: the S/MIME identities go into that user's keychain." >&2
     exit 1
 fi
@@ -1399,6 +1494,114 @@ list_items() {
 }
 
 
+signature_failed() {
+    echo "SIGNATURE CHECK FAILED: $1" >&2
+    if [ -n "${2:-}" ]; then
+        printf '%s\n' "$2" >&2
+    fi
+    echo "Nothing was installed. Do not use this installer." >&2
+    exit 1
+}
+
+
+ROOT_FILE=""
+ROOT_SHA1=""
+ROOT_SHA256=""
+
+# verify_signature: before anything is installed, check that this script is
+# unchanged since the code signing certificate signed it. The signature (a
+# detached PKCS#7, between the __SIGNATURE_BELOW__ and __PAYLOAD_BELOW__
+# lines) covers all of this file except those lines. The signer must chain,
+# through the intermediate CA in the payload, to the root CA in the payload,
+# and be a code signing certificate. That proves the file is intact, not who
+# made it: see confirm_root_anchor.
+verify_signature() {
+    local signed="${WORK}/.signed" sig="${WORK}/.signature.der"
+    local ca="${WORK}/.ca.pem" root="${WORK}/.root.pem" signer="${WORK}/.signer.pem"
+    local type group sha1 haskey file note domain roots=0 ints=0 out text
+
+    awk '/^__SIGNATURE_BELOW__$/ { print; skip = 1; next }
+         /^__PAYLOAD_BELOW__$/ { skip = 0 }
+         !skip { print }' "$0" > "${signed}"
+    awk '/^__SIGNATURE_BELOW__$/ { skip = 1; next }
+         /^__PAYLOAD_BELOW__$/ { skip = 0 }
+         skip' "$0" | openssl base64 -d > "${sig}" 2>/dev/null || true
+    [ -s "${sig}" ] || signature_failed "this installer carries no signature."
+
+    : > "${ca}"
+    : > "${root}"
+    while IFS=$'\t' read -r -u 3 type group sha1 haskey file note; do
+        domain=${type%%-*}
+        case "${type}:${group}" in
+            *-root:root)
+                openssl x509 -inform der -in "${WORK}/${domain}/${file}.cer" >> "${root}"
+                ROOT_FILE=${file}
+                ROOT_SHA1=${sha1}
+                roots=$((roots + 1))
+                ;;
+            *-ca:intermediate)
+                openssl x509 -inform der -in "${WORK}/${domain}/${file}.cer" >> "${ca}"
+                ints=$((ints + 1))
+                ;;
+        esac
+    done 3< "${MANIFEST}"
+    if [ "${roots}" -ne 1 ] || [ "${ints}" -lt 1 ]; then
+        signature_failed "the payload does not hold the root and the intermediate CA certificates."
+    fi
+    cat "${root}" >> "${ca}"
+
+    if ! out=$(openssl smime -verify -binary -inform DER -in "${sig}" -content "${signed}" \
+                   -CAfile "${ca}" -purpose any -signer "${signer}" -out /dev/null 2>&1); then
+        signature_failed "this installer was changed after it was signed, or was not signed by a certificate that chains to its root CA." "${out}"
+    fi
+    text=$(openssl x509 -noout -text -in "${signer}")
+    case "${text}" in
+        *"Code Signing"*) ;;
+        *) signature_failed "the signer is not a code signing certificate." ;;
+    esac
+
+    ROOT_SHA256=$(openssl x509 -noout -fingerprint -sha256 -in "${root}" \
+                      | sed 's/^.*=//' | tr -d ':' | tr '[:upper:]' '[:lower:]')
+    echo "Signature OK: signed by $(openssl x509 -noout -subject -in "${signer}" | sed 's/^subject= *//'),"
+    echo "  chaining to the root CA $(describe "${ROOT_FILE}") (SHA-256 ${ROOT_SHA256})."
+}
+
+
+# confirm_root_anchor: the chain inside this file cannot show who made it
+# (whoever builds an installer can include their own root). Accept the root
+# only if it is already installed here, or matches PKI_ROOT_SHA256, or the
+# user confirms its fingerprint against one received separately.
+confirm_root_anchor() {
+    local want
+
+    if [ -n "${PKI_ROOT_SHA256:-}" ]; then
+        want=$(printf '%s' "${PKI_ROOT_SHA256}" | tr -d ': ' | tr '[:upper:]' '[:lower:]')
+        if [ "${want}" != "${ROOT_SHA256}" ]; then
+            echo "FAILED: the root CA's SHA-256 (${ROOT_SHA256}) is not PKI_ROOT_SHA256. Nothing was installed." >&2
+            exit 1
+        fi
+        echo "The root CA matches PKI_ROOT_SHA256."
+        return 0
+    fi
+    if kc_has_cert "${SYSTEM_KEYCHAIN}" "${ROOT_SHA1}" || kc_has_cert "$(login_keychain)" "${ROOT_SHA1}"; then
+        echo "The root CA is already installed on this machine."
+        return 0
+    fi
+    echo "This root CA is not installed on this machine yet:"
+    echo "  $(describe "${ROOT_FILE}")"
+    echo "  SHA-256 ${ROOT_SHA256}"
+    echo "Compare the fingerprint with one you received separately from this installer."
+    if [ "${PKI_ASSUME_YES:-0}" != "0" ]; then
+        echo "PKI_ASSUME_YES does not accept an unknown root; set PKI_ROOT_SHA256 to its fingerprint." >&2
+        exit 1
+    fi
+    if ! confirm "Does it match, and do you want to go on?"; then
+        echo "Nothing was installed." >&2
+        exit 1
+    fi
+}
+
+
 SUDO_READY=0
 
 ensure_sudo() {
@@ -1427,10 +1630,7 @@ install_keychain() {
         trustfor="for all users"
         use_sudo=1
     else
-        keychain="${HOME}/Library/Keychains/login.keychain-db"
-        if [ ! -f "${keychain}" ]; then
-            keychain="${HOME}/Library/Keychains/login.keychain"
-        fi
+        keychain=$(login_keychain)
         if [ ! -f "${keychain}" ]; then
             fail "login keychain not found"
             return 0
@@ -1513,16 +1713,9 @@ install_keychain() {
                 fail "no password available for '${group}'"
                 continue
             fi
-            if [ "${kind}" = smime ]; then
-                import_into_keychain "${use_sudo}" "${keychain}" "${path}" "${PASSWORD}" ${acl[@]+"${acl[@]}"} \
-                    || { fail "${desc}"; continue; }
-            else
-                import_into_keychain "${use_sudo}" "${keychain}" "${path}" "${PASSWORD}" -A \
-                    || { fail "${desc}"; continue; }
-            fi
-            if [ "${kind}" = smime ]; then
-                imported=$((imported + 1))
-            fi
+            import_into_keychain "${use_sudo}" "${keychain}" "${path}" "${PASSWORD}" ${acl[@]+"${acl[@]}"} \
+                || { fail "${desc}"; continue; }
+            imported=$((imported + 1))
         else
             import_into_keychain "${use_sudo}" "${keychain}" "${path}" "" \
                 || { fail "${desc}"; continue; }
@@ -1553,11 +1746,18 @@ install_keychain() {
 }
 
 
+verify_signature
+if [ "${VALIDATE_ONLY}" = 1 ]; then
+    echo "Validation only (--validate-signature): the signature is valid; nothing was installed."
+    exit 0
+fi
+
 if [ "${LIST}" = 1 ]; then
     list_items
     exit 0
 fi
 
+confirm_root_anchor
 
 echo "Installing credentials: ${INSTALL_FOR}"
 
@@ -1576,6 +1776,10 @@ fi
 echo "Done."
 exit 0
 INSTALLER
+        printf '__SIGNATURE_BELOW__\n'
+    } > "${head}"
+
+    {
         printf '__PAYLOAD_BELOW__\n'
         if [ -n "${password}" ]; then
             tar -cJf - -C "${dir}" . \
@@ -1585,8 +1789,18 @@ INSTALLER
         else
             tar -cJf - -C "${dir}" . | "${OPENSSL}" base64
         fi
+    } > "${payload}"
+
+    # sign everything except the signature's own lines
+    cat "${head}" "${payload}" > "${content}"
+    sign_content "${content}" "${sig}"
+
+    {
+        cat "${head}"
+        "${OPENSSL}" base64 -in "${sig}"
+        cat "${payload}"
     } > "${out}"
-    chmod 0750 "${out}"   # the project's mode for scripts; the contents are encrypted
+    chmod 0750 "${out}"   # the project's mode for scripts; the contents are encrypted or public
 }
 
 # ---------------------------------------------------------------------
@@ -1599,67 +1813,54 @@ chmod 0700 "${OUTDIR%/*}" "${OUTDIR}"   # mdm-private holds secrets
 SEL_CERTNAMES=()
 
 build_trust_context
-if [ "${#NAMES[@]}" -gt 0 ] && [ ! -s "${INTS:-}" ]; then
-    die "no valid intermediate certificate to validate the S/MIME certificates with."
-fi
+load_codesign
+build_common
 
-if [ "${CA_ONLY}" = "1" ]; then
-    build_ca_only
-    stem=caonly
-    label="root and intermediate CA"
+ALL_CERTNAMES=()
+while IFS= read -r c; do
+    ALL_CERTNAMES+=("${c}")
+done < <(list_smime_certnames)
+
+# S/MIME certificates matching any 'NAME_GLOB'
+UNION=()
+if [ "${#NAMES[@]}" -eq 0 ]; then
+    echo "Note: no 'NAME_GLOB' given; no S/MIME certificates will be included in the payload." >&2
 else
-    build_common
-
-    ALL_CERTNAMES=()
-    while IFS= read -r c; do
-        ALL_CERTNAMES+=("${c}")
-    done < <(list_smime_certnames)
-
-    # S/MIME certificates matching any 'NAME_GLOB'
-    UNION=()
-    if [ "${#NAMES[@]}" -eq 0 ]; then
-        echo "Note: no 'NAME_GLOB' given; no S/MIME certificates will be included in the payload." >&2
-    else
-        for n in "${NAMES[@]}"; do
-            select_certnames "${n}" \
-                || die "'NAME_GLOB' '${n}' matches no S/MIME certificate name (is it single-quoted?)."
-            for c in "${SEL_CERTNAMES[@]}"; do
-                case " ${UNION[*]} " in
-                    *" ${c} "*) ;;
-                    *) UNION+=("${c}") ;;
-                esac
-            done
+    for n in "${NAMES[@]}"; do
+        select_certnames "${n}" \
+            || die "'NAME_GLOB' '${n}' matches no S/MIME certificate name (is it single-quoted?)."
+        for c in "${SEL_CERTNAMES[@]}"; do
+            case " ${UNION[*]} " in
+                *" ${c} "*) ;;
+                *) UNION+=("${c}") ;;
+            esac
         done
-    fi
-    SEL_CERTNAMES=("${UNION[@]}")
+    done
+fi
+SEL_CERTNAMES=("${UNION[@]}")
 
-    if [ "${#NAMES[@]}" -eq 0 ]; then
-        stem=nosmimes
-        if [ "${CA_CERTS_ONLY}" = "1" ]; then
-            stem=cacerts
-        fi
-        label="CA certificates"
-    else
-        stem=""
-        for n in "${NAMES[@]}"; do
-            stem="${stem:+${stem}_}$(installer_name "${n}")"
-        done
-        label="${NAMES[*]}"
+if [ "${#NAMES[@]}" -eq 0 ]; then
+    stem=nosmimes
+    if [ "${CA_CERTS_ONLY}" = "1" ]; then
+        stem=cacerts
     fi
+    label="CA certificates"
+else
+    stem=""
+    for n in "${NAMES[@]}"; do
+        stem="${stem:+${stem}_}$(installer_name "${n}")"
+    done
+    label="${NAMES[*]}"
 fi
 
 build_payload_dir
-if [ "${CA_ONLY}" != "1" ] && [ "${#NAMES[@]}" -gt 0 ] && [ "${SMIME_COUNT}" -eq 0 ]; then
+if [ "${#NAMES[@]}" -gt 0 ] && [ "${SMIME_COUNT}" -eq 0 ]; then
     die "none of the matching S/MIME certificates can be included (no .p12, or rejected by validation or by an --exclude flag: see above)."
-fi
-if [ ! -s "${STAGE}/payload/manifest" ]; then
-    warn "nothing to include in the payload; no installer created."
-    exit 0
 fi
 
 # The payload is secret, and so encrypted, when it holds .p12 password files
 ENCRYPT=0
-if [ "${CA_ONLY}" != "1" ] && [ "${SMIME_COUNT}" -gt 0 ]; then
+if [ "${SMIME_COUNT}" -gt 0 ]; then
     ENCRYPT=1
 fi
 
@@ -1674,7 +1875,7 @@ if confirm "Create ${out}?"; then
         installer_pw=$(pki_random_password)
     fi
     write_installer "${label}" "${STAGE}/payload" "${out}" "${tarname}" "${installer_pw}"
-    echo "Created ${out}" >&2
+    echo "Created ${out}, signed with '$(cert_cn "${CS_CERT}")'." >&2
     if [ "${ENCRYPT}" = 1 ]; then
         printf '%s\n' "${installer_pw}" > "${out}.pass"
         chmod 0600 "${out}.pass"
@@ -1682,27 +1883,8 @@ if confirm "Create ${out}?"; then
         echo "Created ${out}.pass: the installer password (SECRET)." >&2
         echo "Send it to the user by a different channel than ${out##*/}; both are secret." >&2
     fi
-
-    groups=""
-    if [ "${ENCRYPT}" != 1 ]; then   # otherwise the passwords are in the payload
-        groups=$(awk -F'\t' '$4 == 1 { print $2 }' "${STAGE}/payload/manifest" | sort -u)
-    fi
-    if [ -n "${groups}" ]; then
-        echo "Send these .p12 passwords separately; the installer contains none:" >&2
-        while IFS= read -r g; do
-            pf="${GROUP_FILE[${g}]:-}"
-            line="${GROUP_LINE[${g}]:-}"
-            if [ -z "${pf}" ]; then
-                echo "  ${g}: not checked" >&2
-            elif [ -z "${line}" ]; then
-                echo "  ${g}: ${pf} not found" >&2
-            elif [ "${line}" = mixed ]; then
-                echo "  ${g}: the .p12 files open with different lines of ${pf}" >&2
-            else
-                echo "  ${g}: line ${line} of ${pf}" >&2
-            fi
-        done <<< "${groups}"
-    fi
+    echo "Send the root CA's SHA-256 fingerprint separately too, so that it can be checked on a machine that does not have the root yet:" >&2
+    "${OPENSSL}" x509 -noout -fingerprint -sha256 -in "${ROOT_CERT}" >&2
 else
     echo "Skipped ${out} (answer y at the prompt, or set PKI_ASSUME_YES=1)." >&2
 fi

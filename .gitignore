@@ -89,6 +89,32 @@ htmlcov/
 ._*
 Thumbs.db
 
+# --- More deployment-specific files (seeded from *.sample / replicate_pki_structure.sh) ---
+bin/create_organization_mdm.sh
+bin/create_organization_credentials.sh
+etc/*.conf
+
+# --- More keys and secrets ---
+*.key.pem.decrypted
+*.pem
+*.pkcs12
+*.p8
+*.rnd
+*.kdbx
+*.keyp
+
+# --- Generated credential installers and their by-products ---
+install_credentials_*
+credentials_*
+*.txz.enc
+*.part
+*.bak-*
+
+# --- More macOS ---
+.Spotlight-V100
+.Trashes
+.fseventsd
+
 # --- Always track templates (parent directories must not be ignored) --------
 !*.sample
 

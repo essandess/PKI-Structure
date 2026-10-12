@@ -111,6 +111,10 @@ if [ -f "privoxy/private/passphrase.txt" ] && [ -f "privoxy/index.txt" ]; then
     "${OPENSSL}" ca -config privoxy/openssl_privoxy.cnf -passin "file:privoxy/private/passphrase.txt" -updatedb
 fi
 
+if [ -f "intermediate_smime/private/passphrase.txt" ] && [ -f "intermediate_smime/index.txt" ]; then
+    "${OPENSSL}" ca -config intermediate_smime/openssl_intermediate_smime.cnf -passin "file:intermediate_smime/private/passphrase.txt" -updatedb
+fi
+
 # do NOT delete S/MIME and intermediate CA's
 
 # codesign and server certs issued by intermediate. (find compares -path with

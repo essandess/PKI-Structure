@@ -2,7 +2,7 @@
 
 # create_crl.sh
 #
-# Usage: create_crl.sh [--min-days-left DAYS] [--force] root|intermediate|privoxy
+# Usage: create_crl.sh [--min-days-left DAYS] [--force] root|intermediate|intermediate_smime|privoxy
 #
 # Generates (or refreshes) the CRL for the named CA, at a stable
 # filename suitable for publishing at the CRL Distribution Point
@@ -31,7 +31,7 @@ SHOW_CRL_TEXT=${SHOW_CRL_TEXT:-1}
 MIN_DAYS_LEFT=${CRL_MIN_DAYS_LEFT:-15}
 FORCE=0
 
-POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-root|intermediate|privoxy}
+POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-root|intermediate|intermediate_smime|privoxy}
 POSITIONAL_ARGS=()
 HELP=0
 
@@ -95,14 +95,14 @@ case "${CANAME}" in
     root)
 	CONFIG="${PKI_ROOT}/openssl.cnf"
 	;;
-    intermediate)
+    intermediate|intermediate_smime)
 	CONFIG="${PKI_ROOT}/${CERTDIR}/openssl_${CERTDIR}.cnf"
 	;;
     privoxy)
 	CONFIG="${PKI_ROOT}/${CERTDIR}/openssl_${CERTDIR}.cnf"
 	;;
     *)
-	echo "Unknown CA name '${CANAME}'; expected root, intermediate, or privoxy." >&2
+	echo "Unknown CA name '${CANAME}'; expected root, intermediate, intermediate_smime, or privoxy." >&2
 	exit 1
 	;;
 esac

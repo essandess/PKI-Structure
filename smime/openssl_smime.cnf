@@ -1,10 +1,11 @@
-# openssl_smime.cnf -- S/MIME certificates, issued by the INTERMEDIATE.
+# openssl_smime.cnf -- S/MIME certificates, issued by the S/MIME INTERMEDIATE
+# (intermediate_smime/).
 #
 # Used by
 #   bin/create_smime.sh  req (the CSR), ca ... -extensions smime_signature
 #                        and smime_encryption (one certificate each), and
 #                        ca -revoke of superseded ones (pki_revoke_matching_cn)
-# CA_default is the intermediate's: it points at the intermediate's database
+# CA_default is the S/MIME intermediate's: it points at its database
 # and key. Validity is set by the script (DAYS).
 # https://www.dalesandro.net/create-self-signed-smime-certificates/
 # https://gist.github.com/richieforeman/3166387
@@ -15,7 +16,7 @@
 default_ca                      = CA_default
 
 [ CA_default ]
-dir                             = intermediate
+dir                             = intermediate_smime
 new_certs_dir                   = $dir/newcerts
 rand_serial                     = yes
 database                        = $dir/index.txt
@@ -67,8 +68,8 @@ extendedKeyUsage                = critical, emailProtection
 subjectKeyIdentifier            = hash
 authorityKeyIdentifier          = keyid:always
 subjectAltName                  = email:copy
-crlDistributionPoints           = URI:http://$ENV::PKI_FQDN/intermediate.crl
-authorityInfoAccess     = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer
+crlDistributionPoints           = URI:http://$ENV::PKI_FQDN/intermediate_smime.crl
+authorityInfoAccess             = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate_smime.cer
 
 [ smime_signature ]
 basicConstraints                = CA:FALSE
@@ -77,5 +78,5 @@ extendedKeyUsage                = critical, emailProtection
 subjectKeyIdentifier            = hash
 authorityKeyIdentifier          = keyid:always
 subjectAltName                  = email:copy
-crlDistributionPoints           = URI:http://$ENV::PKI_FQDN/intermediate.crl
-authorityInfoAccess     = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate.cer
+crlDistributionPoints           = URI:http://$ENV::PKI_FQDN/intermediate_smime.crl
+authorityInfoAccess             = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate_smime.cer

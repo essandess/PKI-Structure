@@ -65,7 +65,7 @@ fi
 echo "This will PERMANENTLY ${ACTION} the ENTIRE PKI in this directory:"
 echo "  $(pwd)"
 echo
-echo "This includes the root CA, intermediate CA, server, codesign, S/MIME,"
+echo "This includes the root CA, both intermediate CAs, server, codesign, S/MIME,"
 echo "privoxy, and adblock2privoxy keys and certificates. Anything issued by"
 echo "the current root/intermediate will no longer be valid once this completes."
 if [ "${CREATE_PKI}" != "1" ]; then
@@ -84,13 +84,13 @@ PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}" || exit
 
 # Clear everything
-bin/create_root.sh -vc ; bin/create_intermediate.sh -vc ; bin/create_server.sh -vc ; bin/create_codesign.sh -vc ; bin/create_smime.sh -vc
+bin/create_root.sh -vc ; bin/create_intermediate.sh -vc ; bin/create_intermediate_smime.sh -vc ; bin/create_server.sh -vc ; bin/create_codesign.sh -vc ; bin/create_smime.sh -vc
 bin/create_privoxy.sh -vc ; bin/create_adblock2privoxy.sh -vc
 
 if [ "${CREATE_PKI}" == "1" ]; then
     # Create PKI chain of trust all at once
     bin/create_privoxy.sh && bin/create_adblock2privoxy.sh
-    bin/create_root.sh && bin/create_intermediate.sh && bin/create_server.sh && bin/create_codesign.sh && bin/create_organization_smime.sh
+    bin/create_root.sh && bin/create_intermediate.sh && bin/create_intermediate_smime.sh && bin/create_server.sh && bin/create_codesign.sh && bin/create_organization_smime.sh
 else
     echo "Clean complete. PKI not recreated (use --create-pki to regenerate)."
 fi

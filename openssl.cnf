@@ -3,6 +3,7 @@
 # Used by
 #   bin/create_root.sh          req -x509 ... -extensions root_ca
 #   bin/create_intermediate.sh  ca ... -extensions intermediate_ca
+#   bin/create_intermediate_smime.sh  ca ... -extensions intermediate_smime_ca
 #                               (the root signs the intermediate)
 #   bin/create_crl.sh root, bin/revoke_certificate.sh root,
 #   bin/updatedb_and_delete_expired_certs.sh
@@ -73,11 +74,38 @@ basicConstraints                = critical, CA:true, pathlen:1
 keyUsage                        = critical, cRLSign, keyCertSign
 
 [ intermediate_ca ]
-# The intermediate certificate, issued by the root.
+# The TLS server / code signing intermediate, issued by the root.
+# Scoped, so that a compromise of its key cannot be used to impersonate
+# arbitrary sites on devices that trust the root:
+#   extendedKeyUsage  serverAuth, codeSigning (no emailProtection: S/MIME has
+#                     its own intermediate, ../intermediate_smime)
+#   nameConstraints   critical; DNS names only under DOMAIN_NAME
+#                     (from pki_identity.env),
+#                     and no IP addresses. An excluded IP range is needed
+#                     because a name constraint only restricts the name types
+#                     it mentions.
 subjectKeyIdentifier            = hash
 authorityKeyIdentifier          = keyid:always
 basicConstraints                = critical, CA:true, pathlen:0
 keyUsage                        = critical, cRLSign, keyCertSign
+extendedKeyUsage                = serverAuth, codeSigning
+nameConstraints                 = critical, @intermediate_name_constraints
+crlDistributionPoints           = URI:http://$ENV::PKI_FQDN/root.crl
+authorityInfoAccess             = caIssuers;URI:http://$ENV::PKI_FQDN/root.cer
+
+[ intermediate_name_constraints ]
+permitted;DNS.0                 = $ENV::DOMAIN_NAME
+excluded;IP.0                   = 0.0.0.0/0.0.0.0
+excluded;IP.1                   = 0:0:0:0:0:0:0:0/0:0:0:0:0:0:0:0
+
+[ intermediate_smime_ca ]
+# The S/MIME intermediate certificate, issued by the root: emailProtection
+# only. No nameConstraints (S/MIME addresses span unrelated domains).
+subjectKeyIdentifier            = hash
+authorityKeyIdentifier          = keyid:always
+basicConstraints                = critical, CA:true, pathlen:0
+keyUsage                        = critical, cRLSign, keyCertSign
+extendedKeyUsage                = emailProtection
 crlDistributionPoints           = URI:http://$ENV::PKI_FQDN/root.crl
 authorityInfoAccess             = caIssuers;URI:http://$ENV::PKI_FQDN/root.cer
 

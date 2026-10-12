@@ -28,7 +28,8 @@
 # reports which file and line, never the password.
 #
 # Installer contents:
-#   CA certificates  root (trusted), valid intermediate, privoxy CA; public
+#   CA certificates  root (trusted), valid intermediate, valid intermediate_smime
+#                    (if it exists), privoxy CA (trusted for TLS only); public
 #                    certificates only. The root and the intermediate are
 #                    always included: the installer's signature is checked
 #                    against them. They go to the System keychain (sudo,
@@ -440,7 +441,9 @@ collect_crls() {
 
     for tree in "${SM_DIRS[@]}"; do
         candidates+=("${tree}"/root/crl/* "${tree}"/root/*.crl "${tree}"/root/*.crl.pem
-                     "${tree}"/intermediate/crl/* "${tree}"/intermediate/*.crl "${tree}"/intermediate/*.crl.pem)
+                     "${tree}"/intermediate/crl/* "${tree}"/intermediate/*.crl "${tree}"/intermediate/*.crl.pem
+                     "${tree}"/intermediate_smime/crl/* "${tree}"/intermediate_smime/*.crl
+                     "${tree}"/intermediate_smime/*.crl.pem)
     done
     if [ -n "${PKI_ROOT_CRL:-}" ]; then
         candidates+=("${PKI_ROOT_CRL}")
@@ -483,7 +486,9 @@ collect_intermediates() {
         if [ "${i}" -eq 0 ]; then
             tree=.
         fi
-        for f in "${tree}/intermediate/certs/intermediate.cert.pem" "${tree}"/intermediate/certs/*.cert.pem; do
+        for f in "${tree}/intermediate/certs/intermediate.cert.pem" "${tree}"/intermediate/certs/*.cert.pem \
+                 "${tree}/intermediate_smime/certs/intermediate_smime.cert.pem" \
+                 "${tree}"/intermediate_smime/certs/*.cert.pem; do
             [ -f "${f}" ] || continue
             f=${f#./}
 
@@ -519,17 +524,18 @@ build_trust_context() {
 
 # Sets INTERMEDIATE_PEM to the valid intermediate of this tree expiring last.
 pick_main_intermediate() {
-    local f epoch best_epoch=0
+    local d="$1" f epoch best_epoch=0
 
     INTERMEDIATE_PEM=""
     for f in "${INT_MAIN[@]}"; do
+        [[ "${f}" == "${d}"/* ]] || continue
         epoch=$(cert_enddate_epoch "${f}")
         if [ -z "${INTERMEDIATE_PEM}" ] || [ "${epoch}" -gt "${best_epoch}" ]; then
             INTERMEDIATE_PEM="${f}"
             best_epoch="${epoch}"
         fi
     done
-    [ -n "${INTERMEDIATE_PEM}" ] || die "no valid intermediate certificate found in intermediate/certs."
+    [ -n "${INTERMEDIATE_PEM}" ]   # fails if DIR has no valid intermediate; callers decide
 }
 
 # verify_chain [options] CERT: verify CERT against the root through the valid
@@ -920,7 +926,7 @@ stage_ca_dir() {
             continue
         fi
 
-        stage_ca_cert ca "${d}" "${f}"
+        stage_ca_cert root "${d}" "${f}"   # a self-signed root of its own; trusted for TLS only
         found=1
     done
 
@@ -950,9 +956,18 @@ build_common() {
     done
     [ "${have_int}" = 1 ] \
         || die "no intermediate CA exists in intermediate/certs; it is always included in the payload."
-    pick_main_intermediate
+    pick_main_intermediate intermediate \
+        || die "no valid intermediate certificate found in intermediate/certs."
     echo "Using intermediate: ${INTERMEDIATE_PEM}" >&2
     stage_ca_cert ca intermediate "${INTERMEDIATE_PEM}"
+    # The S/MIME intermediate (emailProtection only) validates the S/MIME
+    # certificates; it is included whenever it exists.
+    if pick_main_intermediate intermediate_smime; then
+        echo "Using S/MIME intermediate: ${INTERMEDIATE_PEM}" >&2
+        stage_ca_cert ca intermediate_smime "${INTERMEDIATE_PEM}"
+    else
+        echo "Note: no valid intermediate_smime certificate; S/MIME certificates cannot validate." >&2
+    fi
 
     for d in ${PRIVOXY_DIRS}; do
         stage_ca_dir "${d}"
@@ -1318,6 +1333,17 @@ import_into_keychain() {
 }
 
 
+# p12_label FILE PASSWORD: the label macOS gives the key it imports from FILE:
+# the certificate's common name. Prints nothing if it cannot be read. The
+# password goes to openssl through the environment, never argv. Plain openssl,
+# so that the macOS-native one is enough.
+p12_label() {
+    PKI_TMP_PW="$2" openssl pkcs12 -in "$1" -nokeys -clcerts -passin env:PKI_TMP_PW 2>/dev/null \
+        | openssl x509 -noout -subject -nameopt multiline,utf8 2>/dev/null \
+        | sed -n '/^ *commonName *=/{s/^ *commonName *= *//p;q;}' || true
+}
+
+
 # get_password GROUP -> sets PASSWORD. Uses PKI_P12_PASSWORD_<GROUP> if set,
 # otherwise asks once on the terminal.
 get_password() {
@@ -1622,6 +1648,7 @@ install_keychain() {
     local type group sha1 haskey file note kind dir path desc present withkey msg trusted
     local imported=0
     local acl=()
+    local key_labels=() label seen_labels
 
     if [ "${domain}" = system ]; then
         keychain="${SYSTEM_KEYCHAIN}"
@@ -1681,10 +1708,17 @@ install_keychain() {
         fi
         case "${kind}" in
             root)
+                scope=""
+                trustpol=()
+                if [ "${group}" != root ]; then
+                    # not the PKI root (e.g. the privoxy interception CA): TLS only
+                    scope=" for TLS only"
+                    trustpol=(-p ssl)
+                fi
                 if [ "${present}" = 1 ]; then
-                    msg="Trust the ROOT CA ${desc} ${trustfor} (already in ${where})?"
+                    msg="Trust the ROOT CA ${desc} ${trustfor}${scope} (already in ${where})?"
                 else
-                    msg="Add the ROOT CA ${desc}${withkey} to ${where} and trust it ${trustfor}?"
+                    msg="Add the ROOT CA ${desc}${withkey} to ${where} and trust it ${trustfor}${scope}?"
                 fi
                 ;;
             ca) msg="Add CA certificate ${desc}${withkey} to ${where}?" ;;
@@ -1716,6 +1750,7 @@ install_keychain() {
             import_into_keychain "${use_sudo}" "${keychain}" "${path}" "${PASSWORD}" ${acl[@]+"${acl[@]}"} \
                 || { fail "${desc}"; continue; }
             imported=$((imported + 1))
+            key_labels+=("$(p12_label "${path}" "${PASSWORD}")")
         else
             import_into_keychain "${use_sudo}" "${keychain}" "${path}" "" \
                 || { fail "${desc}"; continue; }
@@ -1724,10 +1759,10 @@ install_keychain() {
         if [ "${kind}" = root ]; then
             trusted=0
             if [ "${use_sudo}" = 1 ]; then
-                if sudo security add-trusted-cert -d -r trustRoot -k "${keychain}" "${WORK}/${dir}/${file}.cer"; then
+                if sudo security add-trusted-cert -d -r trustRoot ${trustpol[@]+"${trustpol[@]}"} -k "${keychain}" "${WORK}/${dir}/${file}.cer"; then
                     trusted=1
                 fi
-            elif security add-trusted-cert -r trustRoot -k "${keychain}" "${WORK}/${dir}/${file}.cer"; then
+            elif security add-trusted-cert -r trustRoot ${trustpol[@]+"${trustpol[@]}"} -k "${keychain}" "${WORK}/${dir}/${file}.cer"; then
                 trusted=1
             fi
             if [ "${trusted}" = 1 ]; then
@@ -1740,8 +1775,22 @@ install_keychain() {
 
     if [ "${domain}" = user ] && [ "${imported}" -gt 0 ]; then
         echo "Allowing Mail to use the new keys (asks for your login keychain password)..."
-        security set-key-partition-list -S apple-tool:,apple: -s "${keychain}" >/dev/null \
-            || echo "  warning: set-key-partition-list failed; Mail may ask for access to the keys" >&2
+        # Only the keys just imported, by label. Without -l this changes the
+        # partition list of every signing key in the login keychain. The tool
+        # takes one -l, so it runs once per distinct label.
+        seen_labels="|"
+        for label in ${key_labels[@]+"${key_labels[@]}"}; do
+            if [ -z "${label}" ]; then
+                echo "  warning: could not read a key label; its partition list was not changed (Mail may ask for access)" >&2
+                continue
+            fi
+            case "${seen_labels}" in
+                *"|${label}|"*) continue ;;
+            esac
+            seen_labels="${seen_labels}${label}|"
+            security set-key-partition-list -S apple-tool:,apple: -s -l "${label}" "${keychain}" >/dev/null \
+                || echo "  warning: set-key-partition-list failed for '${label}'; Mail may ask for access to that key" >&2
+        done
     fi
 }
 

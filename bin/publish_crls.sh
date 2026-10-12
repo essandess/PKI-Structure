@@ -2,12 +2,12 @@
 
 # publish_crls.sh
 #
-# Usage: publish_crls.sh [--if-configured] [--no-regenerate] [-h|--help] [root|intermediate ...]
+# Usage: publish_crls.sh [--if-configured] [--no-regenerate] [-h|--help] [root|intermediate|intermediate_smime ...]
 #
 # Regenerates each named CA's CRL (bin/create_crl.sh) and publishes the CRL
 # and the CA certificate, both DER, to the web directory the CRL
 # distribution points point at (http://PKI_FQDN/<ca>.crl and <ca>.cer).
-# Default CAs: root intermediate. If a CA's key or passphrase is not here
+# Default CAs: root intermediate (and intermediate_smime when it exists). If a CA's key or passphrase is not here
 # (an offline root), its existing CRL is published as it is, with a warning
 # when that CRL is about to expire (root: 30 days, others: 7). Safe to run at any time; called by the
 # periodic CRL job and by revoke_certificate.sh, so that a revocation is
@@ -49,12 +49,12 @@ while [[ $# -gt 0 ]]; do
 	    HELP=1
 	    shift
 	    ;;
-	root|intermediate)
+	root|intermediate|intermediate_smime)
 	    CAS+=("$1")
 	    shift
 	    ;;
 	*)
-	    echo "Error: unknown argument '$1' (expected root or intermediate)." >&2
+	    echo "Error: unknown argument '$1' (expected root, intermediate or intermediate_smime)." >&2
 	    exit 2
 	    ;;
     esac
@@ -64,13 +64,16 @@ if [ "${HELP}" != "0" ]; then
     cat <<USEAGE
 Useage:
 
-$(basename "$0") [--if-configured] [--no-regenerate] [-h|--help] [root|intermediate ...]
+$(basename "$0") [--if-configured] [--no-regenerate] [-h|--help] [root|intermediate|intermediate_smime ...]
 USEAGE
     exit 0
 fi
 
 if [ "${#CAS[@]}" -eq 0 ]; then
     CAS=(root intermediate)
+    if [ -d intermediate_smime/crl ]; then
+	CAS+=(intermediate_smime)
+    fi
 fi
 
 . "${PKI_ROOT}/pki_identity.env"

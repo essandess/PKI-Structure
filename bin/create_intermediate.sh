@@ -21,6 +21,12 @@
 # everything it signed. If its key is compromised, revoke it yourself:
 #   bin/revoke_certificate.sh intermediate/certs/intermediate.<sha1>.cert.pem root CACompromise
 
+# Scope (see openssl_${CERTDIR}.cnf): intermediate is limited to TLS server and
+# code signing certificates by extendedKeyUsage and critical nameConstraints
+# (permitted DNS: DOMAIN_NAME); intermediate_smime
+# (bin/create_intermediate_smime.sh sets CERTDIR=intermediate_smime) is limited
+# to emailProtection. The new certificate is checked for these restrictions.
+
 CATRUE=${CATRUE:-1}
 CERTDIR=${CERTDIR:-intermediate}
 CERTNAME=${CERTNAME:-intermediate}
@@ -42,6 +48,11 @@ cd "${PKI_ROOT}" || exit
 # The archive step below needs OPENSSL (cert_sha1) before pki_structure.sh runs.
 . "${PKI_ROOT}/bin/define_openssl.sh"
 INTERMEDIATE_FILES="private/key.pem private/p12 certs/cert.pem certs/chain.pem certs/cer"
+# what is reissued after a new key
+case "${CERTDIR}" in
+    intermediate_smime) LEAVES="S/MIME" ;;
+    *) LEAVES="server and code signing" ;;
+esac
 
 # --new-key is ours; everything else is for pki_structure.sh
 NEW_KEY=0
@@ -76,6 +87,24 @@ if [ "${ARCHIVE}" = "1" ] \
 fi
 
 . "${SCRIPT_DIR}/pki_structure.sh"
+
+# nameConstraints of the TLS / code signing intermediate (its openssl cnf reads
+# DOMAIN_NAME from the environment).
+DOMAIN_NAME="${DOMAIN_NAME:-}"
+if [ "${CERTDIR}" = "intermediate" ]; then
+    if [ -z "${DOMAIN_NAME}" ]; then
+        echo "Error: set DOMAIN_NAME in pki_identity.env: the DNS domain the intermediate may issue for." >&2
+        exit 1
+    fi
+    case "${SERVER_FQDN:-}" in
+        "${DOMAIN_NAME}"|*".${DOMAIN_NAME}") ;;
+        *)
+            echo "Error: SERVER_FQDN '${SERVER_FQDN:-}' is not within DOMAIN_NAME '${DOMAIN_NAME}'; the server certificate would violate the intermediate's nameConstraints." >&2
+            exit 1
+            ;;
+    esac
+fi
+export DOMAIN_NAME
 
 # Never longer than the root's remaining life
 DAYS=$(pki_cap_days "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem" "${DAYS}")
@@ -120,6 +149,20 @@ if "${OPENSSL}" ca -config openssl.cnf \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
         -batch
 then
+    # a section missing from the cnf would silently issue an unrestricted CA
+    if ! pki_assert_ca_scope "${CERTDIR}/certs/${CERTNAME}.cert.pem" "${CERTDIR}"; then
+        echo "Error: the new ${CERTNAME} certificate lacks the restrictions of ${CERTDIR}/openssl_${CERTDIR}.cnf ([ ${CERTDIR}_ca ]); revoking it." >&2
+        "${OPENSSL}" ca -config openssl.cnf \
+                -revoke "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
+                -crl_reason superseded \
+                -passin file:"${ISSUERCADIR}"/private/passphrase.txt || true
+        "${PKI_ROOT}"/bin/create_crl.sh "${ISSUERCANAME}" || true
+        if [ "${PKI_RENEW:-0}" != "1" ]; then
+            rm -f "${CERTDIR}"/private/"${CERTNAME}".key.pem
+        fi
+        rm -f "${CERTDIR}"/certs/"${CERTNAME}".cert.pem "${CERTDIR}"/certs/"${CERTNAME}".csr.pem
+        exit 1
+    fi
     REISSUED=1
     rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem
 else
@@ -189,14 +232,14 @@ cp "${CERTDIR}"/private/{"${CERTNAME}","${CERTNAME}"."${CERTSHA1}"}.p12
 
 # Generate the CA's CRL as soon as the CA exists, so the
 # crlDistributionPoints URL in every cert it signs resolves immediately.
-"${PKI_ROOT}"/bin/create_crl.sh intermediate
+"${PKI_ROOT}"/bin/create_crl.sh "${CERTDIR}"
 
 if [ -n "${PKI_ARCHIVED_SHA1}" ]; then
     echo "The previous ${CERTNAME} is archived as ${CERTNAME}.${PKI_ARCHIVED_SHA1}.*; it was not revoked." >&2
     if [ "${PKI_RENEW}" = "1" ]; then
 	echo "Renewed with the same key: certificates it issued stay valid. Publish the new ${CERTNAME}.cer (bin/publish_crls.sh)." >&2
     else
-	echo "This intermediate has a NEW KEY: reissue the server, code signing and S/MIME certificates." >&2
+	echo "This ${CERTDIR} has a NEW KEY: reissue the ${LEAVES} certificates." >&2
 	echo "If the old key was compromised, revoke the old certificate: bin/revoke_certificate.sh ${CERTDIR}/certs/${CERTNAME}.${PKI_ARCHIVED_SHA1}.cert.pem root CACompromise" >&2
     fi
 fi

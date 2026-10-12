@@ -4,7 +4,8 @@
 #
 # Usage: create_smime.sh [-a|--algorithm EC|RSA] [-c|--clean|-vc|--veryclean] EMAIL CERTNAME
 #
-# Creates a signature and an encryption S/MIME certificate for EMAIL. If
+# Creates a signature and an encryption S/MIME certificate for EMAIL, issued by
+# the S/MIME intermediate (intermediate_smime/). If
 # certificates named CERTNAME already exist, they are first moved to
 # SHA1-named files, ${CERTNAME}-{signature,encryption}.${CERTSHA1}.{key,cert,chain}.pem,
 # .cer, .p12 and .p12.pass, and new certificates are issued in their place.
@@ -30,8 +31,11 @@ DAYS=825
 CATRUE=${CATRUE:-0}
 CERTDIR=${CERTDIR:-smime}
 CERTNAME=${CERTNAME:-}
-ISSUERCADIR=${ISSUERCADIR:-intermediate}
-ISSUERCANAME=${ISSUERCANAME:-intermediate}
+ISSUERCADIR=${ISSUERCADIR:-intermediate_smime}
+ISSUERCANAME=${ISSUERCANAME:-intermediate_smime}
+# Certificates issued before the S/MIME intermediate existed are recorded in
+# this CA's database; the ones for the same CommonName are superseded too.
+LEGACY_ISSUERCADIR=${LEGACY_ISSUERCADIR:-intermediate}
 
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
 RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-3072}
@@ -251,7 +255,13 @@ done
 
 # Only now, with both replacements complete, revoke what they supersede.
 for i in "${!REVOKE_CN[@]}"; do
-    pki_revoke_matching_cn "${ISSUERCADIR}" "${CERTDIR}/openssl_${CERTDIR}.cnf" "${REVOKE_CN[i]}" "${REVOKE_SERIAL[i]}" intermediate
+    pki_revoke_matching_cn "${ISSUERCADIR}" "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${REVOKE_CN[i]}" "${REVOKE_SERIAL[i]}" "${ISSUERCADIR}"
+    # migration: same identity issued under the pre-split intermediate
+    if [ "${LEGACY_ISSUERCADIR}" != "${ISSUERCADIR}" ] \
+           && [ -f "${LEGACY_ISSUERCADIR}/index.txt" ] \
+           && [ -f "${LEGACY_ISSUERCADIR}/private/passphrase.txt" ]; then
+        pki_revoke_matching_cn "${LEGACY_ISSUERCADIR}" "${LEGACY_ISSUERCADIR}/openssl_${LEGACY_ISSUERCADIR}.cnf" "${REVOKE_CN[i]}" "${REVOKE_SERIAL[i]}" "${LEGACY_ISSUERCADIR}"
+    fi
 done
 
 echo "The .p12 password of ${CERTNAME} is in ${CERTDIR}/private/${CERTNAME}-{signature,encryption}.p12.pass (give it only to the recipient)." >&2

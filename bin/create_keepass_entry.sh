@@ -5,9 +5,10 @@
 # Usage: create_keepass_entry.sh --db FILE [--key-file FILE | --no-password]
 #            [--title TITLE] [--group PATH] [--individual-smime-passwords]
 #            [--force-update] [--no-backup] [--kp-prompt] [-n|--dry-run]
+#            [--root-cert FILE]
 #            INSTALLER
 #        create_keepass_entry.sh --xml-out FILE [--title TITLE]
-#            [--group PATH] [--individual-smime-passwords] INSTALLER
+#            [--group PATH] [--individual-smime-passwords] [--root-cert FILE] INSTALLER
 #
 # Example:
 #   bin/create_keepass_entry.sh --db MYDBFILE.keypass \
@@ -20,6 +21,13 @@
 # is used to decrypt the payload (the same openssl steps the installer
 # runs; the installer itself is never executed), which proves the password
 # is right and gives the contents.
+#
+# Signature: before anything is decrypted, the signature of INSTALLER
+# (detached PKCS#7 between __SIGNATURE_BELOW__ and __PAYLOAD_BELOW__) is
+# checked: the file must be unchanged since it was signed, by a code signing,
+# non-CA certificate that chains to this PKI tree's root (root/certs/root*.cert.pem,
+# or --root-cert FILE); a root inside the installer is never trusted. There is
+# no way to skip it. Revocation of the signer is not checked.
 #
 # Default: ONE entry in an existing KeePassXC database whose Password is the
 # installer password (INSTALLER.pass). Nothing else secret is stored. Its
@@ -110,7 +118,7 @@ trap 'exit 143' TERM HUP
 
 # ---------------------------------------------------------------- options
 
-DB="" KEYFILE="" NOPASS=0 TITLE="" GROUP="" XML_OUT=""
+DB="" KEYFILE="" NOPASS=0 TITLE="" GROUP="" XML_OUT="" ROOT_CERT=""
 FORCE=0 BACKUP=1 KP_PROMPT=0 DRYRUN=0 INDIVIDUAL=0
 ARGS=()
 
@@ -124,6 +132,7 @@ while [ $# -gt 0 ]; do
         --title)         need_arg $# "$1"; TITLE=$2; shift 2 ;;
         --group)         need_arg $# "$1"; GROUP=$2; shift 2 ;;
         --xml-out)       need_arg $# "$1"; XML_OUT=$2; shift 2 ;;
+        --root-cert)     need_arg $# "$1"; ROOT_CERT=$2; shift 2 ;;
         --individual-smime-passwords) INDIVIDUAL=1; shift ;;
         --force-update)  FORCE=1; shift ;;
         --no-backup)     BACKUP=0; shift ;;
@@ -278,6 +287,85 @@ extract_payload() {
 TMPD=$(mktemp -d "${TMPDIR:-/tmp}/kpentry.XXXXXX")
 WORK="${TMPD}/payload"
 mkdir "${WORK}"
+# ------------------------------------------- signature of the installer
+
+# create_credentials.sh signs every installer (detached PKCS#7, DER, base64,
+# between __SIGNATURE_BELOW__ and __PAYLOAD_BELOW__, covering the file except
+# those lines). Check it before the payload is decrypted or unpacked. The
+# trust anchor is this PKI tree's own root (or --root-cert), never a root the
+# installer carries; the signature block holds the signer and intermediates.
+ANCHORS="${TMPD}/anchors.pem"
+
+collect_anchors() {
+    local f pem n=0 candidates=()
+
+    : > "${ANCHORS}"
+    if [ -n "${ROOT_CERT}" ]; then
+        [ -r "${ROOT_CERT}" ] || die "cannot read --root-cert ${ROOT_CERT}"
+        candidates=("${ROOT_CERT}")
+    else
+        candidates=(root/certs/root.cert.pem root/certs/root.*.cert.pem)
+    fi
+    for f in "${candidates[@]}"; do
+        [ -f "${f}" ] || continue
+        if ! pem=$("${OPENSSL}" x509 -in "${f}" 2>/dev/null); then
+            pem=$("${OPENSSL}" x509 -inform DER -in "${f}" 2>/dev/null) \
+                || { warn "ignoring ${f}: not a certificate"; continue; }
+        fi
+        printf '%s\n' "${pem}" > "${TMPD}/anchor.one.pem"
+        if "${OPENSSL}" verify -CAfile "${TMPD}/anchor.one.pem" \
+               "${TMPD}/anchor.one.pem" >/dev/null 2>&1; then
+            printf '%s\n' "${pem}" >> "${ANCHORS}"
+            n=$((n + 1))
+        else
+            warn "ignoring root certificate ${f}: does not verify (expired?)"
+        fi
+    done
+    if [ "${n}" -eq 0 ]; then
+        die "no valid root certificate to check the signature of ${INST_BASE}" \
+            "against (looked for root/certs/root*.cert.pem); use --root-cert FILE"
+    fi
+}
+
+verify_installer_signature() {
+    local signed="${TMPD}/installer.signed" sig="${TMPD}/installer.sig.der"
+    local signer="${TMPD}/installer.signer.pem" out text
+
+    if ! grep -q '^__SIGNATURE_BELOW__$' "${INSTALLER}" \
+       || ! grep -q '^__PAYLOAD_BELOW__$' "${INSTALLER}"; then
+        die "${INST_BASE} has no signature block: it was not made by the" \
+            "current create_credentials.sh"
+    fi
+    awk '/^__SIGNATURE_BELOW__$/ { print; skip = 1; next }
+         /^__PAYLOAD_BELOW__$/ { skip = 0 }
+         !skip { print }' "${INSTALLER}" > "${signed}"
+    awk '/^__SIGNATURE_BELOW__$/ { skip = 1; next }
+         /^__PAYLOAD_BELOW__$/ { skip = 0 }
+         skip' "${INSTALLER}" | "${OPENSSL}" base64 -d > "${sig}" 2>/dev/null || true
+    [ -s "${sig}" ] || die "${INST_BASE} carries no readable signature"
+
+    if ! out=$("${OPENSSL}" smime -verify -binary -inform DER -in "${sig}" \
+                   -content "${signed}" -CAfile "${ANCHORS}" -purpose any \
+                   -signer "${signer}" -out /dev/null 2>&1); then
+        die "SIGNATURE CHECK FAILED for ${INST_BASE}: it was changed after it" \
+            "was signed, or not signed by a certificate that chains to this" \
+            "PKI's root. ${out}"
+    fi
+    text=$("${OPENSSL}" x509 -noout -text -in "${signer}")
+    case "${text}" in
+        *"Code Signing"*) ;;
+        *) die "the signer of ${INST_BASE} is not a code signing certificate" ;;
+    esac
+    case "${text}" in
+        *"CA:TRUE"*) die "the signer of ${INST_BASE} is a CA certificate" ;;
+    esac
+    echo "Signature OK: ${INST_BASE} signed by" \
+         "$("${OPENSSL}" x509 -noout -subject -in "${signer}" | sed 's/^subject= *//')." >&2
+}
+
+collect_anchors
+verify_installer_signature
+
 if ! extract_payload "${WORK}" 2>/dev/null; then
     die "cannot decrypt the payload of ${INST_BASE} with ${PASSFILE##*/}"
 fi

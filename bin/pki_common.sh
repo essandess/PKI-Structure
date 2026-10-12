@@ -291,3 +291,45 @@ cert_smime_role() {
 cert_is_ca() {
     "${OPENSSL}" x509 -noout -ext basicConstraints -in "$1" 2>/dev/null | grep -q 'CA:TRUE'
 }
+
+# ---------------------------------------------------------------------
+# Intermediate CA scope
+# ---------------------------------------------------------------------
+
+# pki_assert_ca_scope CERT KIND: succeed only if the intermediate certificate
+# CERT is restricted the way its KIND requires; otherwise say why on stderr.
+#   intermediate        TLS/code signing: serverAuth in the extendedKeyUsage,
+#                       no emailProtection, and a critical nameConstraints
+#                       with permitted DNS names
+#   intermediate_smime  S/MIME: the extendedKeyUsage is emailProtection only
+# Needs OpenSSL >= 1.1.1 for `x509 -ext`.
+pki_assert_ca_scope() {
+    local cert="$1" kind="$2" text eku nc
+
+    text=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage,nameConstraints -in "${cert}" 2>/dev/null) || true
+    eku=$(printf '%s\n' "${text}" | awk '/^X509v3 Extended Key Usage:/ {m=1; next} /^X509v3 Name Constraints:/ {m=0} m {print}')
+    nc=$(printf '%s\n' "${text}" | awk '/^X509v3 Name Constraints:/ {m=1; print; next} /^X509v3 Extended Key Usage:/ {m=0} m {print}')
+
+    case "${kind}" in
+        intermediate_smime)
+            if ! grep -qi 'E-mail Protection' <<<"${eku}" \
+                   || grep -Eqi 'TLS Web|Code Signing|Any Extended' <<<"${eku}"; then
+                echo "${cert}: extendedKeyUsage must be emailProtection only." >&2
+                return 1
+            fi
+            ;;
+        *)
+            if ! grep -qi 'TLS Web Server' <<<"${eku}" \
+                   || grep -Eqi 'E-mail Protection|Any Extended' <<<"${eku}"; then
+                echo "${cert}: extendedKeyUsage must be serverAuth/codeSigning, without emailProtection." >&2
+                return 1
+            fi
+            if ! grep -q '^X509v3 Name Constraints: critical' <<<"${nc}" \
+                   || ! grep -q 'Permitted:' <<<"${nc}" \
+                   || ! grep -q 'DNS:' <<<"${nc}"; then
+                echo "${cert}: it needs a critical nameConstraints extension with permitted DNS names." >&2
+                return 1
+            fi
+            ;;
+    esac
+}

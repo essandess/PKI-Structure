@@ -207,7 +207,7 @@ Environment overrides (same names/defaults as create_codesign.sh):
                   collect_crls)
     CERTSHA1      optional: pick a specific signer when several
                   usable ones exist
-    SMIME_ISSUERCADIR   default $ISSUERCADIR
+    SMIME_ISSUERCADIR   default "intermediate_smime"
                   (same role as ISSUERCADIR/ISSUERCANAME, but for
     SMIME_ISSUERCANAME  default $SMIME_ISSUERCADIR
                   vetting 'identities:' certificates; override only
@@ -798,13 +798,13 @@ def build_identities(
         # line 1 = key passphrase, line 2 = p12 export password
         return load_passphrase_line(pw_file, 2)
 
-    # Defaults to the same issuer as code signing; override with
-    # SMIME_ISSUERCADIR/NAME if S/MIME certs come from a different
-    # intermediate.
+    # Defaults to the S/MIME intermediate (intermediate_smime); code
+    # signing uses ISSUERCADIR (intermediate). Override with
+    # SMIME_ISSUERCADIR/NAME.
     ca_bundle, ca_db, crls = load_issuer_context(
         "SMIME_ISSUERCADIR",
         "SMIME_ISSUERCANAME",
-        os.environ.get("ISSUERCADIR", "intermediate"),
+        "intermediate_smime",
     )
     now = datetime.now(timezone.utc)
 

@@ -7,6 +7,8 @@
 # The certificate it issues (adblock2privoxy-nginx) uses
 # privoxy/adblock2privoxy/openssl_adblock2privoxy.cnf, which points at this
 # CA's database.
+# pathlen:0 (it signs only leaf certificates) and extendedKeyUsage serverAuth
+# restrict it; devices should also trust it for TLS only (privoxy/README.md).
 # Validity is set by create_privoxy.sh (DAYS): 825 days, the same as the
 # certificates it issues, so that its key is not exposed for longer than
 # those are.
@@ -70,8 +72,11 @@ emailAddress_max                = 254
 # The self-signed privoxy CA certificate (`man x509v3_config`).
 subjectKeyIdentifier            = hash
 authorityKeyIdentifier          = keyid:always
-basicConstraints                = critical, CA:true, pathlen:1
+basicConstraints                = critical, CA:true, pathlen:0
 keyUsage                        = critical, cRLSign, keyCertSign
+# TLS server certificates only: a chain through this CA is not valid for
+# S/MIME or code signing.
+extendedKeyUsage                = serverAuth
 
 [ crl_ext ]
 # Extension for CRLs (`man x509v3_config`).

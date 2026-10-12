@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Usage: revoke_certificate.sh certfile root|intermediate|privoxy [crlReason]
+# Usage: revoke_certificate.sh certfile root|intermediate|intermediate_smime|privoxy [crlReason]
 #
 # Revokes a certificate for the named CA and stated reason,
 # overwrites the CRL file, and (root, intermediate) publishes the new CRL
@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}" || exit
 
-POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-certfile root|intermediate|privoxy [crlReason]}
+POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-certfile root|intermediate|intermediate_smime|privoxy [crlReason]}
 POSITIONAL_ARGS=()
 HELP=0
 
@@ -85,14 +85,14 @@ case "${CANAME}" in
     root)
 	CONFIG="${PKI_ROOT}/openssl.cnf"
 	;;
-    intermediate)
+    intermediate|intermediate_smime)
 	CONFIG="${PKI_ROOT}/${ISSUERCANAME}/openssl_${ISSUERCANAME}.cnf"
 	;;
     privoxy)
 	CONFIG="${PKI_ROOT}/${ISSUERCANAME}/openssl_${ISSUERCANAME}.cnf"
 	;;
     *)
-	echo "Unknown CA name '${CANAME}'; expected root, intermediate, or privoxy." >&2
+	echo "Unknown CA name '${CANAME}'; expected root, intermediate, intermediate_smime, or privoxy." >&2
 	exit 1
 	;;
 esac

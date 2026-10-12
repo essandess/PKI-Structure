@@ -7,7 +7,7 @@ passwords; and signed MDM profiles. Private keys are passphrase protected.
 
 | Tool | Purpose |
 |---|---|
-| `create_{root,intermediate,server,codesign,smime,privoxy,adblock2privoxy}.sh` | CAs and leaf certificates; reissue supersedes the predecessor |
+| `create_{root,intermediate,intermediate_smime,server,codesign,smime,privoxy,adblock2privoxy}.sh` | CAs and leaf certificates; reissue supersedes the predecessor |
 | `revoke_certificate.sh`, `create_crl.sh`, `publish_crls.sh` | Revocation, CRL generation and publication |
 | `create_credentials.sh` | Signed macOS install scripts for CA certificates and S/MIME identities |
 | `create_keepass_entry.sh` | Install-script passwords into KeePassXC |
@@ -54,7 +54,7 @@ Edit `pki_identity.env` before running any `create_*.sh`.
 ```
 pki_identity.env, openssl.cnf, common_policy.cnf
 bin/                scripts
-root/  intermediate/  server/  codesign/  smime/
+root/  intermediate/  intermediate_smime/  server/  codesign/  smime/
 privoxy/            separate trust anchor
 privoxy/adblock2privoxy/
 mdm-private/        secrets; keep out of version control
@@ -103,7 +103,7 @@ instead (see [S/MIME](#smime)).
 export CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1
 ```
 
-Order: root, intermediate, then leaf certificates; `privoxy` before
+Order: root, intermediate, intermediate_smime, then leaf certificates; `privoxy` before
 `adblock2privoxy`. Options for every script: `-a EC|RSA`, `-c`/`--clean` and
 `-vc`/`--veryclean` (delete the directory's keys, certificates, and CA
 database; `-vc` also `passphrase.txt`; prompts; irreversible, and issued
@@ -112,10 +112,11 @@ certificates can no longer be revoked), `-h`.
 | Script | Issuer | Default key | Validity | Output |
 |---|---|---|---|---|
 | `create_root.sh` | self | EC P-384 | 7305 days | `root.{cert.pem,cer}`, `root.{key.pem,p12}`, CRL |
-| `create_intermediate.sh` | root | EC P-384 | 3653 days | `intermediate.*` and `intermediate.<sha1>.*`, CRL |
+| `create_intermediate.sh` | root | EC P-384 | 3653 days | `intermediate.*` and `intermediate.<sha1>.*`, CRL; TLS/code signing only, name-constrained |
+| `create_intermediate_smime.sh` | root | EC P-384 | 3653 days | `intermediate_smime.*` and `intermediate_smime.<sha1>.*`, CRL; emailProtection only |
 | `create_server.sh` | intermediate | EC P-256 (RSA 2048) | 825 days | `<SERVER_FQDN>.<sha1>.*`, incl. `key.pem.decrypted` (0600) |
 | `create_codesign.sh` | intermediate | EC P-256 (RSA 2048) | 825 days | `codesign.<sha1>.*` (no unsuffixed names) |
-| `create_smime.sh EMAIL CERTNAME` | intermediate | signature EC P-256; encryption RSA 3072 | 825 days | `CERTNAME-{signature,encryption}.*` plus `<sha1>` copies |
+| `create_smime.sh EMAIL CERTNAME` | intermediate_smime | signature EC P-256; encryption RSA 3072 | 825 days | `CERTNAME-{signature,encryption}.*` plus `<sha1>` copies |
 | `create_privoxy.sh` | self | EC P-256 | 825 days | `privoxy.*` |
 | `create_adblock2privoxy.sh` | privoxy | EC P-256 | 825 days | `adblock2privoxy-nginx.<sha1>.*`, incl. `key.pem.decrypted` |
 
@@ -145,16 +146,55 @@ beside each as `CERTNAME-{signature,encryption}.p12.pass` (0600). It opens no
 other issuance's `.p12`; give it only to the recipient.
 `bin/create_organization_smime.sh` runs this deployment's list of identities.
 
+## Intermediate scoping
+
+The root is trusted for every purpose, so one intermediate that could sign
+anything would make its key a way to impersonate any site on every device that
+trusts the root. There are two intermediates, each restricted:
+
+| CA | Directory | Issues | Restriction |
+|---|---|---|---|
+| TLS / code signing | `intermediate/` | server, code signing | `extendedKeyUsage` serverAuth, codeSigning; **critical `nameConstraints`**: DNS only under `DOMAIN_NAME`, no IP addresses |
+| S/MIME | `intermediate_smime/` | S/MIME | `extendedKeyUsage` emailProtection only |
+
+S/MIME cannot carry `nameConstraints` (addresses include gmail.com and
+icloud.com), so its limit is the EKU. `create_intermediate_smime.sh` is
+`create_intermediate.sh` with `CERTDIR=intermediate_smime`; renewal, `--new-key`
+and archiving behave identically. Each has its own key, `passphrase.txt`,
+`index.txt` and CRL (`root`, `intermediate`, and `intermediate_smime`
+`.crl`/`.cer` are all published by `publish_crls.sh`). `create_intermediate.sh`
+refuses (and revokes) a certificate that does not carry its restrictions
+(`pki_assert_ca_scope`), and refuses a `SERVER_FQDN` outside `DOMAIN_NAME`.
+
+**Migrating an existing PKI.** The old intermediate certificate is
+unconstrained and must not stay valid:
+
+1. `bin/create_intermediate.sh --new-key` (a same-key renewal would leave the
+   old unconstrained certificate valid for the same key), then
+   `bin/create_intermediate_smime.sh`.
+2. Revoke the old intermediate against the root:
+   `bin/revoke_certificate.sh intermediate/certs/intermediate.<old sha1>.cert.pem root superseded`.
+3. Reissue the server and code signing certificates and all S/MIME certificates
+   (`create_organization_smime.sh`). `create_smime.sh` also revokes (as
+   superseded) the identity's still-valid certificates in the old
+   `intermediate/index.txt`.
+4. `bin/publish_crls.sh`, then rebuild installers and profiles.
+
+Certificates issued under the old intermediate no longer validate once it is
+revoked, so old S/MIME encryption certificates can not be put into new
+installers or profiles; keep their `.p12` files if the mail they decrypt is
+still needed. If `ORG_NAME` looks like a hostname (contains a dot), OpenSSL may
+apply the DNS constraint to the code signing certificate's CommonName.
+
 ## Revocation and CRLs
 
 ```sh
-bin/revoke_certificate.sh CERTFILE CA [REASON]    # CA: root | intermediate | privoxy
-bin/create_crl.sh [--min-days-left DAYS] [--force] root|intermediate|privoxy
-bin/publish_crls.sh [--if-configured] [--no-regenerate] [root|intermediate ...]
+bin/revoke_certificate.sh CERTFILE CA [REASON]    # CA: root | intermediate | intermediate_smime | privoxy
+bin/create_crl.sh [--min-days-left DAYS] [--force] root|intermediate|intermediate_smime|privoxy
+bin/publish_crls.sh [--if-configured] [--no-regenerate] [root|intermediate|intermediate_smime ...]
 ```
 
-* **Revoke.** `CA` is the certificate's issuer: intermediate → `root`; server,
-  codesign, S/MIME → `intermediate`; adblock2privoxy → `privoxy`. Revoke both
+* **Revoke.** `CA` is the certificate's issuer: intermediate, intermediate_smime → `root`; server, codesign → `intermediate`; S/MIME → `intermediate_smime`; adblock2privoxy → `privoxy`. Revoke both
   S/MIME certificates of an identity. Requires a typed `yes`. `REASON` (default
   `unspecified`): `keyCompromise`, `CACompromise`, `affiliationChanged`,
   `superseded`, `cessationOfOperation`, `certificateHold`, `removeFromCRL`.
@@ -172,8 +212,7 @@ bin/publish_crls.sh [--if-configured] [--no-regenerate] [root|intermediate ...]
   the intermediate with `CACompromise` against `root`, run
   `create_intermediate.sh --new-key`, and reissue all leaves.
 
-Certificates reference `http://PKI_FQDN/{root,intermediate}.crl` and
-`{root,intermediate}.cer` (DER). Publish them under those names.
+Certificates reference `http://PKI_FQDN/{root,intermediate,intermediate_smime}.crl` and `{root,intermediate,intermediate_smime}.cer` (DER). Publish them under those names.
 
 ```sh
 openssl crl -inform DER -in intermediate/crl/intermediate.crl -noout -text

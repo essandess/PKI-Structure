@@ -9,8 +9,8 @@ Keychain and necessary MacPorts installation directories.
 ```sh
 # Install and trust privoxy certificates into System Keychain
 
-sudo security import privoxy/private/privoxy.p12 -k /Library/Keychains/System.keychain -P "$(sed -n 2p privoxy/private/passphrase.txt)" -A
-sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain privoxy/certs/privoxy.cer
+sudo security import privoxy/certs/privoxy.cer -k /Library/Keychains/System.keychain
+sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain privoxy/certs/privoxy.cer
 
 # Install the PKI
 sudo install -o privoxy -g privoxy -m 0644 privoxy/certs/privoxy.cer privoxy/certs/privoxy.cert.pem /opt/local/etc/privoxy/CA
@@ -32,8 +32,8 @@ PRIVOXY_PKI_STRUCTURE
 
 # Install and trust privoxy certificates into System Keychain
 
-# sudo security import privoxy/private/privoxy.p12 -k /Library/Keychains/System.keychain -P "$(sed -n 2p privoxy/private/passphrase.txt)" -A
-# sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain privoxy/certs/privoxy.cer
+# sudo security import privoxy/certs/privoxy.cer -k /Library/Keychains/System.keychain
+# sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain privoxy/certs/privoxy.cer
 
 # Install the PKI
 # sudo install -o privoxy -g privoxy -m 0644 privoxy/certs/privoxy.cer privoxy/certs/privoxy.cert.pem /opt/local/etc/privoxy/CA

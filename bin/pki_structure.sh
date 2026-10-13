@@ -156,8 +156,8 @@ Useage:
 
 $(basename "$0") [-a|--algorithm [EC (default)|RSA]] [-h|--help] [-c|--clean] ${POSITIONAL_ARGS_USAGE}
 
-Key passphrases are random, one per key, in ./keychain/pki.kdbx (KeePassXC);
-its master password is in the macOS keychain (bin/pki_keychain.py).
+Key passphrases are random, one per key, in ./keychain/pki-structure.kdbx (KeePassXC);
+its master password is in the macOS keychain and its key file in ./keyfile (bin/pki_keychain.py).
 USEAGE
     exit 0
 fi

@@ -596,7 +596,7 @@ validate_smime_cert() {
 # line1) to the password that opens the .p12: its key's keychain entry (TREE/keychain),
 # then <P12>.pass, then lines 2 and 1 of FALLBACK (older trees). 1: none opens it; 2: no source.
 p12_password() {
-    local p12="$1" cert="$2" fallback="$3" tree="$4" i f n pw found=0
+    local p12="$1" cert="$2" fallback="$3" tree="$4" i f n pw found=0 kf
     local srcs=(keychain pass line2 line1) files=("" "${p12}.pass" "${fallback}" "${fallback}") lines=(0 1 2 1)
 
     P12PW="" P12PW_SRC=""
@@ -605,7 +605,10 @@ p12_password() {
         n="${lines[i]}"
         if [ "${i}" = 0 ]; then
             [ -d "${tree}/keychain" ] || continue
-            pw=$(PKI_KEYCHAIN_DIR="${tree}/keychain" pki_kc get --cert "${cert}" --field p12 2>/dev/null) || continue
+            # other trees have their own key file; the override applies to this tree only
+            kf=${PKI_KEYCHAIN_KEYFILE:-}
+            [ "${tree}" = "${PKI_ROOT}" ] || kf="${tree}/keyfile/pki-structure.keyx"
+            pw=$(PKI_KEYCHAIN_DIR="${tree}/keychain" PKI_KEYCHAIN_KEYFILE="${kf}" pki_kc get --cert "${cert}" --field p12 2>/dev/null) || continue
             found=1
         else
             [ -f "${f}" ] || continue

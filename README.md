@@ -94,17 +94,22 @@ Environment (tool-specific variables are listed with each tool):
 
 ## Key passphrases
 
-Each private key has its own random passphrase in `keychain/pki.kdbx` (KeePassXC;
+Each private key has its own random passphrase in `keychain/pki-structure.kdbx` (KeePassXC;
 directory 0700, file 0600), found by SHA-256 of the key's public key, so a renewal
 with the same key finds it. Entry `<id16> :: <CN>`: Password = key passphrase,
 UserName = serial, URL = certificate SHA-256; `... :: p12` holds the `.p12` export
 password. The master password (192 random bits) is the item `PKI-Structure KeePassXC
-Passphrase` in the System keychain (root) or the login keychain; it is created once and
-never overwritten. Back up the database and the item together: one alone is useless.
+Passphrase` in the System keychain (root) or the login keychain; it is created only when
+absent, never replaced or deleted, and never next to an existing database. The database
+also needs a key file (KeePassXC XML v2, 0600): `keyfile/pki-structure.keyx`, or the path in
+`PKI_KEYCHAIN_KEYFILE`; keep a copy offline. Back up the database, the key file and the item
+together: any one missing makes the others useless. A pre-keyfile `pki.kdbx` is migrated by
+the next `pki_keychain.py init` (kept as `pki.kdbx.pre-keyfile`).
 
 ```sh
 bin/pki_keychain.py get --cert CERT [--field p12]     # print a secret
 bin/pki_keychain.py list | prune [-n] | acl-check
+bin/pki_keychain.py export-master | import-master     # escrow / restore the master item (stdin)
 bin/pki_keychain.py migrate DIR [--rotate] [--remove-legacy]   # from passphrase.txt
 ```
 

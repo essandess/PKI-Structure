@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
+# PKI_KEYCHAIN_PATCH_V2
 """pki_keychain.py -- key passphrases in a KeePassXC database; its master
-password in the macOS keychain.
+password in the macOS keychain, its key file on disk.
 
-Database  $PKI_KEYCHAIN_DIR (default <PKI_ROOT>/keychain)/pki.kdbx; dir 0700, file 0600.
+Database  $PKI_KEYCHAIN_DIR (default <PKI_ROOT>/keychain)/pki-structure.kdbx; dir 0700, file 0600.
+Key file  $PKI_KEYCHAIN_KEYFILE (default <PKI_ROOT>/keyfile/pki-structure.keyx), KeePassXC
+          XML v2, 0600. Required to open the database; keep a copy offline. Generated
+          only when no database exists yet, never for an existing one.
 Master    192 random bits, item "PKI-Structure KeePassXC Passphrase"
-          ($PKI_KEYCHAIN_ITEM): System keychain as root, login keychain
-          otherwise ($PKI_KEYCHAIN_FILE: another keychain file, for tests).
-          Created if absent, never overwritten.
+          ($PKI_KEYCHAIN_ITEM): System keychain as root (verified unreadable by
+          other users), login keychain otherwise ($PKI_KEYCHAIN_FILE: another
+          keychain file, for tests). Created only when definitively absent and
+          never next to an existing database; an existing item is never replaced
+          or deleted.
 Entries   one per private key, found by SHA-256 of its public key, so every
           certificate of that key (same-key renewal) finds it.
           "<id16> :: <CN>": Password = key passphrase, UserName = serial,
           URL = certificate SHA-256. "<id16> :: <CN> :: p12": Password =
           .p12 export password.
 
-  init                                   master item and database
+  init                                   master item, key file and database; migrates pki.kdbx
   genkey --alg EC|RSA [--curve C] [--bits N] --out KEY [--label CN]
                                          encrypted key with a new passphrase; prints the key id
   id --cert CERT                         key id of a certificate
@@ -21,6 +27,8 @@ Entries   one per private key, found by SHA-256 of its public key, so every
   get (--id ID | --cert CERT) [--field key|p12]
                                          print a secret (stdout only)
   forget (--id ID | --cert CERT)         delete the key's entries
+  export-master                          print the master password (escrow)
+  import-master                          restore the master item from stdin; refuses if present
   migrate DIR [--rotate] [--remove-legacy]
                                          import DIR/private/passphrase.txt keys
   prune [-n]   list   acl-check
@@ -48,8 +56,12 @@ from cryptography.x509.oid import NameOID
 
 PKI_ROOT = Path(__file__).resolve().parent.parent
 ITEM = os.environ.get("PKI_KEYCHAIN_ITEM") or "PKI-Structure KeePassXC Passphrase"
+DB_NAME = "pki-structure.kdbx"
+LEGACY_DB_NAME = "pki.kdbx"
+KEYFILE_NAME = "pki-structure.keyx"
 SECURITY = "/usr/bin/security"
 SYSTEM_KEYCHAIN = "/Library/Keychains/System.keychain"
+ERR_NOT_FOUND = 44  # security(1) exit status for errSecItemNotFound
 KDF_MS = "100"  # master is 192 random bits: a slow KDF adds nothing
 TITLE_RE = re.compile(r"^[0-9a-f]{16} :: ")
 os.umask(0o077)
@@ -137,8 +149,16 @@ def mk_target() -> str:
     return fail("login keychain not found")
 
 
-def mk_exists() -> bool:
-    return sec("find-generic-password", "-s", ITEM, mk_target()).returncode == 0
+def mk_state() -> bool:
+    """True if the master item exists, False only if the keychain says it is
+    absent; any other failure (locked, unavailable) raises. Never infer absence."""
+    r = sec("find-generic-password", "-s", ITEM, mk_target())
+    if r.returncode == 0:
+        return True
+    if r.returncode == ERR_NOT_FOUND or "could not be found" in r.stderr:
+        return False
+    return fail(f"cannot query '{ITEM}' in {mk_target()} (exit {r.returncode}): "
+                f"{r.stderr.strip()}; nothing was changed")
 
 
 def mk_get() -> str:
@@ -149,6 +169,7 @@ def mk_get() -> str:
 
 
 def mk_delete() -> None:
+    """Only for an item created in this process with nothing depending on it."""
     sec("delete-generic-password", "-s", ITEM, mk_target())
 
 
@@ -182,21 +203,14 @@ def pty_security(args: list[str], secret: str) -> tuple[int, int]:
     return os.waitstatus_to_exitcode(status), sent
 
 
-def mk_create() -> None:
-    pw = new_secret()
-    acct = "root" if os.geteuid() == 0 else getpass.getuser()
-    base = ["add-generic-password", "-s", ITEM, "-l", ITEM, "-a", acct,
-            "-D", "PKI-Structure", "-T", SECURITY]
+def default_keychain_ok() -> bool:
+    """add-generic-password -w (prompting) takes no keychain argument and so
+    writes to the default keychain; it must be the one queried."""
     if os.environ.get("PKI_KEYCHAIN_FILE"):
-        # test keychain only: -w must be last to prompt, so no keychain argument
-        rc = sec(*base, "-w", pw, mk_target()).returncode
-    else:
-        rc, sent = pty_security([*base, "-w"], pw)  # default keychain: System (root) / login
-        if sent < 1:
-            rc = rc or 1
-    if rc or not mk_exists():
-        mk_delete()
-        fail(f"cannot create '{ITEM}' in {mk_target()}")
+        return True
+    r = sec("default-keychain")
+    p = r.stdout.strip().strip('"')
+    return r.returncode == 0 and bool(p) and os.path.realpath(p) == os.path.realpath(mk_target())
 
 
 def root_only_ok() -> bool:
@@ -209,25 +223,69 @@ def root_only_ok() -> bool:
     return r.returncode != 0 or not r.stdout.strip()
 
 
+def mk_create(pw: str) -> None:
+    """Add the master item. Never replaces or removes an existing item."""
+    acct = "root" if os.geteuid() == 0 else getpass.getuser()
+    base = ["add-generic-password", "-s", ITEM, "-l", ITEM, "-a", acct,
+            "-D", "PKI-Structure", "-T", SECURITY]
+    if os.environ.get("PKI_KEYCHAIN_FILE"):
+        # test keychain only: -w must be last to prompt, so no keychain argument
+        rc = sec(*base, "-w", pw, mk_target()).returncode
+    else:
+        if not default_keychain_ok():
+            fail(f"{mk_target()} is not the default keychain; the item would be stored elsewhere")
+        rc, sent = pty_security([*base, "-w"], pw)  # default keychain: System (root) / login
+        if sent < 1:
+            rc = rc or 1
+    if rc:
+        fail(f"cannot create '{ITEM}' in {mk_target()} (exit {rc}); "
+             + ("it already exists and was not replaced" if mk_state() else "nothing was stored"))
+    if not mk_state():
+        fail(f"'{ITEM}' not found in {mk_target()} after creation")
+    if not root_only_ok():
+        mk_delete()  # created above; no database depends on it yet
+        fail("System keychain item is readable by non-root users; removed it")
+
+
 def ensure_master() -> bool:
-    """Create the master item if absent; True if it was just created."""
-    if mk_exists():
+    """Create the master item if definitively absent; True if created."""
+    if mk_state():
         return False
-    mk_create()
-    if not root_only_ok() and not os.environ.get("PKI_KEYCHAIN_ROOT_ACL_UNVERIFIED"):
-        mk_delete()
-        fail("System keychain item is readable by non-root users; removed it. "
-             "PKI_KEYCHAIN_ROOT_ACL_UNVERIFIED=1 skips this check")
+    mk_create(new_secret())
     return True
 
 
-# ---------------------------------------------------------------- database
+# ---------------------------------------------------------------- key file, database
 def kdir() -> Path:
     return Path(os.environ.get("PKI_KEYCHAIN_DIR") or PKI_ROOT / "keychain")
 
 
 def dbfile(d: Path | None = None) -> Path:
-    return (d or kdir()) / "pki.kdbx"
+    return (d or kdir()) / DB_NAME
+
+
+def keyfile(d: Path | None = None) -> Path:
+    """$PKI_KEYCHAIN_KEYFILE for this tree's keychain dir, else <dir>/../keyfile/."""
+    d = d or kdir()
+    env = os.environ.get("PKI_KEYCHAIN_KEYFILE")
+    if env and d.resolve() == kdir().resolve():
+        return Path(env).expanduser()
+    return d.parent / "keyfile" / KEYFILE_NAME
+
+
+def write_keyfile(path: Path) -> None:
+    """KeePassXC key file v2 (XML): 256-bit key as hex, Hash = first 4 bytes of its SHA-256."""
+    key = secrets.token_bytes(32)
+    h = hashlib.sha256(key).hexdigest()[:8].upper()
+    x = key.hex().upper()
+    g = [x[i:i + 8] for i in range(0, 64, 8)]
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>\n<KeyFile>\n\t<Meta>\n\t\t<Version>2.0</Version>\n'
+           f'\t</Meta>\n\t<Key>\n\t\t<Data Hash="{h}">\n\t\t\t{" ".join(g[:4])}\n\t\t\t{" ".join(g[4:])}\n'
+           '\t\t</Data>\n\t</Key>\n</KeyFile>\n')
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(xml)
 
 
 @contextlib.contextmanager
@@ -247,30 +305,77 @@ def kp(args: list[str], lines: list[str], check: bool = True) -> subprocess.Comp
     return r
 
 
+def _undo_new(db: Path, kf: Path, new_kf: bool) -> None:
+    db.unlink(missing_ok=True)
+    if new_kf:
+        kf.unlink(missing_ok=True)
+
+
+def migrate_legacy(d: Path) -> None:
+    """Add a key file to a pre-keyfile pki.kdbx. The original is kept as pki.kdbx.pre-keyfile."""
+    old, db, kf = d / LEGACY_DB_NAME, dbfile(d), keyfile(d)
+    if not mk_state():
+        fail(f"{old} exists but master item '{ITEM}' is not in {mk_target()}; nothing was changed")
+    mp = mk_get()
+    new_kf = not kf.exists()
+    if new_kf:
+        write_keyfile(kf)
+    shutil.copy2(old, db)
+    os.chmod(db, 0o600)
+    try:
+        kp(["db-edit", "--set-key-file", str(kf), str(db)], [mp])
+        kp(["ls", "-k", str(kf), str(db)], [mp])
+    except KeychainError:
+        _undo_new(db, kf, new_kf)
+        raise
+    old.rename(d / (LEGACY_DB_NAME + ".pre-keyfile"))
+    print(f"Migrated {old.name} to {db.name} with key file {kf}; original kept as "
+          f"{LEGACY_DB_NAME}.pre-keyfile. Back up the key file offline.", file=sys.stderr)
+
+
 def ensure_db(d: Path | None = None) -> None:
     d = d or kdir()
     d.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(d, 0o700)
-    created = ensure_master()
-    db = dbfile(d)
-    if created and db.exists():
-        mk_delete()
-        fail(f"{db} exists but its master item was missing; restore the item or move the database away")
-    if not db.exists():
-        mp = mk_get()
-        kp(["db-create", "-p", "-t", KDF_MS, str(db)], [mp, mp])
+    db, kf = dbfile(d), keyfile(d)
+    if db.exists():
+        # an existing database never gets a new master item or key file
+        if not mk_state():
+            fail(f"{db} exists but master item '{ITEM}' is not in {mk_target()}; nothing was "
+                 "changed. Restore it (pki_keychain.py import-master) or move the database away")
+        if not kf.is_file():
+            fail(f"{db} exists but key file {kf} is missing; nothing was changed. "
+                 "Restore it or set PKI_KEYCHAIN_KEYFILE")
+        return
+    if (d / LEGACY_DB_NAME).exists():
+        migrate_legacy(d)
+        return
+    ensure_master()
+    new_kf = not kf.exists()
+    if new_kf:
+        write_keyfile(kf)
+    mp = mk_get()
+    try:
+        kp(["db-create", "-p", "-t", KDF_MS, "--set-key-file", str(kf), str(db)], [mp, mp])
         os.chmod(db, 0o600)
+        kp(["ls", "-k", str(kf), str(db)], [mp])
+    except KeychainError:
+        _undo_new(db, kf, new_kf)
+        raise
 
 
 class Db:
     def __init__(self, d: Path | None = None):
-        self.file = str(dbfile(d))
+        d = d or kdir()
+        self.file, self.keyfile = str(dbfile(d)), str(keyfile(d))
         if not Path(self.file).is_file():
             fail(f"no database {self.file}; run: pki_keychain.py init")
+        if not Path(self.keyfile).is_file():
+            fail(f"key file {self.keyfile} missing (PKI_KEYCHAIN_KEYFILE)")
         self.mp = mk_get()
 
     def kp(self, args: list[str], extra: list[str] | None = None, check: bool = True):
-        return kp(args, [self.mp, *(extra or [])], check)
+        return kp([args[0], "-k", self.keyfile, *args[1:]], [self.mp, *(extra or [])], check)
 
     def titles(self) -> list[str]:
         out = self.kp(["ls", "-R", "-f", self.file]).stdout
@@ -313,6 +418,25 @@ def target(a) -> str:
 def cmd_init(a) -> None:
     with lock():
         ensure_db()
+
+
+def cmd_export_master(a) -> None:
+    print(mk_get())
+
+
+def cmd_import_master(a) -> None:
+    pw = sys.stdin.readline().rstrip("\n")
+    if not pw:
+        fail("no password on stdin")
+    with lock():
+        if mk_state():
+            fail(f"'{ITEM}' already exists in {mk_target()}; not replaced")
+        d = kdir()
+        if dbfile(d).is_file():
+            if not keyfile(d).is_file():
+                fail(f"key file {keyfile(d)} missing")
+            kp(["ls", "-k", str(keyfile(d)), str(dbfile(d))], [pw])  # wrong password raises
+        mk_create(pw)
 
 
 def cmd_genkey(a) -> None:
@@ -417,7 +541,7 @@ def cmd_prune(a) -> None:
 
 
 def cmd_acl_check(a) -> None:
-    if not mk_exists():
+    if not mk_state():
         fail(f"no '{ITEM}' in {mk_target()}")
     if not root_only_ok():
         fail("the item is readable by user 'nobody'")
@@ -503,6 +627,8 @@ def main() -> None:
         g.add_argument("--cert")
 
     sub.add_parser("init").set_defaults(func=cmd_init)
+    sub.add_parser("export-master").set_defaults(func=cmd_export_master)
+    sub.add_parser("import-master").set_defaults(func=cmd_import_master)
     p = sub.add_parser("genkey")
     p.add_argument("--alg", required=True)
     p.add_argument("--curve", default="P-256")

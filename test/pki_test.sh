@@ -39,14 +39,14 @@ unset CERTDIR CERTNAME ISSUERCADIR ISSUERCANAME SMIME_ISSUERCADIR SMIME_ISSUERCA
       LEGACY_ISSUERCADIR UNSIGNED_DIR SIGNED_DIR PKI_STRUCTURE_SRC PKI_SITE_DIR \
       PKI_SITE_GROUP PKI_ROOT_SHA256 PKI_ROOT_CRL PKI_INTERMEDIATE_CRL \
       PKI_CODESIGN_DIR PKI_CODESIGN_NAME PKI_CODESIGN_SHA1 CERTSHA1 \
-      PKI_KEYCHAIN_DIR PKI_KEYCHAIN_ITEM PKI_KEYCHAIN_FILE
+      PKI_KEYCHAIN_DIR PKI_KEYCHAIN_ITEM PKI_KEYCHAIN_FILE PKI_KEYCHAIN_KEYFILE
 export CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1 PKI_ASSUME_YES=1 SHOW_CERT_TEXT=0 SHOW_CRL_TEXT=0
 
 # ---------------------------------------------------------------- guard
 MARKER_FILE=.pki_test_tree
 if [ ! -e "${MARKER_FILE}" ]; then
-    LIVE=$(find root intermediate intermediate_smime server codesign smime privoxy keychain \
-                -maxdepth 2 \( -name '*.key.pem' -o -name index.txt -o -name '*.kdbx' \) 2>/dev/null \
+    LIVE=$(find root intermediate intermediate_smime server codesign smime privoxy keychain keyfile \
+                -maxdepth 2 \( -name '*.key.pem' -o -name index.txt -o -name '*.kdbx' -o -name '*.keyx' \) 2>/dev/null \
                | sed -n 1p || true)
     if [ -n "${LIVE}" ] && [ "${PKI_TEST_DESTROY_PKI:-0}" != 1 ]; then
         die "existing PKI material (${LIVE}); this test deletes it. Use a scratch tree or PKI_TEST_DESTROY_PKI=1."
@@ -415,7 +415,9 @@ p12_opens() { "${OPENSSL}" pkcs12 -legacy -noout -in "$1" -passin fd:3 3< <(KC g
 p12_shared() { [ "$(KC get --cert "$1" --field p12)" = "$(KC get --cert "$2" --field p12)" ]; }
 check "no passphrase files in the tree"             no_secret_files
 check "keychain directory 0700"                     mode_is keychain 700
-check "database 0600"                               mode_is keychain/pki.kdbx 600
+check "database 0600"                               mode_is keychain/pki-structure.kdbx 600
+check "key file 0600"                               mode_is keyfile/pki-structure.keyx 600
+check "key file directory 0700"                     mode_is keyfile 700
 check "root key opens with its keychain passphrase" key_opens root/private/root.key.pem root/certs/root.cert.pem
 check "intermediate key opens"                      key_opens intermediate/private/intermediate.key.pem intermediate/certs/intermediate.cert.pem
 check "S/MIME .p12 opens with its keychain password" p12_opens "smime/private/${SM}-signature.p12" "smime/certs/${SM}-signature.cert.pem"
@@ -423,6 +425,20 @@ check "signature and encryption .p12 share a password" p12_shared "smime/certs/$
 run "stray certificate" "${OPENSSL}" req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 \
     -subj /CN=stray -keyout "${TMPD}/stray.key" -out "${TMPD}/stray.pem"
 refuse "unknown key has no entry" "no keychain entry" KC get --cert "${TMPD}/stray.pem"
+
+MASTER_ITEM="PKI-Structure KeePassXC Passphrase"
+master_pw()      { security find-generic-password -s "${MASTER_ITEM}" -w "${PKI_KEYCHAIN_FILE}"; }
+no_keyfile()     { master_pw | "${KPCLI}" ls -q keychain/pki-structure.kdbx; }
+restore_master() { printf '%s\n' "${MASTER}" | KC import-master; }
+MASTER=$(master_pw)
+fails  "database does not open without the key file"  no_keyfile
+check  "init keeps an existing master item"           KC init
+check  "master item unchanged by init"                test "$(master_pw)" = "${MASTER}"
+run    "drop master item"                             security delete-generic-password -s "${MASTER_ITEM}" "${PKI_KEYCHAIN_FILE}"
+refuse "init refuses a new master next to a database" "master item" KC init
+fails  "master item not recreated"                    master_pw
+check  "import-master restores it"                    restore_master
+check  "restored master matches"                      test "$(master_pw)" = "${MASTER}"
 
 # ================================================================ certificates
 step "chain, purpose, CRL"
@@ -584,6 +600,8 @@ perm_audit() {
         find root intermediate intermediate_smime server codesign smime privoxy -path '*/private/*' -type f ! -perm 600
         find keychain -type d ! -perm 700
         find keychain -type f ! -perm 600
+        find keyfile -type d ! -perm 700
+        find keyfile -type f ! -perm 600
         find mdm-private -type d ! -perm 700
         find mdm-private -type f ! -perm 600 ! -name 'install_credentials_*.sh' ! -name '*.sample'
     } 2>/dev/null ) || true

@@ -351,11 +351,12 @@ verify_installer_signature() {
             "was signed, or not signed by a certificate that chains to this" \
             "PKI's root. ${out}"
     fi
-    text=$("${OPENSSL}" x509 -noout -text -in "${signer}")
+    text=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage -in "${signer}" 2>/dev/null) || text=""
     case "${text}" in
         *"Code Signing"*) ;;
-        *) die "the signer of ${INST_BASE} is not a code signing certificate" ;;
+        *) die "the signer of ${INST_BASE} does not have the codeSigning extendedKeyUsage" ;;
     esac
+    text=$("${OPENSSL}" x509 -noout -ext basicConstraints -in "${signer}" 2>/dev/null) || text=""
     case "${text}" in
         *"CA:TRUE"*) die "the signer of ${INST_BASE} is a CA certificate" ;;
     esac

@@ -14,7 +14,7 @@ sudo security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/Syst
 
 # Install the PKI
 sudo install -o privoxy -g privoxy -m 0644 privoxy/certs/privoxy.cer privoxy/certs/privoxy.cert.pem /opt/local/etc/privoxy/CA
-sudo install -o privoxy -g privoxy -m 0640 privoxy/private/privoxy.key.pem privoxy/private/privoxy.p12 privoxy/private/passphrase.txt /opt/local/etc/privoxy/CA
+sudo install -o privoxy -g privoxy -m 0640 privoxy/private/privoxy.key.pem privoxy/private/passphrase.txt /opt/local/etc/privoxy/CA
 sudo install -o privoxy -g privoxy -m 0644 privoxy/adblock2privoxy/certs/adblock2privoxy-nginx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.cert.pem /opt/local/etc/adblock2privoxy/certs/adblock2privoxy-nginx.cert.pem
 sudo install -o privoxy -g privoxy -m 0644 privoxy/adblock2privoxy/certs/adblock2privoxy-nginx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.chain.pem /opt/local/etc/adblock2privoxy/certs/adblock2privoxy-nginx.chain.pem
 sudo install -o privoxy -g privoxy -m 0640 privoxy/adblock2privoxy/private/adblock2privoxy-nginx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.key.pem /opt/local/etc/adblock2privoxy/certs/adblock2privoxy-nginx.key.pem
@@ -37,6 +37,6 @@ PRIVOXY_PKI_STRUCTURE
 
 # Install the PKI
 # sudo install -o privoxy -g privoxy -m 0644 privoxy/certs/privoxy.cer privoxy/certs/privoxy.cert.pem /opt/local/etc/privoxy/CA
-# sudo install -o privoxy -g privoxy -m 0640 privoxy/private/privoxy.key.pem privoxy/private/privoxy.p12 /opt/local/etc/privoxy/CA
+# sudo install -o privoxy -g privoxy -m 0640 privoxy/private/privoxy.key.pem /opt/local/etc/privoxy/CA
 # sudo install -o privoxy -g privoxy -m 0644 privoxy/adblock2privoxy/certs/adblock2privoxy-nginx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.cert.pem privoxy/adblock2privoxy/certs/adblock2privoxy-nginx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.chain.pem /opt/local/etc/adblock2privoxy/certs
 # sudo install -o privoxy -g privoxy -m 0640 privoxy/adblock2privoxy/private/adblock2privoxy-nginx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.key.pem privoxy/adblock2privoxy/private/adblock2privoxy-nginx.xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.key.pem.decrypted privoxy/adblock2privoxy/private/passphrase.txt /opt/local/etc/adblock2privoxy/certs

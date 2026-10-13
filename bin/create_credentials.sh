@@ -2,7 +2,7 @@
 
 # create_credentials.sh -- build a macOS credential installer from the PKI tree.
 #
-# Usage: create_credentials.sh [--user-keychain] [--extra-pki-dir DIR]...
+# Usage: create_credentials.sh [--user-keychain] [--with-privoxy] [--extra-pki-dir DIR]...
 #                              [--allow-expired-encryption]
 #                              [--allow-superseded-encryption] ['NAME_GLOB' ...]
 #        create_credentials.sh --ca-certs-only [--user-keychain]
@@ -29,8 +29,8 @@
 #
 # Installer contents:
 #   CA certificates  root (trusted), valid intermediate, valid intermediate_smime
-#                    (if it exists), privoxy CA (trusted for TLS only); public
-#                    certificates only. The root and the intermediate are
+#                    (if it exists); with --with-privoxy also the privoxy CA
+#                    (trusted for TLS only); public certificates only. The root and the intermediate are
 #                    always included: the installer's signature is checked
 #                    against them. They go to the System keychain (sudo,
 #                    payload directory system/), or with --user-keychain to
@@ -68,9 +68,9 @@
 # root, and allow code signing. The signature is a detached PKCS#7 (DER)
 # block inside the installer, between __SIGNATURE_BELOW__ and
 # __PAYLOAD_BELOW__. It covers all of the installer except that block: the
-# script text and the encrypted payload. The installer checks it, after
-# decrypting the payload and before installing anything, against the root and
-# intermediate in that payload. A chain carried inside the file cannot prove
+# script text and the encrypted payload. The installer checks it BEFORE
+# decrypting or unpacking the payload, against the root and intermediates
+# carried in the signature block. A chain carried inside the file cannot prove
 # who made the file, so the installer also anchors the root: it must already
 # be installed on the machine, or match PKI_ROOT_SHA256, or be confirmed by
 # the user against a fingerprint received separately.
@@ -139,6 +139,7 @@ CA_CERTS_ONLY=0
 ALLOW_EXPIRED_ENC=0
 ALLOW_SUPERSEDED_ENC=0
 USER_KEYCHAIN=0
+WITH_PRIVOXY=0     # the privoxy CA is trusted by devices that use the proxy only
 CA_DOMAIN=system   # payload directory and keychain of the CA certificates
 HELP=0
 NAMES=()
@@ -174,6 +175,10 @@ while [[ $# -gt 0 ]]; do
         --user-keychain)
             USER_KEYCHAIN=1
             CA_DOMAIN=user
+            shift
+            ;;
+        --with-privoxy)
+            WITH_PRIVOXY=1
             shift
             ;;
         --allow-expired-encryption)
@@ -218,8 +223,8 @@ $(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--allow-expired-enc
 $(basename "$0") --ca-certs-only [--user-keychain]
 
 Creates ONE installer, ./${OUTDIR}/install_credentials_<stem>.sh, with the
-root, intermediate and privoxy CA certificates (those that exist; the root
-and the intermediate are required) and the S/MIME certificates matching any
+root and intermediate CA certificates (both required; the privoxy CA only
+with --with-privoxy) and the S/MIME certificates matching any
 'NAME_GLOB'. <stem> is the globs with glob characters spelled out
 (* S, ? Q, { LB, } RB, [ LBK, ] RBK, , C, !/^ N); nosmimes without globs;
 cacerts with --ca-certs-only.
@@ -256,6 +261,8 @@ Expired or revoked signature certificates are always rejected.
   --user-keychain         install the CA certificates into the user's login
                           keychain (payload directory user/, no sudo)
                           instead of the System keychain (system/, sudo)
+  --with-privoxy         also include the privoxy CA (trusted for TLS only);
+                          default: not included
   --extra-pki-dir DIR     also look for S/MIME certificates in DIR/smime, a
                           PKI tree with the same layout (for example an older
                           one with expired certificates); repeatable. Its
@@ -779,7 +786,7 @@ load_codesign() {
     if ! out=$(verify_chain "${CS_CERT}"); then
         die "code signing certificate ${CS_CERT}: $(verify_error "${out}")"
     fi
-    text=$("${OPENSSL}" x509 -noout -text -in "${CS_CERT}")
+    text=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage -in "${CS_CERT}" 2>/dev/null) || text=""
     [[ "${text}" == *"Code Signing"* ]] \
         || die "${CS_CERT} does not allow code signing (extendedKeyUsage)."
     if cert_is_ca "${CS_CERT}"; then
@@ -788,11 +795,13 @@ load_codesign() {
 }
 
 # sign_content CONTENT SIG: detached PKCS#7 signature (DER) of CONTENT. The
-# signer's certificate and the valid intermediates go into the signature.
+# signer's certificate, the valid intermediates and the root go into the
+# signature, so the installer can authenticate before it opens the payload.
 sign_content() {
+    cat "${INTS}" "${ROOT_CERT}" > "${STAGE}/trust/sigchain.pem"
     "${OPENSSL}" smime -sign -binary -md sha256 -in "$1" \
         -signer "${CS_CERT}" -inkey "${CS_KEY}" -passin "file:${CS_PASS}" \
-        -certfile "${INTS}" -outform DER -out "$2"
+        -certfile "${STAGE}/trust/sigchain.pem" -outform DER -out "$2"
     # self-check, as the installer will do it
     "${OPENSSL}" smime -verify -binary -inform DER -in "$2" -content "$1" \
         -CAfile "${ANCHORS}" -purpose any -out /dev/null 2>/dev/null \
@@ -892,9 +901,12 @@ build_common() {
         echo "Note: no valid intermediate_smime certificate; S/MIME certificates cannot validate." >&2
     fi
 
-    for d in ${PRIVOXY_DIRS}; do
-        stage_ca_dir "${d}"
-    done
+    # opt-in: the privoxy CA is for TLS interception on proxy clients only
+    if [ "${WITH_PRIVOXY}" = 1 ]; then
+        for d in ${PRIVOXY_DIRS}; do
+            stage_ca_dir "${d}"
+        done
+    fi
 }
 
 # S/MIME certificate names (the part before -signature/-encryption) found in
@@ -1148,14 +1160,14 @@ Run it as yourself (not with sudo); sudo is requested only for the System keycha
   --tar-only     only write the payload (still encrypted, if it is) to
                  ./${TAR_NAME} and exit
   --check-signature-integrity
-                 only check the signature of this script against the
-                 payload (asks for the installer password if the payload
-                 is encrypted) and exit: 0 if valid, non-zero if not.
-                 Nothing is installed; needs only openssl
+                 only check the signature of this script against the root
+                 and intermediates in its signature block and exit: 0 if
+                 valid, non-zero if not. No password, nothing decrypted or
+                 unpacked, root not anchored. Needs only openssl
 
 Before anything is installed, the signature of this script is checked: it
-must come from a code signing certificate that chains to the root CA in the
-payload. If that root is not already installed on this machine, you are
+must come from a code signing certificate that chains to the root CA in its
+signature block, before the payload is decrypted or unpacked. If that root is not already installed on this machine, you are
 asked to compare its SHA-256 fingerprint with one you received separately;
 set PKI_ROOT_SHA256 to that fingerprint to have it checked for you
 (PKI_ASSUME_YES alone never accepts an unknown root).
@@ -1193,12 +1205,42 @@ confirm() {
 # The keychain listings are long: read them into a variable, so that grep -q
 # cannot close the pipe early and fail the pipeline under pipefail.
 
-# kc_has_cert KEYCHAIN SHA1
-kc_has_cert() {
-    local out
+# der_sha256 FILE: SHA-256 (hex) of a DER certificate, computed from the bytes,
+# never taken from the manifest
+der_sha256() {
+    openssl x509 -inform der -in "$1" -outform der 2>/dev/null \
+        | openssl dgst -sha256 | sed 's/^.*= *//'
+}
 
-    out=$(security find-certificate -a -Z "$1" 2>/dev/null) || true
-    grep -qi "^SHA-1 hash: $2\$" <<<"${out}"
+
+# kc_has_cert KEYCHAIN SHA256: true if a certificate in KEYCHAIN has this
+# SHA-256, computed here from each certificate's own bytes
+kc_has_cert() {
+    local line buf="" want="$2" h
+
+    [ -n "${want}" ] || return 1
+    while IFS= read -r line; do
+        case "${line}" in
+            *"BEGIN CERTIFICATE"*)
+                buf="${line}"$'\n'
+                ;;
+            *"END CERTIFICATE"*)
+                buf+="${line}"$'\n'
+                h=$(printf '%s' "${buf}" | openssl x509 -outform der 2>/dev/null \
+                        | openssl dgst -sha256 | sed 's/^.*= *//')
+                if [ "${h}" = "${want}" ]; then
+                    return 0
+                fi
+                buf=""
+                ;;
+            *)
+                if [ -n "${buf}" ]; then
+                    buf+="${line}"$'\n'
+                fi
+                ;;
+        esac
+    done < <(security find-certificate -a -p "$1" 2>/dev/null)
+    return 1
 }
 
 
@@ -1371,29 +1413,7 @@ WORK=$(mktemp -d "${TMPDIR:-/tmp}/pki-install.XXXXXX")
 trap 'rm -rf "${WORK}"' EXIT
 export COPYFILE_DISABLE=1
 
-if [ "${PAYLOAD_ENCRYPTED}" = 1 ]; then
-    ATTEMPTS=0
-    while :; do
-        get_installer_password || { echo "No installer password given." >&2; exit 1; }
-        if { payload | tar -xJf - -C "${WORK}"; } 2>/dev/null; then
-            break
-        fi
-        ATTEMPTS=$((ATTEMPTS + 1))
-        if [ "${ATTEMPTS}" -ge 3 ]; then
-            echo "Could not decrypt the payload: wrong password?" >&2
-            exit 1
-        fi
-        echo "Could not decrypt the payload: wrong password? Try again." >&2
-        rm -rf "${WORK:?}"/*
-    done
-    INSTALLER_PASSWORD=""
-else
-    payload | tar -xJf - -C "${WORK}"
-fi
-
 MANIFEST="${WORK}/manifest"
-grep -q '^system-' "${MANIFEST}" || DO_SYSTEM=0
-grep -Eq '^(user-|smime)' "${MANIFEST}" || DO_USER=0
 
 
 FAILURES=0
@@ -1450,21 +1470,34 @@ signature_failed() {
 }
 
 
-ROOT_FILE=""
-ROOT_SHA1=""
+ROOT_SUBJECT=""
+ROOT_PEM=""
 ROOT_SHA256=""
 
-# verify_signature: before anything is installed, check that this script is
-# unchanged since the code signing certificate signed it. The signature (a
-# detached PKCS#7, between the __SIGNATURE_BELOW__ and __PAYLOAD_BELOW__
-# lines) covers all of this file except those lines. The signer must chain,
-# through the intermediate CA in the payload, to the root CA in the payload,
-# and be a code signing certificate. That proves the file is intact, not who
-# made it: see confirm_root_anchor.
+
+# cert_field FILE subject|issuer: the name, without the "subject=" prefix
+cert_field() {
+    openssl x509 -noout "-$2" -nameopt RFC2253 -in "$1" | sed "s/^$2= *//"
+}
+
+
+# pem_sha256 FILE: SHA-256 (hex) of the DER bytes of a PEM certificate
+pem_sha256() {
+    openssl x509 -in "$1" -outform der 2>/dev/null | openssl dgst -sha256 | sed 's/^.*= *//'
+}
+
+
+# verify_signature: runs BEFORE the payload is decrypted or parsed. The
+# detached PKCS#7 (between __SIGNATURE_BELOW__ and __PAYLOAD_BELOW__) carries
+# the signer, the intermediates and the root. The signed content is all of
+# this file except those lines (script text and encrypted payload). The chain
+# must end at the one self-signed certificate in the block, and the signer
+# must be a non-CA code signing certificate. That proves the file is intact,
+# not who made it: see confirm_root_anchor.
 verify_signature() {
     local signed="${WORK}/.signed" sig="${WORK}/.signature.der"
-    local ca="${WORK}/.ca.pem" root="${WORK}/.root.pem" signer="${WORK}/.signer.pem"
-    local type group sha1 haskey file note domain roots=0 ints=0 out text
+    local bundle="${WORK}/.sigcerts.pem" signer="${WORK}/.signer.pem"
+    local f out text roots=0
 
     awk '/^__SIGNATURE_BELOW__$/ { print; skip = 1; next }
          /^__PAYLOAD_BELOW__$/ { skip = 0 }
@@ -1474,49 +1507,53 @@ verify_signature() {
          skip' "$0" | openssl base64 -d > "${sig}" 2>/dev/null || true
     [ -s "${sig}" ] || signature_failed "this installer carries no signature."
 
-    : > "${ca}"
-    : > "${root}"
-    while IFS=$'\t' read -r -u 3 type group sha1 haskey file note; do
-        domain=${type%%-*}
-        case "${type}:${group}" in
-            *-root:root)
-                openssl x509 -inform der -in "${WORK}/${domain}/${file}.cer" >> "${root}"
-                ROOT_FILE=${file}
-                ROOT_SHA1=${sha1}
-                roots=$((roots + 1))
-                ;;
-            *-ca:intermediate)
-                openssl x509 -inform der -in "${WORK}/${domain}/${file}.cer" >> "${ca}"
-                ints=$((ints + 1))
-                ;;
-        esac
-    done 3< "${MANIFEST}"
-    if [ "${roots}" -ne 1 ] || [ "${ints}" -lt 1 ]; then
-        signature_failed "the payload does not hold the root and the intermediate CA certificates."
-    fi
-    cat "${root}" >> "${ca}"
+    openssl pkcs7 -inform DER -in "${sig}" -print_certs -out "${bundle}" 2>/dev/null \
+        || signature_failed "the signature block is unreadable."
+    awk -v p="${WORK}/.sigcert" '
+        /-----BEGIN CERTIFICATE-----/ { n++; f = sprintf("%s.%d.pem", p, n) }
+        f { print > f }
+        /-----END CERTIFICATE-----/ { close(f); f = "" }' "${bundle}"
+
+    ROOT_PEM=""
+    for f in "${WORK}"/.sigcert.*.pem; do
+        [ -f "${f}" ] || continue
+        if [ "$(cert_field "${f}" subject)" = "$(cert_field "${f}" issuer)" ]; then
+            roots=$((roots + 1))
+            ROOT_PEM=${f}
+        fi
+    done
+    [ "${roots}" -eq 1 ] \
+        || signature_failed "the signature block must carry exactly one self-signed root CA certificate (found ${roots})."
 
     if ! out=$(openssl smime -verify -binary -inform DER -in "${sig}" -content "${signed}" \
-                   -CAfile "${ca}" -purpose any -signer "${signer}" -out /dev/null 2>&1); then
-        signature_failed "this installer was changed after it was signed, or was not signed by a certificate that chains to its root CA." "${out}"
+                   -CAfile "${ROOT_PEM}" -purpose any -signer "${signer}" -out /dev/null 2>&1); then
+        signature_failed "this installer was changed after it was signed, or was not signed by a certificate that chains to the root CA in its signature block." "${out}"
     fi
-    text=$(openssl x509 -noout -text -in "${signer}")
+    # EKU and basicConstraints only: -text would also match the subject
+    # (OU=... Code Signing). -purpose any above checks the chain, not the EKU.
+    text=$(openssl x509 -noout -ext extendedKeyUsage -in "${signer}" 2>/dev/null) || text=""
     case "${text}" in
         *"Code Signing"*) ;;
-        *) signature_failed "the signer is not a code signing certificate." ;;
+        *) signature_failed "the signer's extendedKeyUsage does not include codeSigning." ;;
+    esac
+    text=$(openssl x509 -noout -ext basicConstraints -in "${signer}" 2>/dev/null) || text=""
+    case "${text}" in
+        *"CA:TRUE"*) signature_failed "the signer is a CA certificate." ;;
     esac
 
-    ROOT_SHA256=$(openssl x509 -noout -fingerprint -sha256 -in "${root}" \
-                      | sed 's/^.*=//' | tr -d ':' | tr '[:upper:]' '[:lower:]')
-    echo "Signature OK: signed by $(openssl x509 -noout -subject -in "${signer}" | sed 's/^subject= *//'),"
-    echo "  chaining to the root CA $(describe "${ROOT_FILE}") (SHA-256 ${ROOT_SHA256})."
+    ROOT_SHA256=$(pem_sha256 "${ROOT_PEM}")
+    [ -n "${ROOT_SHA256}" ] || signature_failed "cannot compute the SHA-256 of the root CA."
+    ROOT_SUBJECT=$(cert_field "${ROOT_PEM}" subject)
+    echo "Signature OK: signed by $(cert_field "${signer}" subject),"
+    echo "  chaining to the root CA ${ROOT_SUBJECT} (SHA-256 ${ROOT_SHA256})."
 }
 
 
 # confirm_root_anchor: the chain inside this file cannot show who made it
 # (whoever builds an installer can include their own root). Accept the root
 # only if it is already installed here, or matches PKI_ROOT_SHA256, or the
-# user confirms its fingerprint against one received separately.
+# user confirms its fingerprint against one received separately. Runs before
+# the payload is decrypted. Digests are computed from the certificate bytes.
 confirm_root_anchor() {
     local want
 
@@ -1529,12 +1566,12 @@ confirm_root_anchor() {
         echo "The root CA matches PKI_ROOT_SHA256."
         return 0
     fi
-    if kc_has_cert "${SYSTEM_KEYCHAIN}" "${ROOT_SHA1}" || kc_has_cert "$(login_keychain)" "${ROOT_SHA1}"; then
+    if kc_has_cert "${SYSTEM_KEYCHAIN}" "${ROOT_SHA256}" || kc_has_cert "$(login_keychain)" "${ROOT_SHA256}"; then
         echo "The root CA is already installed on this machine."
         return 0
     fi
     echo "This root CA is not installed on this machine yet:"
-    echo "  $(describe "${ROOT_FILE}")"
+    echo "  ${ROOT_SUBJECT}"
     echo "  SHA-256 ${ROOT_SHA256}"
     echo "Compare the fingerprint with one you received separately from this installer."
     if [ "${PKI_ASSUME_YES:-0}" != "0" ]; then
@@ -1547,6 +1584,83 @@ confirm_root_anchor() {
     fi
 }
 
+
+payload_rejected() {
+    echo "Payload rejected: $1" >&2
+    echo "Nothing was installed." >&2
+    exit 1
+}
+
+
+# unpack_payload: only after verify_signature and confirm_root_anchor.
+# Decrypts to a file, lists the archive and accepts only plain files and
+# directories under ./manifest, ./system, ./user and ./smime (no absolute
+# paths, "..", links or control characters), then extracts and checks that the
+# payload's own root CA is the anchored one.
+unpack_payload() {
+    local txz="${WORK}/.payload.txz" names="${WORK}/.names" verbose="${WORK}/.verbose"
+    local attempts=0 n type group sha1 haskey file note roots=0
+
+    if [ "${PAYLOAD_ENCRYPTED}" = 1 ]; then
+        while :; do
+            get_installer_password || { echo "No installer password given." >&2; exit 1; }
+            if payload > "${txz}" 2>/dev/null && tar -tJf "${txz}" > "${names}" 2>/dev/null; then
+                break
+            fi
+            rm -f "${txz}"
+            attempts=$((attempts + 1))
+            if [ "${attempts}" -ge 3 ]; then
+                echo "Could not decrypt the payload: wrong password?" >&2
+                exit 1
+            fi
+            echo "Could not decrypt the payload: wrong password? Try again." >&2
+        done
+        INSTALLER_PASSWORD=""
+    else
+        payload > "${txz}"
+        tar -tJf "${txz}" > "${names}" 2>/dev/null || payload_rejected "unreadable archive."
+    fi
+
+    tar -tvJf "${txz}" > "${verbose}" 2>/dev/null || payload_rejected "unreadable archive."
+    [ "$(wc -l < "${names}")" = "$(wc -l < "${verbose}")" ] \
+        || payload_rejected "member names are not one per line."
+    if grep -q '[[:cntrl:]]' "${names}"; then
+        payload_rejected "a member name has a control character."
+    fi
+    if grep -Eq '^[^-d]' "${verbose}" || grep -Eq ' (link to|->) ' "${verbose}"; then
+        payload_rejected "the archive holds a link or a special file."
+    fi
+    while IFS= read -r n; do
+        case "${n}" in
+            /*|..|../*|*/../*|*/..) payload_rejected "unsafe member path '${n}'." ;;
+            .|./|./manifest|./system|./system/*|./user|./user/*|./smime|./smime/*) ;;
+            *) payload_rejected "unexpected member '${n}'." ;;
+        esac
+    done < "${names}"
+
+    tar -xJf "${txz}" -C "${WORK}"
+    rm -f "${txz}" "${names}" "${verbose}"
+
+    [ -f "${MANIFEST}" ] || payload_rejected "no manifest."
+    while IFS=$'\t' read -r -u 3 type group sha1 haskey file note; do
+        case "${file}" in
+            ""|*/*) payload_rejected "bad file name in the manifest." ;;
+        esac
+        if [ "${group}" = root ]; then
+            case "${type}" in
+                system-root|user-root)
+                    [ "$(der_sha256 "${WORK}/${type%%-*}/${file}.cer")" = "${ROOT_SHA256}" ] \
+                        || payload_rejected "its root CA is not the anchored root."
+                    roots=$((roots + 1))
+                    ;;
+            esac
+        fi
+    done 3< "${MANIFEST}"
+    [ "${roots}" -eq 1 ] || payload_rejected "it must hold exactly one PKI root CA."
+
+    grep -q '^system-' "${MANIFEST}" || DO_SYSTEM=0
+    grep -Eq '^(user-|smime)' "${MANIFEST}" || DO_USER=0
+}
 
 SUDO_READY=0
 
@@ -1611,11 +1725,19 @@ install_keychain() {
             path="${WORK}/${dir}/${file}.cer"
         fi
 
+        # Never trust a manifest digest. The root being trusted must be the
+        # exact certificate verify_signature/confirm_root_anchor approved.
+        if [ "${kind}" = root ] && [ "${group}" = root ] \
+               && [ "$(der_sha256 "${path}")" != "${ROOT_SHA256}" ]; then
+            fail "root CA ${desc} is not the anchored root; not trusting it"
+            continue
+        fi
+
+        # CA certificates: compare real SHA-256. Identities (.p12) are not
+        # pre-checked (the manifest SHA-1 is untrusted); import reports duplicates.
         present=0
-        if [ "${haskey}" = 1 ]; then
-            if kc_has_identity "${keychain}" "${sha1}"; then present=1; fi
-        elif kc_has_cert "${keychain}" "${sha1}"; then
-            present=1
+        if [ "${haskey}" != 1 ]; then
+            if kc_has_cert "${keychain}" "$(der_sha256 "${path}")"; then present=1; fi
         fi
         if [ "${present}" = 1 ] && [ "${kind}" != root ]; then
             echo "- ${desc}: already present"
@@ -1717,16 +1839,17 @@ install_keychain() {
 
 verify_signature
 if [ "${VALIDATE_ONLY}" = 1 ]; then
-    echo "Integrity check only (--check-signature-integrity): the file is unchanged since it was signed; nothing was installed."
+    echo "Integrity check only (--check-signature-integrity): the file is unchanged since it was signed; the root was not anchored and nothing was decrypted or installed."
     exit 0
 fi
+
+confirm_root_anchor
+unpack_payload
 
 if [ "${LIST}" = 1 ]; then
     list_items
     exit 0
 fi
-
-confirm_root_anchor
 
 echo "Installing credentials: ${INSTALL_FOR}"
 

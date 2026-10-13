@@ -295,8 +295,8 @@ CA private keys are never included.
 * **Signature.** A detached PKCS#7 (DER) over the script and encrypted payload,
   stored between `__SIGNATURE_BELOW__` and `__PAYLOAD_BELOW__`, signed per
   [Signer selection](#signer-selection). The installer verifies that the file is
-  unchanged, that the signer chains to the root and intermediate in its own
-  payload, and that the signer is a code signing, non-CA certificate. A recipient
+  unchanged, that the signer chains to the root and intermediates carried in the
+  signature block (checked before the payload is decrypted or unpacked), and that the signer is a code signing, non-CA certificate. A recipient
   has no CRL for the signer, so a signer revoked after signing is not detected.
 * **Root anchor.** A chain inside the file cannot show who built it. Before
   installing, the installer requires that the payload's root is already
@@ -326,7 +326,7 @@ login keychain.
 | `--system-only`, `--user-only` | Install only the System or only the login keychain items |
 | `--list` | Verify the signature, list the payload, and exit |
 | `--tar-only` | Write the payload (still encrypted, if it is) to `credentials_<stem>.txz[.enc]` in the current directory and exit |
-| `--check-signature-integrity` | Decrypt the payload, run the signature check only, and exit 0 if valid, non-zero if not. Installs nothing; needs only `openssl`, not macOS or a non-root user |
+| `--check-signature-integrity` | Run the signature check only (no password; nothing decrypted or unpacked; root not anchored) and exit 0 if valid, non-zero if not. Needs only `openssl`, not macOS or a non-root user |
 
 Installer environment: `PKI_ASSUME_YES`, `PKI_ROOT_SHA256`, and
 `PKI_P12_PASSWORD_<GROUP>` (for a `.p12` whose password the payload lacks;

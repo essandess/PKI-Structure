@@ -479,8 +479,7 @@ tamper_header  "${INST}"    "${TMPD}/t_in.sh"
 refuse "CA installer: tampered header rejected"   "SIGNATURE CHECK FAILED" "${TMPD}/t_ca.sh" --check-signature-integrity
 fails  "CA installer: tampered payload rejected"  "${TMPD}/p_ca.sh" --check-signature-integrity
 refuse "S/MIME installer: tampered header rejected" "SIGNATURE CHECK FAILED" ptyrun "${INST}.pass" "${TMPD}/t_in.sh" --check-signature-integrity
-printf 'wrong-password\n' > "${TMPD}/badpw"
-fails  "S/MIME installer: wrong password rejected" ptyrun "${TMPD}/badpw" "${INST}" --check-signature-integrity
+check  "S/MIME installer: signature check needs no password" "${INST}" --check-signature-integrity
 
 payload_has_no_secrets() {
     local listing

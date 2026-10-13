@@ -190,12 +190,21 @@ if [ "${FORCE}" = "0" ]; then
     echo "Regenerating the ${CANAME} CRL: ${reason}" >&2
 fi
 
+trap 'rm -f "${CRLOUT}.tmp" "${CRLDER}.tmp"' EXIT
 "${OPENSSL}" ca -config "${CONFIG}" \
 	-gencrl \
 	-passin file:"${PASSPHRASE}" \
-	-out "${CRLOUT}"
+	-out "${CRLOUT}.tmp"
 
-"${OPENSSL}" crl -in "${CRLOUT}" -outform DER -out "${CRLDER}.tmp" && mv -f "${CRLDER}.tmp" "${CRLDER}"
+"${OPENSSL}" crl -in "${CRLOUT}.tmp" -outform DER -out "${CRLDER}.tmp"
+# crl -verify exits 0 even on failure: read its verdict. Publish only a CRL the
+# CA's current certificate verifies; the old files stay in place otherwise.
+crl_check=$("${OPENSSL}" crl -verify -noout -CAfile "${CERTDIR}/certs/${CERTDIR}.cert.pem" -in "${CRLOUT}.tmp" 2>&1) || true
+if ! grep -q '^verify OK' <<<"${crl_check}"; then
+    echo "Error: the new ${CANAME} CRL does not verify against ${CERTDIR}/certs/${CERTDIR}.cert.pem; the previous CRL is kept." >&2
+    exit 1
+fi
+mv -f "${CRLOUT}.tmp" "${CRLOUT}" && mv -f "${CRLDER}.tmp" "${CRLDER}"
 if [ "${SHOW_CRL_TEXT}" != "0" ]; then
     "${OPENSSL}" crl -noout -text -in "${CRLOUT}"
 fi

@@ -62,7 +62,7 @@ emailAddress_max                = 254
 # one for signing, one for encryption (create_smime.sh issues both).
 
 [ smime_encryption ]
-basicConstraints                = CA:FALSE
+basicConstraints                = critical, CA:FALSE
 keyUsage                        = critical, keyEncipherment
 extendedKeyUsage                = critical, emailProtection
 subjectKeyIdentifier            = hash
@@ -72,7 +72,7 @@ crlDistributionPoints           = URI:http://$ENV::PKI_FQDN/intermediate_smime.c
 authorityInfoAccess             = caIssuers;URI:http://$ENV::PKI_FQDN/intermediate_smime.cer
 
 [ smime_signature ]
-basicConstraints                = CA:FALSE
+basicConstraints                = critical, CA:FALSE
 keyUsage                        = critical, nonRepudiation, digitalSignature
 extendedKeyUsage                = critical, emailProtection
 subjectKeyIdentifier            = hash

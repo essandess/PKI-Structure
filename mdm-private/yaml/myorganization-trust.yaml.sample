@@ -14,6 +14,7 @@ scope: System   # System (default) or User
 cert_dirs:
   - $PKI_ROOT/root/certs
   - $PKI_ROOT/intermediate/certs
+  - $PKI_ROOT/intermediate_smime/certs
   - $PKI_ROOT/server/certs
   - $PKI_ROOT/privoxy/certs
   - certs
@@ -22,4 +23,5 @@ cert_dirs:
 certificates:
   - root.cer
   - intermediate.cer
+  - intermediate_smime.cer
   - privoxy.cer

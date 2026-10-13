@@ -56,7 +56,7 @@ if [ ! -f "${CERTFILE}" ]; then
     exit 1
 fi
 
-VALID_CRL_REASONS="unspecified keyCompromise CACompromise affiliationChanged superseded cessationOfOperation certificateHold removeFromCRL"
+VALID_CRL_REASONS="unspecified keyCompromise CACompromise affiliationChanged superseded cessationOfOperation certificateHold"
 
 case " ${VALID_CRL_REASONS} " in
     *" ${CRLREASON} "*)

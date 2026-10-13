@@ -59,7 +59,7 @@ emailAddress_max                = 254
 
 [ adblock2privoxy ]
 # Extensions for the server certificate (`man x509v3_config`).
-basicConstraints                = CA:FALSE
+basicConstraints                = critical, CA:FALSE
 subjectKeyIdentifier            = hash
 authorityKeyIdentifier          = keyid:always
 keyUsage                        = critical, digitalSignature

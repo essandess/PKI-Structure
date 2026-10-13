@@ -11,7 +11,6 @@ shopt -s inherit_errexit
 trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
 
 shopt -s nullglob
-shopt -s nocasematch
 
 umask 077
 # Precaution to avoid overwriting/clearing an existing PKI structure
@@ -179,7 +178,7 @@ if [ "${CLEAN}" == "1" ]; then
 	echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
 	read -p "This will delete existing keys and certificates in '${CERTDIR}'. Are you sure [y/N]? " -r < /dev/tty
 	echo    # (optional) move to a new line
-	if [[ ! "${REPLY}" =~ ^[y]$ ]]; then
+	if [[ ! "${REPLY}" =~ ^[yY]$ ]]; then
 	    echo "Aborted." >&2
 	    exit 1
 	fi
@@ -209,7 +208,7 @@ if [ "${CLEAN}" == "1" ]; then
 	    echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
 	    read -p "This will delete the existing passphrase in '${CERTDIR}'. Are you sure [y/N]? " -r < /dev/tty
 	    echo    # (optional) move to a new line
-	    if [[ ! "${REPLY}" =~ ^[y]$ ]]; then
+	    if [[ ! "${REPLY}" =~ ^[yY]$ ]]; then
 		echo "Aborted." >&2
 		exit 1
 	    fi

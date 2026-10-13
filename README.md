@@ -200,7 +200,7 @@ bin/publish_crls.sh [--if-configured] [--no-regenerate] [root|intermediate|inter
 * **Revoke.** `CA` is the certificate's issuer: intermediate, intermediate_smime → `root`; server, codesign → `intermediate`; S/MIME → `intermediate_smime`; adblock2privoxy → `privoxy`. Revoke both
   S/MIME certificates of an identity. Requires a typed `yes`. `REASON` (default
   `unspecified`): `keyCompromise`, `CACompromise`, `affiliationChanged`,
-  `superseded`, `cessationOfOperation`, `certificateHold`, `removeFromCRL`.
+  `superseded`, `cessationOfOperation`, `certificateHold` (`openssl ca` cannot undo a revocation).
   Then it regenerates the CRL and, for root and intermediate, publishes it.
 * **CRL.** Regenerated only if missing, expiring in fewer than 15 days
   (`--min-days-left`, `CRL_MIN_DAYS_LEFT`), not signed by the CA's current

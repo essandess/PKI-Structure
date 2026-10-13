@@ -86,6 +86,12 @@ pki_restore_archived_cert() {
     done
 }
 
+# pki_serial_norm SERIAL: upper case, leading zeros dropped, so serials from
+# index.txt and from `openssl x509 -serial` compare equal whatever their padding
+pki_serial_norm() {
+    printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | sed 's/^0*//'
+}
+
 # issuer_dir, issuer_config, target_cn, exclude_serial, crl_caname
 pki_revoke_matching_cn() {
     local issuer_dir="$1" issuer_config="$2" target_cn="$3" \
@@ -102,7 +108,7 @@ pki_revoke_matching_cn() {
         serial="${fields[$((n-3))]}"
         subject="${fields[$((n-1))]}"
 
-        [ "${serial}" = "${exclude_serial}" ] && continue
+        [ "$(pki_serial_norm "${serial}")" = "$(pki_serial_norm "${exclude_serial}")" ] && continue
 
         cn="${subject#*/CN=}"
         cn="${cn%%/*}"

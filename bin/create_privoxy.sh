@@ -20,7 +20,7 @@
 # because the server cert must be reissued anyway and longer Root CA lifetime
 # doesn't offer any real advantage
 # https://support.apple.com/en-us/HT210176
-DAYS=825
+DAYS=856  # 825 + 31
 
 CATRUE=${CATRUE:-1}
 CERTDIR=${CERTDIR:-privoxy}

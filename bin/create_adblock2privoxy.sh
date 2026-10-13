@@ -68,6 +68,11 @@ if "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR##*/}".cnf \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
 	-batch
 then
+    if ! pki_assert_leaf_scope "${CERTDIR}/certs/${CERTNAME}.cert.pem" adblock2privoxy; then
+        pki_revoke_unscoped "${CERTDIR}/openssl_${CERTDIR##*/}.cnf" "${ISSUERCADIR}" "${CERTDIR}/certs/${CERTNAME}.cert.pem" privoxy
+        rm -f "${CERTDIR}"/private/"${CERTNAME}".key.pem "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted "${CERTDIR}"/certs/"${CERTNAME}".csr.pem "${CERTDIR}"/certs/"${CERTNAME}".cert.pem
+        exit 1
+    fi
     NEW_SERIAL=$("${OPENSSL}" x509 -in "${CERTDIR}/certs/${CERTNAME}.cert.pem" -noout -serial | sed 's|^serial=||')
     pki_revoke_matching_cn "${ISSUERCADIR}" "${CERTDIR}/openssl_${CERTDIR##*/}.cnf" "${CERTNAME}" "${NEW_SERIAL}" privoxy
     rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem

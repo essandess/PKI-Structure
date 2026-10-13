@@ -60,6 +60,11 @@ if "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
 	-batch
 then
+    if ! pki_assert_leaf_scope "${CERTDIR}/certs/${CERTNAME}.cert.pem" codesign; then
+        pki_revoke_unscoped "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${ISSUERCADIR}" "${CERTDIR}/certs/${CERTNAME}.cert.pem" intermediate
+        rm -f "${CERTDIR}"/private/"${CERTNAME}".key.pem "${CERTDIR}"/certs/"${CERTNAME}".csr.pem "${CERTDIR}"/certs/"${CERTNAME}".cert.pem
+        exit 1
+    fi
     NEW_SERIAL=$("${OPENSSL}" x509 -in "${CERTDIR}/certs/${CERTNAME}.cert.pem" -noout -serial | sed 's|^serial=||')
     pki_revoke_matching_cn "${ISSUERCADIR}" "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${ORG_NAME}" "${NEW_SERIAL}" intermediate
     rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem

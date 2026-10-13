@@ -184,6 +184,14 @@ for EXTENSION in signature encryption; do
 	-subj "/CN=${EMAIL} - ${EXTENSION}/emailAddress=${EMAIL}/O=${ORG_NAME}/OU=${ORG_NAME} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
 	-batch
     then
+	if ! pki_assert_leaf_scope "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem" smime_${EXTENSION}; then
+		for s in ${REVOKE_SERIAL[@]+"${REVOKE_SERIAL[@]}"}; do
+			pki_revoke_unscoped "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${ISSUERCADIR}" "${ISSUERCADIR}/newcerts/${s}.pem" "${ISSUERCADIR}"
+		done
+		pki_revoke_unscoped "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${ISSUERCADIR}" "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem" ${ISSUERCADIR}
+		rm -f "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem
+		exit 1
+	fi
 	NEW_SERIAL=$("${OPENSSL}" x509 -in "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem" -noout -serial | sed 's|^serial=||')
 	# not revoked yet: see the end of this script
 	REVOKE_CN+=("${EMAIL} - ${EXTENSION}")

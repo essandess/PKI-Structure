@@ -568,7 +568,7 @@ pick_main_intermediate() {
 # verify_chain [options] CERT: verify CERT against the root through the valid
 # intermediates, checking the CRLs of the whole chain.
 verify_chain() {
-    "${OPENSSL}" verify -crl_check_all -CRLfile "${CRL_ALL}" -CAfile "${ANCHORS}" \
+    "${OPENSSL}" verify -x509_strict -crl_check_all -CRLfile "${CRL_ALL}" -CAfile "${ANCHORS}" \
         -untrusted "${INTS}" "$@" 2>&1
 }
 
@@ -732,7 +732,7 @@ find_codesign_signer() {
         fi
         if [ -z "${why}" ]; then
             eku=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage -in "${f}" 2>/dev/null || true)
-            if [ -n "${eku}" ] && ! grep -qi 'Code Signing' <<<"${eku}"; then
+            if ! grep -qi 'Code Signing' <<<"${eku}"; then
                 why="ExtendedKeyUsage does not include codeSigning"
             fi
         fi

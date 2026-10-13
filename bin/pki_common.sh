@@ -315,6 +315,73 @@ pki_assert_ca_scope() {
 }
 
 # ---------------------------------------------------------------------
+# Leaf certificate scope
+# ---------------------------------------------------------------------
+
+# pki_assert_leaf_scope CERT KIND: succeed only if the issued leaf CERT has the
+# basicConstraints, keyUsage, extendedKeyUsage (and CRL/AIA pointers) its KIND
+# requires; otherwise say why on stderr. A missing -extensions section would
+# silently issue a bare certificate. Needs OpenSSL >= 1.1.1 for `x509 -ext`.
+#   server | adblock2privoxy  serverAuth only, digitalSignature
+#   codesign                  codeSigning only, digitalSignature
+#   smime_signature           emailProtection only, digitalSignature
+#   smime_encryption          emailProtection only, keyEncipherment
+# (adblock2privoxy has no CRL/AIA pointers: its CA's CRL is not published.)
+pki_assert_leaf_scope() {
+    local cert="$1" kind="$2" bc ku eku other want_eku want_ku bad_ku="" pointers=1
+
+    case "${kind}" in
+        server)           want_eku='TLS Web Server Authentication'; want_ku='Digital Signature' ;;
+        adblock2privoxy)  want_eku='TLS Web Server Authentication'; want_ku='Digital Signature'; pointers=0 ;;
+        codesign)         want_eku='Code Signing'; want_ku='Digital Signature' ;;
+        smime_signature)  want_eku='E-mail Protection'; want_ku='Digital Signature'; bad_ku='Key Encipherment' ;;
+        smime_encryption) want_eku='E-mail Protection'; want_ku='Key Encipherment'; bad_ku='Digital Signature' ;;
+        *) echo "pki_assert_leaf_scope: unknown kind '${kind}'." >&2; return 1 ;;
+    esac
+
+    bc=$("${OPENSSL}" x509 -noout -ext basicConstraints -in "${cert}" 2>/dev/null) || bc=""
+    ku=$("${OPENSSL}" x509 -noout -ext keyUsage -in "${cert}" 2>/dev/null) || ku=""
+    eku=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage -in "${cert}" 2>/dev/null) || eku=""
+
+    if ! grep -q 'CA:FALSE' <<<"${bc}"; then
+        echo "${cert}: basicConstraints must be CA:FALSE." >&2
+        return 1
+    fi
+    if ! grep -qF "${want_ku}" <<<"${ku}" || grep -Eq 'Certificate Sign|CRL Sign' <<<"${ku}" \
+           || { [ -n "${bad_ku}" ] && grep -qF "${bad_ku}" <<<"${ku}"; }; then
+        echo "${cert}: keyUsage must include ${want_ku} and nothing that signs certificates${bad_ku:+ or ${bad_ku}}." >&2
+        return 1
+    fi
+    other=$(sed '1d' <<<"${eku}" | tr ',' '\n' | sed -e 's/^ *//' -e 's/ *$//' \
+                | grep -v '^$' | grep -vxF "${want_eku}" || true)
+    if ! grep -qF "${want_eku}" <<<"${eku}" || [ -n "${other}" ]; then
+        echo "${cert}: extendedKeyUsage must be ${want_eku} only." >&2
+        return 1
+    fi
+    if [ "${pointers}" = 1 ]; then
+        local ptr
+        ptr=$("${OPENSSL}" x509 -noout -ext crlDistributionPoints,authorityInfoAccess -in "${cert}" 2>/dev/null) || ptr=""
+        if ! grep -q 'CRL Distribution Points' <<<"${ptr}" || ! grep -q 'Authority Information Access' <<<"${ptr}"; then
+            echo "${cert}: crlDistributionPoints and authorityInfoAccess are required." >&2
+            return 1
+        fi
+    fi
+}
+
+# pki_revoke_unscoped CONFIG ISSUERDIR CERT CRLNAME: revoke a just-issued
+# certificate that failed pki_assert_leaf_scope, and refresh the issuer's CRL.
+# Reason "unspecified": "superseded" would let an encryption certificate be
+# re-admitted with --allow-superseded-encryption.
+pki_revoke_unscoped() {
+    local config="$1" issuer_dir="$2" cert="$3" crl_caname="$4"
+
+    echo "Revoking the unscoped certificate ${cert}." >&2
+    "${OPENSSL}" ca -config "${config}" -revoke "${cert}" -crl_reason unspecified \
+        -passin file:"${issuer_dir}"/private/passphrase.txt || true
+    "${PKI_ROOT}"/bin/create_crl.sh "${crl_caname}" || true
+}
+
+# ---------------------------------------------------------------------
 # Finishing a certificate
 # ---------------------------------------------------------------------
 

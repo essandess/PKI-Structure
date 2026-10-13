@@ -33,6 +33,10 @@ class Role:
     ku_none: tuple[str, ...]   # none may be set
     may_expire: bool           # expiry can be waived on request
     may_supersede: bool        # "superseded" revocation can be waived on request
+    purpose: str = "any"       # `openssl verify -purpose` for the leaf; checks
+                               # the EKU of every CA in the chain, which
+                               # scopes the intermediates. "any" for codesign
+                               # (no verify purpose exists for it)
 
 
 # Policy table.
@@ -45,11 +49,11 @@ class Role:
 # other revocation, not yet valid, bad usage or chain: reject
 POLICY: dict[str, Role] = {
     "signature": Role(ExtendedKeyUsageOID.EMAIL_PROTECTION, "emailProtection",
-                      SIGN, (), False, False),
+                      SIGN, (), False, False, "smimesign"),
     "encryption": Role(ExtendedKeyUsageOID.EMAIL_PROTECTION, "emailProtection",
-                       ENCR, SIGN, True, True),
+                       ENCR, SIGN, True, True, "smimeencrypt"),
     "codesign": Role(ExtendedKeyUsageOID.CODE_SIGNING, "codeSigning",
-                     ("digital_signature",), (), False, False),
+                     ("digital_signature",), (), False, False, "any"),
 }
 
 
@@ -97,10 +101,14 @@ def load_ca_index(index_file: Path) -> dict[int, tuple[str, str]]:
 
 
 def _openssl_verify(cert_file: Path, trust: Trust, *, crl: str | None = None,
-                    no_time: bool = False) -> str | None:
+                    no_time: bool = False, purpose: str | None = None) -> str | None:
     """None if `openssl verify` passes, else its error line.
     crl: None, "leaf" (-crl_check) or "all" (-crl_check_all)."""
     cmd = [os.environ.get("OPENSSL", "openssl"), "verify", "-CAfile", str(trust.ca_bundle)]
+    if os.environ.get("PKI_VERIFY_STRICT", "1") != "0":
+        cmd.append("-x509_strict")
+    if purpose:
+        cmd += ["-purpose", purpose]
     if crl:
         cmd += ["-crl_check_all" if crl == "all" else "-crl_check",
                 "-CRLfile", str(trust.crl_bundle)]
@@ -158,10 +166,10 @@ def ca_chain_problems(trust: Trust) -> list[str]:
 def _usage_problem(cert: x509.Certificate, name: str, role: Role) -> str | None:
     try:
         eku = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
-        if role.eku not in eku:
-            return f"ExtendedKeyUsage lacks {role.eku_name}"
     except x509.ExtensionNotFound:
-        pass
+        return f"no ExtendedKeyUsage; cannot be limited to {role.eku_name}"
+    if role.eku not in eku:
+        return f"ExtendedKeyUsage lacks {role.eku_name}"
     try:
         ku = cert.extensions.get_extension_for_class(x509.KeyUsage).value
     except x509.ExtensionNotFound:
@@ -211,7 +219,8 @@ def validate(cert: x509.Certificate, cert_file: Path, role_name: str,
 
     if superseded:
         # openssl stops at the cert's own revocation: check chain, CAs, CRL apart.
-        err = _openssl_verify(cert_file, trust, no_time=True)
+        err = _openssl_verify(cert_file, trust, no_time=True,
+                              purpose=role.purpose)
         if err:
             return [f"failed chain verification: {err}"], ""
         problems = ca_chain_problems(trust)
@@ -224,7 +233,8 @@ def validate(cert: x509.Certificate, cert_file: Path, role_name: str,
         return [], state
 
     # -no_check_time skips only the expiry already decided above, not the CRLs.
-    err = _openssl_verify(cert_file, trust, crl="all", no_time=expired)
+    err = _openssl_verify(cert_file, trust, crl="all", no_time=expired,
+                          purpose=role.purpose)
     if err:
         return [f"failed chain/CRL verification: {err}"], ""
     return [], state

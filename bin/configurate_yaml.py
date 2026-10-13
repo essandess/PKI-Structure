@@ -245,6 +245,7 @@ from cryptography.hazmat.primitives.serialization import pkcs12
 # ./pki_validate.py
 from pki_validate import (Trust, common_name, load_ca_index, load_cert,
                           validate, validity as _validity)
+import pki_keychain
 
 # Fixed namespace so UUIDs are deterministic across rebuilds. Change
 # once, keep forever.
@@ -702,11 +703,16 @@ def normalize_identity_entry(raw: Any) -> dict[str, Any]:
 
 
 def p12_password(path: Path, fallback: Callable[[], str]) -> str:
-    """The password of a PKCS#12 file: the first line of '<file>.pass'
-    if that exists (create_smime.sh writes one per issuance, so a
-    password opens only that identity's .p12 files), else the shared
-    fallback (line 2 of the passphrase file), which older .p12 files
-    use."""
+    """The password of a PKCS#12 file: its key's keychain entry (the
+    certificate beside it in ../certs), else '<file>.pass', else the
+    shared fallback (line 2 of the passphrase file) of older trees."""
+    cert = path.parent.parent / "certs" / (path.stem + ".cert.pem")
+    kdir = path.parent.parent.parent / "keychain"
+    if cert.is_file() and kdir.is_dir():
+        try:
+            return pki_keychain.get_secret(cert, "p12", keychain_dir=kdir)
+        except pki_keychain.KeychainError:
+            pass
     pw_file = path.with_name(path.name + ".pass")
     if pw_file.is_file():
         return load_passphrase_line(pw_file, 1)
@@ -1306,7 +1312,7 @@ def load_issuer_context(
     return ca_bundle, ca_db, crls
 
 
-SignerInfo = tuple[Path, x509.Certificate, Path, Path, Path]
+SignerInfo = tuple[Path, x509.Certificate, Path, Path]
 
 
 def find_signer() -> SignerInfo:
@@ -1365,18 +1371,20 @@ def find_signer() -> SignerInfo:
 
     key = certdir / "private" / f"{certname}.{sha}.key.pem"
     chain = certdir / "certs" / f"{certname}.{sha}.chain.pem"
-    pw = certdir / "private" / "passphrase.txt"
-    for f in (key, pw):
-        if not f.is_file():
-            die(f"missing {f}")
-    return cert_file, cert, key, chain, pw
+    if not key.is_file():
+        die(f"missing {key}")
+    return cert_file, cert, key, chain
 
 
 def sign(unsigned: Path, signed: Path) -> None:
     # never leave a stale signed profile behind if signing fails
     signed.unlink(missing_ok=True)
     digest = os.environ.get("HASH_DIGEST", "sha256")
-    cert_file, cert, key, chain, pw = find_signer()
+    cert_file, cert, key, chain = find_signer()
+    try:
+        pw = pki_keychain.get_secret(cert_file)
+    except pki_keychain.KeychainError as e:
+        die(str(e))
 
     with tempfile.TemporaryDirectory() as td:
         cmd = [
@@ -1384,8 +1392,7 @@ def sign(unsigned: Path, signed: Path) -> None:
             "-md", digest,
             "-in", str(unsigned),
             "-signer", str(cert_file), "-inkey", str(key),
-            # line 1 of passphrase.txt, as in create_codesign.sh
-            "-passin", f"file:{pw}",
+            "-passin", "stdin",
             "-outform", "der", "-out", str(signed),
         ]
 
@@ -1408,7 +1415,7 @@ def sign(unsigned: Path, signed: Path) -> None:
                   file=sys.stderr)
 
         signed.parent.mkdir(parents=True, exist_ok=True)
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        r = subprocess.run(cmd, capture_output=True, text=True, input=pw + "\n")
         if r.returncode:
             die(f"openssl sign failed:\n{r.stderr}")
 

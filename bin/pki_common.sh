@@ -15,6 +15,12 @@
 # shared finishing steps of every certificate (pki_finish_cert,
 # pki_sha1_files).
 
+# PKI_KEYCHAIN_PATCH_V1
+# Key passphrases: one per key in the KeePassXC database ./keychain
+# (bin/pki_keychain.py); its master password is in the macOS keychain. Needs PKI_ROOT.
+. "${BASH_SOURCE[0]%/*}/define_python.sh"
+pki_kc() { "${PYTHON}" "${PKI_ROOT}/bin/pki_keychain.py" "$@"; }
+
 # How close to expiry a self-signed CA certificate must be before a new one
 # is issued in its place (see pki_ca_prepare).
 PKI_RENEW_WINDOW_DAYS=${PKI_RENEW_WINDOW_DAYS:-30}
@@ -125,7 +131,7 @@ pki_revoke_matching_cn() {
         "${OPENSSL}" ca -config "${issuer_config}" \
             -revoke "${newcert}" \
             -crl_reason superseded \
-            -passin file:"${issuer_dir}"/private/passphrase.txt
+            -passin fd:3 3< <(pki_kc get --cert "${issuer_dir}/certs/${issuer_dir##*/}.cert.pem")
         revoked_any=1
     done < "${issuer_dir}/index.txt"
 
@@ -248,6 +254,7 @@ pki_ca_restore_key() {
     local certdir="$1" certname="$2"
     cp -p "${certdir}/private/${certname}.${PKI_ARCHIVED_SHA1}.key.pem" \
        "${certdir}/private/${certname}.key.pem"
+    KEY_ID=$(pki_kc id --cert "${certdir}/certs/${certname}.${PKI_ARCHIVED_SHA1}.cert.pem")
 }
 
 # ---------------------------------------------------------------------
@@ -377,7 +384,7 @@ pki_revoke_unscoped() {
 
     echo "Revoking the unscoped certificate ${cert}." >&2
     "${OPENSSL}" ca -config "${config}" -revoke "${cert}" -crl_reason unspecified \
-        -passin file:"${issuer_dir}"/private/passphrase.txt || true
+        -passin fd:3 3< <(pki_kc get --cert "${issuer_dir}/certs/${issuer_dir##*/}.cert.pem") || true
     "${PKI_ROOT}"/bin/create_crl.sh "${crl_caname}" || true
 }
 
@@ -385,17 +392,16 @@ pki_revoke_unscoped() {
 # Finishing a certificate
 # ---------------------------------------------------------------------
 
-# pki_finish_cert CERTDIR CERTNAME ISSUERDIR ISSUERNAME [P12_PASS_FILE]
-# Chain, verify, DER and .p12 of CERTDIR/certs/CERTNAME.cert.pem. Self-signed
-# (issuer is the certificate itself): no chain file. P12_PASS_FILE holds the
-# .p12 password; default is line 2 of CERTDIR/private/passphrase.txt.
+# pki_finish_cert CERTDIR CERTNAME ISSUERDIR ISSUERNAME [LIKE_CERT]
+# Chain, verify, DER and .p12 of CERTDIR/certs/CERTNAME.cert.pem (self-signed: no chain
+# file). Records the certificate in the keychain; the .p12 password is the key's
+# keychain one, shared with LIKE_CERT's when given.
 pki_finish_cert() {
-    local certdir="$1" certname="$2" issuerdir="$3" issuername="$4" p12pass="${5:-}"
+    local certdir="$1" certname="$2" issuerdir="$3" issuername="$4" like="${5:-}"
     local cert="${certdir}/certs/${certname}.cert.pem"
     local chain="${certdir}/certs/${certname}.chain.pem"
     local cafile="${issuerdir}/certs/${issuername}.cert.pem"
-    local keypass="${certdir}/private/passphrase.txt"
-    local p12="${certdir}/private/${certname}.p12" passout
+    local p12="${certdir}/private/${certname}.p12" rec keypw p12pw
 
     if [ "${issuerdir}/${issuername}" != "${certdir}/${certname}" ]; then
         if [ -f "${issuerdir}/certs/${issuername}.chain.pem" ]; then
@@ -408,23 +414,18 @@ pki_finish_cert() {
 
     "${OPENSSL}" x509 -outform der -in "${cert}" -out "${certdir}/certs/${certname}.cer"
 
-    # Same file for -passin and -passout: line 1 opens the key, line 2 is
-    # the .p12 password (man openssl-passphrase-options).
-    if [ -n "${p12pass}" ]; then
-        passout="file:${p12pass}"
-    else
-        passout="file:${keypass}"
+    rec=(record --cert "${cert}")
+    if [ -n "${like}" ]; then
+        rec+=(--p12-like "${like}")
     fi
+    pki_kc "${rec[@]}"
+    keypw=$(pki_kc get --cert "${cert}")
+    p12pw=$(pki_kc get --cert "${cert}" --field p12)
     "${OPENSSL}" pkcs12 -legacy -export -out "${p12}" \
         -inkey "${certdir}/private/${certname}.key.pem" -in "${cert}" \
-        -passin "file:${keypass}" -passout "${passout}"
-    # verify the .p12; a shared password goes by environment, never argv
-    if [ -n "${p12pass}" ]; then
-        "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin "file:${p12pass}"
-    else
-        PKI_P12_PW=$(sed -n 2p "${keypass}") \
-            "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin env:PKI_P12_PW
-    fi
+        -passin fd:3 -passout fd:4 3< <(printf '%s\n' "${keypw}") 4< <(printf '%s\n' "${p12pw}")
+    "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin fd:3 3< <(printf '%s\n' "${p12pw}")
+    keypw="" p12pw=""
 }
 
 # pki_sha1_files MODE CERTDIR CERTNAME NEWNAME "SUBDIR/SUFFIX ..."

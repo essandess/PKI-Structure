@@ -5,7 +5,7 @@ PortGroup           github 1.0
 PortGroup           openssl 1.0
 
 # github.setup        essandess PKI-Structure 1.0.0 v
-github.setup        essandess pki-structure 1596f30920ef060070744ff46f08693d074eaefa
+github.setup        essandess pki-structure 46b47b331148a9506abdc5ec4f962ab864169db5
 version             1.0.0
 revision            0
 categories          security
@@ -25,9 +25,9 @@ long_description    {*}${description}. Creates a root and intermediate \
                     Creates signed PKI installer scripts and KeePassXC items \
                     for deployment.
 
-checksums           rmd160  a77b3f52e6e418fa2777c93e04e339655d5f1cfc \
-                    sha256  8021aa063755d4af72f913bc93dfed19132813057be5be93658ec13b4a8d727d \
-                    size    119287
+checksums           rmd160  29915d2041ef8c11c750db1f0195ae28546fa03d \
+                    sha256  f21fd11ca4984cad89e02ffa9f54c135f31a8ac964ecf34f5195fed0c1f196fd \
+                    size    125191
 
 # ${prefix}/var/macports/sources/rsync.macports.org/macports/release/tarballs/ports/_resources/port1.0/group/python-1.0.tcl
 set python_version  314
@@ -42,7 +42,8 @@ depends_lib-append  path:bin/openssl:openssl \
                     port:py${python_version}-cryptography \
                     port:py${python_version}-yaml
 
-depends_run-append  port:nginx
+depends_run-append  port:KeePassXC \
+                    port:nginx
 
 depends_test-append port:KeePassXC
 

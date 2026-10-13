@@ -156,11 +156,8 @@ Useage:
 
 $(basename "$0") [-a|--algorithm [EC (default)|RSA]] [-h|--help] [-c|--clean] ${POSITIONAL_ARGS_USAGE}
 
-Note that the file ./${CERTDIR}/private/passphrase.txt will be created,
-if it does not exist, with two independent strong passphrases, one per
-line: line 1 protects the private key, line 2 protects .p12 exports. Both
-are 24 random letters and digits from openssl rand. See:
-* man openssl-passphrase-options
+Key passphrases are random, one per key, in ./keychain/pki.kdbx (KeePassXC);
+its master password is in the macOS keychain (bin/pki_keychain.py).
 USEAGE
     exit 0
 fi
@@ -183,6 +180,10 @@ if [ "${CLEAN}" == "1" ]; then
 	    exit 1
 	fi
     fi
+    # drop the keychain entries of the keys deleted below
+    for c in "${CERTDIR}"/certs/*.cert.pem; do
+        pki_kc forget --cert "${c}" || true
+    done
     for f in \
 	"${CERTDIR}"/private/*.key.pem \
 	    "${CERTDIR}"/private/*.key.pem.decrypted \
@@ -255,22 +256,8 @@ for d in "${CERTDIR}"/certs "${CERTDIR}"/private; do
     fi
 done
 
-for f in "${CERTDIR}"/private/passphrase.txt; do
-    if ! [ -f "${f}" ]; then
-        # Two independent secrets, one per line: line 1 protects the
-        # private key (-passin), line 2 protects .p12 exports (-passout).
-        # See openssl-passphrase-options(1) on file:pathname passed to
-        # both -passin and -passout.
-        # Nobody types these (they sit in this file), so they are random
-        # letters and digits from openssl rand, not memorable words.
-        PASSIN=$(pki_random_password)
-        PASSOUT=$(pki_random_password)
-        touch "${f}"
-        chmod go-rwx "${f}"
-        printf '%s\n%s\n' "${PASSIN}" "${PASSOUT}" > "${f}"
-        unset PASSIN PASSOUT
-    fi
-done
+# Key passphrases: KeePassXC database and its master password (bin/pki_keychain.py)
+pki_kc init
 
 if ! [ "${CATRUE}" == "0" ]; then
     # create necessary directory/file structure
@@ -293,10 +280,3 @@ if ! [ "${CATRUE}" == "0" ]; then
 #     done
 fi
 
-# check for existence of passphrase
-for f in "${CERTDIR}"/private/passphrase.txt; do
-    if ! [ -f "${f}" ]; then
-	echo "Passphrase file '${f}' doesn't exist."
-	exit 1
-    fi
-done

@@ -116,7 +116,7 @@ publish_file() {
 
 for ca in "${CAS[@]}"; do
     if [ "${REGENERATE}" = "1" ]; then
-	if [ -f "${ca}/private/${ca}.key.pem" ] && [ -f "${ca}/private/passphrase.txt" ]; then
+	if [ -f "${ca}/private/${ca}.key.pem" ] ; then
 	    # quiet unless it fails
 	    if ! out=$(SHOW_CRL_TEXT=0 "${PKI_ROOT}/bin/create_crl.sh" "${ca}" 2>&1); then
 		echo "${out}" >&2

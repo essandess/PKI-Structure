@@ -22,10 +22,9 @@
 # --extra-pki-dir DIR (repeatable) also searches DIR/smime, a PKI tree with
 # the same layout, e.g. an older one holding expired certificates. Its root,
 # intermediate and CRLs, if present, are used for validation too.
-# Each .p12 must open with its own password file, <p12>.pass (one password
-# per issuance, written by create_smime.sh), or, for older .p12 files, with
-# line 2 (else line 1) of its tree's smime/private/passphrase.txt. The script
-# reports which file and line, never the password.
+# Each .p12 must open with its keychain password (bin/pki_keychain.py; one per
+# issuance) or, for older trees, <p12>.pass or line 2 (else line 1) of its tree's
+# smime/private/passphrase.txt. The script reports the source, never the password.
 #
 # Installer contents:
 #   CA certificates  root (trusted), valid intermediate, valid intermediate_smime
@@ -593,44 +592,48 @@ validate_smime_cert() {
     return 1
 }
 
-# p12_password_source P12 FALLBACK_PASSPHRASE_FILE: prints "FILE<TAB>LINE",
-# where the password that opens the .p12 is: first <P12>.pass (one password
-# per issuance, written by create_smime.sh), then lines 2 and 1 of the
-# fallback passphrase.txt (older .p12 files share one password). Returns 1 if
-# none of them opens it, 2 if there is no password file at all.
-p12_password_source() {
-    local p12="$1" fallback="$2" i f n pw found=0
-    local files=("${p12}.pass" "${fallback}" "${fallback}")
-    local lines=(1 2 1)
+# p12_password P12 CERT FALLBACK TREE: set P12PW and P12PW_SRC (keychain, pass, line2,
+# line1) to the password that opens the .p12: its key's keychain entry (TREE/keychain),
+# then <P12>.pass, then lines 2 and 1 of FALLBACK (older trees). 1: none opens it; 2: no source.
+p12_password() {
+    local p12="$1" cert="$2" fallback="$3" tree="$4" i f n pw found=0
+    local srcs=(keychain pass line2 line1) files=("" "${p12}.pass" "${fallback}" "${fallback}") lines=(0 1 2 1)
 
-    for i in 0 1 2; do
+    P12PW="" P12PW_SRC=""
+    for i in 0 1 2 3; do
         f="${files[i]}"
         n="${lines[i]}"
-        [ -f "${f}" ] || continue
-        found=1
-        pw=$(sed -n "${n}p" "${f}")
+        if [ "${i}" = 0 ]; then
+            [ -d "${tree}/keychain" ] || continue
+            pw=$(PKI_KEYCHAIN_DIR="${tree}/keychain" pki_kc get --cert "${cert}" --field p12 2>/dev/null) || continue
+            found=1
+        else
+            [ -f "${f}" ] || continue
+            found=1
+            pw=$(sed -n "${n}p" "${f}")
+        fi
         [ -n "${pw}" ] || continue
-        if PKI_TMP_PW="${pw}" "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" \
-                -passin env:PKI_TMP_PW >/dev/null 2>&1; then
-            printf '%s\t%s' "${f}" "${n}"
+        if "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin fd:3 \
+               3< <(printf '%s\n' "${pw}") >/dev/null 2>&1; then
+            P12PW="${pw}"
+            P12PW_SRC="${srcs[i]}"
             return 0
         fi
     done
+    pw=""
     if [ "${found}" = 1 ]; then
         return 1
     fi
     return 2
 }
 
-# p12_check_content P12 PASSPHRASE_FILE LINE CERT: succeeds if the .p12 holds
-# CERT (same certificate, read from inside the .p12) and the private key that
-# belongs to it. On failure prints the reason and returns 1.
+# p12_check_content P12 PASSWORD CERT: succeeds if the .p12 holds CERT (read from inside
+# it) and the private key that belongs to it. On failure prints the reason, returns 1.
 p12_check_content() {
-    local p12="$1" pf="$2" line="$3" cert="$4" pw tmp="${STAGE}/p12check.pem" ck pk
+    local p12="$1" pw="$2" cert="$3" tmp="${STAGE}/p12check.pem" ck pk
 
-    pw=$(sed -n "${line}p" "${pf}")
-    if ! PKI_TMP_PW="${pw}" "${OPENSSL}" pkcs12 -legacy -in "${p12}" -clcerts -nokeys \
-            -passin env:PKI_TMP_PW -out "${tmp}" 2>/dev/null; then
+    if ! "${OPENSSL}" pkcs12 -legacy -in "${p12}" -clcerts -nokeys -passin fd:3 -out "${tmp}" \
+            3< <(printf '%s\n' "${pw}") 2>/dev/null; then
         echo "cannot read the certificate inside it"
         return 1
     fi
@@ -644,23 +647,18 @@ p12_check_content() {
     fi
 
     ck=$("${OPENSSL}" x509 -noout -pubkey -in "${tmp}")
-    pk=$(PKI_TMP_PW="${pw}" "${OPENSSL}" pkcs12 -legacy -in "${p12}" -nocerts -nodes \
-             -passin env:PKI_TMP_PW 2>/dev/null | "${OPENSSL}" pkey -pubout 2>/dev/null) || true
+    pk=$("${OPENSSL}" pkcs12 -legacy -in "${p12}" -nocerts -nodes -passin fd:3 \
+             3< <(printf '%s\n' "${pw}") 2>/dev/null | "${OPENSSL}" pkey -pubout 2>/dev/null) || true
     if [ -z "${pk}" ] || [ "${pk}" != "${ck}" ]; then
         echo "its private key does not belong to its certificate"
         return 1
     fi
 }
 
-# stage_p12_password PWFILE LINE DEST: write line LINE of PWFILE, alone, to
-# DEST (mode 0600 by umask). It is the secret that opens the .p12 next to it.
+# stage_p12_password PW DEST: write PW alone to DEST (mode 0600 by umask).
 stage_p12_password() {
-    local pw
-
-    pw=$(sed -n "${2}p" "$1")
-    pw=${pw%$'\r'}
-    [ -n "${pw}" ] || die "no password on line $2 of $1"
-    printf '%s\n' "${pw}" > "$3"
+    [ -n "$1" ] || die "empty .p12 password"
+    printf '%s\n' "$1" > "$2"
 }
 
 # ---------------------------------------------------------------------
@@ -762,15 +760,15 @@ find_codesign_signer() {
     fi
 
     SIGNER_KEY="${certdir}/private/${certname}.${SIGNER_SHA1}.key.pem"
-    SIGNER_PASSFILE="${certdir}/private/passphrase.txt"
+    
     [ -f "${SIGNER_KEY}" ] || die "missing ${SIGNER_KEY}"
-    [ -f "${SIGNER_PASSFILE}" ] || die "missing ${SIGNER_PASSFILE}"
+    
     echo "Code-signing certificate: ${SIGNER_CERT}" >&2
 }
 
 # load_codesign: the certificate that signs the installer: the newest valid
 # ${CODESIGN_NAME}.<sha1>.cert.pem (find_codesign_signer). Sets CS_CERT,
-# CS_KEY, CS_PASS (key passphrase, line 1). It must verify against the root
+# CS_KEY. It must verify against the root
 # through a valid intermediate, with the CRLs checked, and allow code signing.
 load_codesign() {
     local f out text
@@ -778,8 +776,8 @@ load_codesign() {
     find_codesign_signer
     CS_CERT="${SIGNER_CERT}"
     CS_KEY="${SIGNER_KEY}"
-    CS_PASS="${CODESIGN_DIR}/private/passphrase.txt"
-    for f in "${CS_CERT}" "${CS_KEY}" "${CS_PASS}"; do
+    
+    for f in "${CS_CERT}" "${CS_KEY}"; do
         [ -f "${f}" ] \
             || die "'${f}' not found. The installer is signed with the code signing certificate (PKI_CODESIGN_DIR, PKI_CODESIGN_NAME)."
     done
@@ -800,7 +798,7 @@ load_codesign() {
 sign_content() {
     cat "${INTS}" "${ROOT_CERT}" > "${STAGE}/trust/sigchain.pem"
     "${OPENSSL}" smime -sign -binary -md sha256 -in "$1" \
-        -signer "${CS_CERT}" -inkey "${CS_KEY}" -passin "file:${CS_PASS}" \
+        -signer "${CS_CERT}" -inkey "${CS_KEY}" -passin fd:3 3< <(pki_kc get --cert "${CS_CERT}") \
         -certfile "${STAGE}/trust/sigchain.pem" -outform DER -out "$2"
     # self-check, as the installer will do it
     "${OPENSSL}" smime -verify -binary -inform DER -in "$2" -content "$1" \
@@ -1017,36 +1015,32 @@ build_payload_dir() {
             esac
             seen="${seen}${sha1} "
 
-            # the .p12 must open with the passphrase.txt of the tree it came from
-            # and hold this certificate together with its private key
+            # the .p12 must open with its keychain password (older trees: .p12.pass or
+            # passphrase.txt) and hold this certificate together with its private key
             pf="${sd}/smime/private/passphrase.txt"
             grp="${group}"
-            pwfile=""
-            line=""
             rc=0
-            psrc=$(p12_password_source "${p12}" "${pf}") || rc=$?
+            p12_password "${p12}" "${f}" "${pf}" "${sd}" || rc=$?
             case "${rc}" in
                 0)
-                    line=${psrc#*$'\t'}
-                    pwfile=${psrc%%$'\t'*}
-                    if ! why=$(p12_check_content "${p12}" "${pwfile}" "${line}" "${f}"); then
+                    if ! why=$(p12_check_content "${p12}" "${P12PW}" "${f}"); then
                         warn "skipping ${p12}: ${why}"
                         rejected=$((rejected + 1))
                         continue
                     fi
-                    if [[ "${pwfile}" == *.p12.pass ]]; then
+                    if [ "${P12PW_SRC}" = keychain ] || [ "${P12PW_SRC}" = pass ]; then
                         # one password per issuance
-                        pwid=$(sed -n 1p "${pwfile}" | tr -d '\n' | "${OPENSSL}" dgst -sha256 | sed 's/.*= *//' | cut -c1-6)
+                        pwid=$(printf '%s' "${P12PW}" | "${OPENSSL}" dgst -sha256 | sed 's/.*= *//' | cut -c1-6)
                         grp="${group}/${certname}/${pwid}"
                     fi
                     ;;
                 1)
-                    warn "skipping ${p12}: it opens with neither ${p12}.pass nor the first two lines of ${pf}"
+                    warn "skipping ${p12}: no keychain entry, ${p12}.pass or line of ${pf} opens it"
                     rejected=$((rejected + 1))
                     continue
                     ;;
                 *)
-                    warn "neither ${p12}.pass nor ${pf} found: cannot check the password, certificate and key of ${p12}; the installer will ask for its password"
+                    warn "no password source for ${p12}: cannot check its password, certificate and key; the installer will ask for its password"
                     ;;
             esac
 
@@ -1064,11 +1058,11 @@ build_payload_dir() {
             [ ! -e "${dir}/smime/${name}.p12" ] \
                 || die "payload file name '${name}' is used twice (a clash of the last six sha1 digits)."
             cp "${p12}" "${dir}/smime/${name}.p12"
-            if [ -n "${pwfile}" ]; then
+            if [ -n "${P12PW}" ]; then
                 # the secret that opens this .p12; the payload is encrypted
-                stage_p12_password "${pwfile}" "${line}" "${dir}/smime/${name}.p12.pass"
-                if [[ "${pwfile}" != *.p12.pass ]] && [ "${line}" = 1 ]; then
-                    warn "${p12} opens only with line 1 of ${pwfile} (the key passphrase); that line goes into the encrypted payload"
+                stage_p12_password "${P12PW}" "${dir}/smime/${name}.p12.pass"
+                if [ "${P12PW_SRC}" = line1 ]; then
+                    warn "${p12} opens only with line 1 of ${pf} (the key passphrase); that line goes into the encrypted payload"
                 fi
             fi
             printf 'smime\t%s\t%s\t1\t%s\t%s\n' "${grp}" "${sha1}" "${name}" \

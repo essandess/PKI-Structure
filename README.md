@@ -15,7 +15,7 @@ passwords; and signed MDM profiles. Private keys are passphrase protected.
 | `create_organization_{smime,mdm,credentials}.sh` | Per-deployment driver scripts, seeded from `.sample` |
 | `certs_that_expire_soon.sh`, `updatedb_and_delete_expired_certs.sh` | Expiry reports and cleanup |
 | `replicate_pki_structure.sh`, `clean_everything_and_create_pki.sh` | New deployment; full clean or rebuild |
-| `pki_structure.sh`, `pki_common.sh`, `define_openssl.sh`, `pki_validate.py` | Shared libraries; `pki_validate.py` is the one certificate validator |
+| `pki_structure.sh`, `pki_common.sh`, `define_openssl.sh`, `pki_validate.py`, `pki_keychain.py` | Shared libraries; `pki_validate.py` is the one certificate validator, `pki_keychain.py` the passphrase store |
 
 ## Requirements
 
@@ -25,7 +25,7 @@ passwords; and signed MDM profiles. Private keys are passphrase protected.
   Generated installers run on the macOS-native `openssl`, `tar` with xz, and
   `security`.
 * Python 3.9+ with `cryptography` 39+ (certificate validation) and `PyYAML` (MDM profiles).
-* `keepassxc-cli` (KeePassXC integration only; `KEEPASSXC_CLI` overrides lookup).
+* `keepassxc-cli` (key passphrases, KeePassXC integration; `KEEPASSXC_CLI` overrides lookup) and macOS `security`.
 * `rsync` (deployment); `sf-pwgen` (optional; falls back to `openssl rand`).
 
 ## Deploying to a new directory
@@ -62,7 +62,7 @@ mdm-private/        secrets; keep out of version control
 ```
 
 Each PKI directory has `certs/` (`*.cert.pem`, `*.chain.pem`, `*.cer`),
-`private/` (`*.key.pem`, `*.p12`, `passphrase.txt`; mode 0700), and, for CAs,
+`private/` (`*.key.pem`, `*.p12`; mode 0700), and, for CAs,
 `crl/`, `newcerts/`, `index.txt`, `crlnumber`. A CA's `index.txt` and
 `newcerts/` are its issuance record; revocation, supersession, and signer
 checks read them. Do not delete them. Configuration is
@@ -92,10 +92,22 @@ Environment (tool-specific variables are listed with each tool):
 | `SHOW_CERT_TEXT` | `1` | `0` suppresses certificate text |
 | `PKI_RENEW_WINDOW_DAYS` | `30` | How close to expiry a self-signed CA may be renewed |
 
-`<dir>/private/passphrase.txt` (created on first use, mode 0600): line 1
-protects the private key; line 2 is the `.p12` export password for CA, server,
-and code signing `.p12` files. S/MIME `.p12` files use per-issuance passwords
-instead (see [S/MIME](#smime)).
+## Key passphrases
+
+Each private key has its own random passphrase in `keychain/pki.kdbx` (KeePassXC;
+directory 0700, file 0600), found by SHA-256 of the key's public key, so a renewal
+with the same key finds it. Entry `<id16> :: <CN>`: Password = key passphrase,
+UserName = serial, URL = certificate SHA-256; `... :: p12` holds the `.p12` export
+password. The master password (192 random bits) is the item `PKI-Structure KeePassXC
+Passphrase` in the System keychain (root) or the login keychain; it is created once and
+never overwritten. Back up the database and the item together: one alone is useless.
+
+```sh
+bin/pki_keychain.py get --cert CERT [--field p12]     # print a secret
+bin/pki_keychain.py list | prune [-n] | acl-check
+bin/pki_keychain.py migrate DIR [--rotate] [--remove-legacy]   # from passphrase.txt
+```
+
 
 ## Create certificates
 
@@ -144,9 +156,9 @@ capped at 64 by X.509.
 
 `CN=EMAIL - signature` is EC P-256 (`-a RSA` for RSA); `CN=EMAIL - encryption`
 is always RSA (Apple Mail does not support ECDH encryption certificates). Each
-issuance has a random `.p12` password shared by its two `.p12` files and stored
-beside each as `CERTNAME-{signature,encryption}.p12.pass` (0600). It opens no
-other issuance's `.p12`; give it only to the recipient.
+issuance has a random `.p12` password shared by its two `.p12` files, kept in the
+keychain (`bin/pki_keychain.py get --cert smime/certs/CERTNAME-signature.cert.pem
+--field p12`). It opens no other issuance's `.p12`; give it only to the recipient.
 `bin/create_organization_smime.sh` runs this deployment's list of identities.
 
 ## Intermediate scoping
@@ -235,7 +247,7 @@ grep '^R' intermediate/index.txt        # revoked; '^V' for valid
    current CRLs for the whole chain.
 
 Rejected candidates are reported with the reason; if none qualifies the tool
-fails. The key passphrase is line 1 of `codesign/private/passphrase.txt`.
+fails. The key passphrase comes from the keychain.
 
 | | `configurate_yaml.py` | `create_credentials.sh` |
 |---|---|---|
@@ -268,8 +280,7 @@ CA private keys are never included.
   `}` RB, `[` LBK, `]` RBK, `,` C, `!`/`^` N), `nosmimes` without globs, or
   `cacerts`. `--extra-pki-dir DIR` (repeatable) also searches `DIR/smime`, a
   tree with the same layout (e.g. an older one with expired certificates).
-* **`.p12` passwords.** Each `.p12` must open with its `<p12>.pass`, or (older
-  files) line 2, else line 1, of its tree's `passphrase.txt`. The script also
+* **`.p12` passwords.** Each `.p12` must open with its keychain password or, in older trees, `<p12>.pass`, else line 2, else line 1, of its `passphrase.txt`. The script also
   checks that the `.p12` holds the expected certificate and matching key.
 * **Validation.** Root and privoxy CA must verify against themselves; the
   intermediate against the root. S/MIME certificates must verify through a
@@ -402,8 +413,7 @@ required.
 * **YAML types.** Only `true`/`false` are booleans (`yes`/`no`/`on`/`off` stay
   strings); bare dates and other values a plist cannot hold are rejected.
 * **Identities.** `<name>-{signature,encryption}.p12` from `identity_dirs`
-  (default `smime/private`); password from `<p12>.pass`, else line 2 of
-  `identity_passphrase_file`. Each embedded certificate must be `V` in the
+  (default `smime/private`); password from the keychain, else (older trees) `<p12>.pass`, else line 2 of `identity_passphrase_file`. Each embedded certificate must be `V` in the
   issuer's `index.txt`, pass the CRL check, and have a keyUsage matching its
   role. Signing certificates must be current; an expired or `superseded`
   encryption certificate needs `allow_expired_encryption` /

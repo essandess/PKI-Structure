@@ -99,12 +99,14 @@ esac
 
 . "${PKI_ROOT}/pki_identity.env"
 . "${PKI_ROOT}/bin/define_openssl.sh"
+. "${PKI_ROOT}/bin/pki_common.sh"
 
 : "${OPENSSL:?OPENSSL is not set by bin/define_openssl.sh}"
 
-PASSPHRASE="${ISSUERCANAME}/private/passphrase.txt"
-if [ ! -f "${PASSPHRASE}" ]; then
-    echo "Passphrase file '${PASSPHRASE}' doesn't exist." >&2
+CACERT="${ISSUERCANAME}/certs/${ISSUERCANAME}.cert.pem"
+CAKEY="${ISSUERCANAME}/private/${ISSUERCANAME}.key.pem"
+if [ ! -f "${CAKEY}" ]; then
+    echo "CA key '${CAKEY}' doesn't exist." >&2
     exit 1
 fi
 if [ ! -f "${ISSUERCANAME}/index.txt" ]; then
@@ -124,7 +126,7 @@ mkdir -p "${ISSUERCANAME}/crl"
         -config "${CONFIG}" \
         -revoke "${CERTFILE}" \
         -crl_reason "${CRLREASON}" \
-	-passin file:"${PASSPHRASE}"
+	-passin fd:3 3< <(pki_kc get --cert "${CACERT}")
 
 bin/create_crl.sh "${CANAME}"
 

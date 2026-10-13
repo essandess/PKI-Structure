@@ -15,12 +15,9 @@
 # anything fails before that, the previous files are restored and nothing is
 # revoked.
 #
-# Each issuance gets its own random .p12 export password, shared by the
-# signature and encryption .p12 of this issuance and kept next to each one
-# as ${CERTNAME}-{signature,encryption}.p12.pass (mode 0600). Give that
-# password to the person who receives the .p12 and to nobody else: it opens
-# nobody else's .p12. (The key passphrase, passphrase.txt line 1, never
-# leaves the PKI directory.)
+# Each issuance gets its own random .p12 export password, shared by the signature
+# and encryption .p12 and kept in the keychain (bin/pki_keychain.py get --cert CERT
+# --field p12). Give it to the person who receives the .p12 and to nobody else.
 
 # https://support.apple.com/en-us/HT210176
 # Technically longer acceptable for noncommercial S/MIME, 
@@ -43,7 +40,7 @@ RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-3072}
 POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-EMAIL CERTNAME}
 
 # Files that make up one S/MIME certificate, as <subdirectory>/<suffix>
-SMIME_FILES="private/key.pem private/p12 private/p12.pass certs/cert.pem certs/chain.pem certs/cer"
+SMIME_FILES="private/key.pem private/p12 certs/cert.pem certs/chain.pem certs/cer"
 
 # Move existing signature/encryption certificates for CERTNAME to SHA1-named
 # files so that new ones can be issued. Each one is named after its own
@@ -142,8 +139,8 @@ for EXTENSION in signature encryption; do
     done
 done
 
-# One random .p12 password for this issuance (both .p12 files)
-P12_PASSWORD=$(pki_random_password)
+# One .p12 password per issuance: the signature's, shared by the encryption's
+P12_LIKE=""
 
 # Predecessors to revoke once everything below has succeeded
 REVOKE_CN=()
@@ -154,16 +151,12 @@ for EXTENSION in signature encryption; do
     # ECDH-based S/MIME encryption certificates, only ECDSA signing. Do not
     # change this to honor ${ALGORITHM}=EC for the encryption cert.
     if [ "${ALGORITHM}" == "EC" ] && [ ${EXTENSION} != "encryption" ]; then
-	"${OPENSSL}" genpkey \
-		-out "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \
-		-algorithm EC -pkeyopt ec_paramgen_curve:"${EC_PARAMGEN_CURVE}" -aes256 \
-		-pass file:"${CERTDIR}"/private/passphrase.txt
+	KEY_ID=$(pki_kc genkey --alg EC --curve "${EC_PARAMGEN_CURVE}" \
+		--out "${CERTDIR}/private/${CERTNAME}-${EXTENSION}.key.pem" --label "${EMAIL} - ${EXTENSION}")
 	HASH_DIGEST=${EC_HASH_DIGEST}
     else
-	"${OPENSSL}" genpkey \
-		-out "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \
-		-algorithm RSA -pkeyopt rsa_keygen_bits:"${RSA_KEYGEN_BITS}" -aes256 \
-		-pass file:"${CERTDIR}"/private/passphrase.txt
+	KEY_ID=$(pki_kc genkey --alg RSA --bits "${RSA_KEYGEN_BITS}" \
+		--out "${CERTDIR}/private/${CERTNAME}-${EXTENSION}.key.pem" --label "${EMAIL} - ${EXTENSION}")
 	HASH_DIGEST=${RSA_HASH_DIGEST}
     fi
 
@@ -171,7 +164,7 @@ for EXTENSION in signature encryption; do
     "${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 	-new -"${HASH_DIGEST}" \
 	-key "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \
-	-passin file:"${CERTDIR}"/private/passphrase.txt \
+	-passin fd:3 3< <(pki_kc get --id "${KEY_ID}") \
 	-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem -batch
 
     # Server certificate
@@ -180,7 +173,7 @@ for EXTENSION in signature encryption; do
 	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
 	-in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
-	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
+	-passin fd:3 3< <(pki_kc get --cert "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem") \
 	-subj "/CN=${EMAIL} - ${EXTENSION}/emailAddress=${EMAIL}/O=${ORG_NAME}/OU=${ORG_NAME} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
 	-batch
     then
@@ -203,14 +196,9 @@ for EXTENSION in signature encryption; do
 	exit 1
     fi
 
-    # The .p12 export password of this issuance (see the top of this file),
-    # in a file of its own next to the .p12. umask 077 keeps it private.
-    printf '%s\n' "${P12_PASSWORD}" > "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12.pass
-    chmod 0600 "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.p12.pass
-
-    # chain, verify, DER and .p12 (password from the file above)
-    pki_finish_cert "${CERTDIR}" "${CERTNAME}-${EXTENSION}" "${ISSUERCADIR}" "${ISSUERCANAME}" \
-        "${CERTDIR}/private/${CERTNAME}-${EXTENSION}.p12.pass"
+    # .p12 password: shared by the pair (keychain)
+    pki_finish_cert "${CERTDIR}" "${CERTNAME}-${EXTENSION}" "${ISSUERCADIR}" "${ISSUERCANAME}" "${P12_LIKE}"
+    P12_LIKE="${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem"
 done
 
 # Both certificates were issued; the previous pair no longer needs restoring.
@@ -227,9 +215,9 @@ for i in "${!REVOKE_CN[@]}"; do
     # migration: same identity issued under the pre-split intermediate
     if [ "${LEGACY_ISSUERCADIR}" != "${ISSUERCADIR}" ] \
            && [ -f "${LEGACY_ISSUERCADIR}/index.txt" ] \
-           && [ -f "${LEGACY_ISSUERCADIR}/private/passphrase.txt" ]; then
+           && [ -f "${LEGACY_ISSUERCADIR}/certs/${LEGACY_ISSUERCADIR}.cert.pem" ]; then
         pki_revoke_matching_cn "${LEGACY_ISSUERCADIR}" "${LEGACY_ISSUERCADIR}/openssl_${LEGACY_ISSUERCADIR}.cnf" "${REVOKE_CN[i]}" "${REVOKE_SERIAL[i]}" "${LEGACY_ISSUERCADIR}"
     fi
 done
 
-echo "The .p12 password of ${CERTNAME} is in ${CERTDIR}/private/${CERTNAME}-{signature,encryption}.p12.pass (give it only to the recipient)." >&2
+echo "The .p12 password of ${CERTNAME}: bin/pki_keychain.py get --cert ${CERTDIR}/certs/${CERTNAME}-signature.cert.pem --field p12 (give it only to the recipient)." >&2

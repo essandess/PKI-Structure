@@ -65,6 +65,7 @@ fi
 # Defines and exports OPENSSL, which delete_expired_certs (run by find -exec
 # in a child shell) needs. Without it every certificate would look expired.
 . "${PKI_ROOT}/bin/define_openssl.sh"
+. "${PKI_ROOT}/bin/pki_common.sh"
 
 : "${OPENSSL:?OPENSSL is not set by bin/define_openssl.sh}"
 
@@ -101,18 +102,18 @@ export DRY_RUN
 
 
 # update databases
-if [ -f "${CERTDIR}/private/passphrase.txt" ] && [ -f "${CERTDIR}/index.txt" ]; then
-    "${OPENSSL}" ca -config openssl.cnf -passin "file:${CERTDIR}/private/passphrase.txt" -updatedb
+if [ -f "${CERTDIR}/private/${CERTDIR}.key.pem" ] && [ -f "${CERTDIR}/index.txt" ]; then
+    "${OPENSSL}" ca -config openssl.cnf -passin fd:3 3< <(pki_kc get --cert "${CERTDIR}/certs/${CERTDIR}.cert.pem") -updatedb
 fi
-if [ -f "intermediate/private/passphrase.txt" ] && [ -f "intermediate/index.txt" ]; then
-    "${OPENSSL}" ca -config intermediate/openssl_intermediate.cnf -passin "file:intermediate/private/passphrase.txt" -updatedb
+if [ -f "intermediate/private/intermediate.key.pem" ] && [ -f "intermediate/index.txt" ]; then
+    "${OPENSSL}" ca -config intermediate/openssl_intermediate.cnf -passin fd:3 3< <(pki_kc get --cert "intermediate/certs/intermediate.cert.pem") -updatedb
 fi
-if [ -f "privoxy/private/passphrase.txt" ] && [ -f "privoxy/index.txt" ]; then
-    "${OPENSSL}" ca -config privoxy/openssl_privoxy.cnf -passin "file:privoxy/private/passphrase.txt" -updatedb
+if [ -f "privoxy/private/privoxy.key.pem" ] && [ -f "privoxy/index.txt" ]; then
+    "${OPENSSL}" ca -config privoxy/openssl_privoxy.cnf -passin fd:3 3< <(pki_kc get --cert "privoxy/certs/privoxy.cert.pem") -updatedb
 fi
 
-if [ -f "intermediate_smime/private/passphrase.txt" ] && [ -f "intermediate_smime/index.txt" ]; then
-    "${OPENSSL}" ca -config intermediate_smime/openssl_intermediate_smime.cnf -passin "file:intermediate_smime/private/passphrase.txt" -updatedb
+if [ -f "intermediate_smime/private/intermediate_smime.key.pem" ] && [ -f "intermediate_smime/index.txt" ]; then
+    "${OPENSSL}" ca -config intermediate_smime/openssl_intermediate_smime.cnf -passin fd:3 3< <(pki_kc get --cert "intermediate_smime/certs/intermediate_smime.cert.pem") -updatedb
 fi
 
 # do NOT delete S/MIME and intermediate CA's

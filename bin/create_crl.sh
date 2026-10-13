@@ -113,9 +113,10 @@ esac
 
 : "${OPENSSL:?OPENSSL is not set by bin/define_openssl.sh}"
 
-PASSPHRASE="${CERTDIR}/private/passphrase.txt"
-if [ ! -f "${PASSPHRASE}" ]; then
-    echo "Passphrase file '${PASSPHRASE}' doesn't exist." >&2
+CACERT="${CERTDIR}/certs/${CERTDIR}.cert.pem"
+CAKEY="${CERTDIR}/private/${CERTDIR}.key.pem"
+if [ ! -f "${CAKEY}" ]; then
+    echo "CA key '${CAKEY}' doesn't exist." >&2
     exit 1
 fi
 if [ ! -f "${CERTDIR}/index.txt" ]; then
@@ -193,7 +194,7 @@ fi
 trap 'rm -f "${CRLOUT}.tmp" "${CRLDER}.tmp"' EXIT
 "${OPENSSL}" ca -config "${CONFIG}" \
 	-gencrl \
-	-passin file:"${PASSPHRASE}" \
+	-passin fd:3 3< <(pki_kc get --cert "${CACERT}") \
 	-out "${CRLOUT}.tmp"
 
 "${OPENSSL}" crl -in "${CRLOUT}.tmp" -outform DER -out "${CRLDER}.tmp"

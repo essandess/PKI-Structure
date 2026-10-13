@@ -41,7 +41,7 @@ pki_mode() {
     fi
     IFS=/ read -r -a parts <<< "${dirpart}"
     for c in "${parts[@]}"; do
-        [[ "${c}" == *private* ]] && private=1
+        [[ "${c}" == *private* || "${c}" == keychain ]] && private=1
     done
 
     if [ -d "${DEST}/${rel}" ]; then

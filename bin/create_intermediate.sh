@@ -115,28 +115,15 @@ if [ "${PKI_RENEW:-0}" = "1" ]; then
     pki_ca_restore_key "${CERTDIR}" "${CERTNAME}"
     echo "Renewing ${CERTNAME} with its existing key." >&2
 else
-    case ${ALGORITHM} in
-	EC)
-	    "${OPENSSL}" genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-		    -algorithm EC -pkeyopt ec_paramgen_curve:"${EC_PARAMGEN_CURVE}" -aes256 \
-		    -pass file:"${CERTDIR}"/private/passphrase.txt
-	    ;;
-	RSA)
-	    "${OPENSSL}" genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-		    -algorithm RSA -pkeyopt rsa_keygen_bits:"${RSA_KEYGEN_BITS}" -aes256 \
-		    -pass file:"${CERTDIR}"/private/passphrase.txt
-	    ;;
-	*)
-	    echo "Unknown algorithm '${ALGORITHM}'"
-	    exit 1
-    esac
+    KEY_ID=$(pki_kc genkey --alg "${ALGORITHM}" --curve "${EC_PARAMGEN_CURVE}" --bits "${RSA_KEYGEN_BITS}" \
+	--out "${CERTDIR}/private/${CERTNAME}.key.pem" --label "${CERTNAME}")
 fi
 
 # Intermediate CA CSR
 "${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 	-new -"${HASH_DIGEST}" \
 	-key "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-	-passin file:"${CERTDIR}"/private/passphrase.txt \
+	-passin fd:3 3< <(pki_kc get --id "${KEY_ID}") \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".csr.pem -batch
 
 # Intermediate CA certificate
@@ -146,7 +133,7 @@ if "${OPENSSL}" ca -config openssl.cnf \
 	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
 	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	-passin file:"${ISSUERCADIR}"/private/passphrase.txt \
+	-passin fd:3 3< <(pki_kc get --cert "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem") \
         -batch
 then
     # a section missing from the cnf would silently issue an unrestricted CA
@@ -155,7 +142,7 @@ then
         "${OPENSSL}" ca -config openssl.cnf \
                 -revoke "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
                 -crl_reason superseded \
-                -passin file:"${ISSUERCADIR}"/private/passphrase.txt || true
+                -passin fd:3 3< <(pki_kc get --cert "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem") || true
         "${PKI_ROOT}"/bin/create_crl.sh "${ISSUERCANAME}" || true
         if [ "${PKI_RENEW:-0}" != "1" ]; then
             rm -f "${CERTDIR}"/private/"${CERTNAME}".key.pem

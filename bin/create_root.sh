@@ -72,21 +72,8 @@ if [ "${PKI_RENEW:-0}" = "1" ]; then
     pki_ca_restore_key "${CERTDIR}" "${CERTNAME}"
     echo "Renewing ${CERTNAME} with its existing key." >&2
 else
-    case ${ALGORITHM} in
-	EC)
-	    "${OPENSSL}" genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-		    -algorithm EC -pkeyopt ec_paramgen_curve:"${EC_PARAMGEN_CURVE}" -aes256 \
-		    -pass file:"${CERTDIR}"/private/passphrase.txt
-	    ;;
-	RSA)
-	    "${OPENSSL}" genpkey -out "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-		    -algorithm RSA -pkeyopt rsa_keygen_bits:"${RSA_KEYGEN_BITS}" -aes256 \
-		    -pass file:"${CERTDIR}"/private/passphrase.txt
-	    ;;
-	*)
-	    echo "Unknown algorithm '${ALGORITHM}'"
-	    exit 1
-    esac
+    KEY_ID=$(pki_kc genkey --alg "${ALGORITHM}" --curve "${EC_PARAMGEN_CURVE}" --bits "${RSA_KEYGEN_BITS}" \
+	--out "${CERTDIR}/private/${CERTNAME}.key.pem" --label "${CERTNAME}")
 fi
 
 # CA certificate
@@ -95,7 +82,7 @@ fi
 	-new -x509 -days "${DAYS}" -"${HASH_DIGEST}" \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
 	-key "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-	-passin file:"${CERTDIR}"/private/passphrase.txt -batch
+	-passin fd:3 3< <(pki_kc get --id "${KEY_ID}") -batch
 REISSUED=1
 
 # verify, .cer and .p12 (self-signed: no chain file)

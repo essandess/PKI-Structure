@@ -110,6 +110,8 @@ the next `pki_keychain.py init` (kept as `pki.kdbx.pre-keyfile`).
 bin/pki_keychain.py get --cert CERT [--field p12]     # print a secret
 bin/pki_keychain.py list | prune [-n] | acl-check
 bin/pki_keychain.py export-master | import-master     # escrow / restore the master item (stdin)
+bin/pki_keychain.py verify                            # master item readable and opens the database
+bin/pki_keychain.py export-master | import-master     # escrow / restore the master item (stdin)
 bin/pki_keychain.py migrate DIR [--rotate] [--remove-legacy]   # from passphrase.txt
 ```
 

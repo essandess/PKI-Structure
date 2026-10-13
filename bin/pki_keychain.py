@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# PKI_KEYCHAIN_PATCH_V2
+# PKI_KEYCHAIN_PATCH_V3
 """pki_keychain.py -- key passphrases in a KeePassXC database; its master
 password in the macOS keychain, its key file on disk.
 
@@ -27,6 +27,7 @@ Entries   one per private key, found by SHA-256 of its public key, so every
   get (--id ID | --cert CERT) [--field key|p12]
                                          print a secret (stdout only)
   forget (--id ID | --cert CERT)         delete the key's entries
+  verify                                 master item readable and opens the database
   export-master                          print the master password (escrow)
   import-master                          restore the master item from stdin; refuses if present
   migrate DIR [--rotate] [--remove-legacy]
@@ -155,7 +156,7 @@ def mk_state() -> bool:
     r = sec("find-generic-password", "-s", ITEM, mk_target())
     if r.returncode == 0:
         return True
-    if r.returncode == ERR_NOT_FOUND or "could not be found" in r.stderr:
+    if r.returncode == ERR_NOT_FOUND or "item could not be found" in r.stderr:
         return False
     return fail(f"cannot query '{ITEM}' in {mk_target()} (exit {r.returncode}): "
                 f"{r.stderr.strip()}; nothing was changed")
@@ -247,11 +248,46 @@ def mk_create(pw: str) -> None:
         fail("System keychain item is readable by non-root users; removed it")
 
 
+def has_item(keychain: str) -> bool:
+    return sec("find-generic-password", "-s", ITEM, keychain).returncode == 0
+
+
+def other_keychains() -> list[str]:
+    """Existing keychains, other than the queried one, that could hold the item."""
+    cand = [SYSTEM_KEYCHAIN, str(Path.home() / "Library" / "Keychains" / "login.keychain-db")]
+    for dom in ("user", "system", "common"):
+        cand += [ln.strip().strip('"') for ln in sec("list-keychains", "-d", dom).stdout.splitlines()
+                 if ln.strip()]
+    me, out = os.path.realpath(mk_target()), []
+    for k in cand:
+        if os.path.exists(k) and os.path.realpath(k) != me and k not in out:
+            out.append(k)
+    return out
+
+
+def verify_open(db: Path, kf: Path | None) -> None:
+    """The master item must exist, be readable, and open the database."""
+    if not mk_state():
+        where = [k for k in other_keychains() if has_item(k)]
+        fail(f"master item '{ITEM}' is not in {mk_target()}; "
+             + (f"it is in {', '.join(where)} (run as the matching user, or import-master)" if where
+                else "it is in no keychain searched, so the database cannot be opened")
+             + ". Restore: pki_keychain.py import-master (password on stdin). Nothing was changed")
+    mp = mk_get()
+    try:
+        kp(["ls", *(["-k", str(kf)] if kf else []), str(db)], [mp])
+    except KeychainError as e:
+        fail(f"master item '{ITEM}' is readable but does not open {db.name} "
+             f"(wrong item or key file): {e}")
+
+
 def ensure_master() -> bool:
     """Create the master item if definitively absent; True if created."""
     if mk_state():
         return False
     mk_create(new_secret())
+    print(f"Created master item '{ITEM}' in {mk_target()}. Escrow it now: "
+          "pki_keychain.py export-master", file=sys.stderr)
     return True
 
 
@@ -340,12 +376,10 @@ def ensure_db(d: Path | None = None) -> None:
     db, kf = dbfile(d), keyfile(d)
     if db.exists():
         # an existing database never gets a new master item or key file
-        if not mk_state():
-            fail(f"{db} exists but master item '{ITEM}' is not in {mk_target()}; nothing was "
-                 "changed. Restore it (pki_keychain.py import-master) or move the database away")
         if not kf.is_file():
             fail(f"{db} exists but key file {kf} is missing; nothing was changed. "
                  "Restore it or set PKI_KEYCHAIN_KEYFILE")
+        verify_open(db, kf)
         return
     if (d / LEGACY_DB_NAME).exists():
         migrate_legacy(d)
@@ -540,6 +574,21 @@ def cmd_prune(a) -> None:
                     db.rm(t)
 
 
+def cmd_verify(a) -> None:
+    d = kdir()
+    db, kf, old = dbfile(d), keyfile(d), d / LEGACY_DB_NAME
+    if db.exists():
+        if not kf.is_file():
+            fail(f"key file {kf} is missing")
+        verify_open(db, kf)
+    elif old.exists():
+        verify_open(old, None)
+    else:
+        print("no database; nothing to verify")
+        return
+    print("ok: master item readable, database opens")
+
+
 def cmd_acl_check(a) -> None:
     if not mk_state():
         fail(f"no '{ITEM}' in {mk_target()}")
@@ -660,6 +709,7 @@ def main() -> None:
     p.set_defaults(func=cmd_prune)
     sub.add_parser("list").set_defaults(func=cmd_list)
     sub.add_parser("acl-check").set_defaults(func=cmd_acl_check)
+    sub.add_parser("verify").set_defaults(func=cmd_verify)
 
     a = ap.parse_args()
     try:

@@ -440,6 +440,28 @@ fails  "master item not recreated"                    master_pw
 check  "import-master restores it"                    restore_master
 check  "restored master matches"                      test "$(master_pw)" = "${MASTER}"
 
+MASTER_ITEM="PKI-Structure KeePassXC Passphrase"
+master_pw()      { security find-generic-password -s "${MASTER_ITEM}" -w "${PKI_KEYCHAIN_FILE}"; }
+no_keyfile()     { master_pw | "${KPCLI}" ls -q keychain/pki-structure.kdbx; }
+restore_master() { printf '%s\n' "${MASTER}" | KC import-master; }
+MASTER=$(master_pw)
+check  "master item exists, is readable, opens the database"  KC verify
+fails  "database does not open without the key file"  no_keyfile
+check  "init keeps an existing master item"           KC init
+check  "master item unchanged by init"                test "$(master_pw)" = "${MASTER}"
+run    "drop master item"                             security delete-generic-password -s "${MASTER_ITEM}" "${PKI_KEYCHAIN_FILE}"
+refuse "init refuses a new master next to a database" "master item" KC init
+fails  "master item not recreated"                    master_pw
+refuse "verify reports the missing master item"       "master item" KC verify
+check  "import-master restores it"                    restore_master
+check  "restored master matches"                      test "$(master_pw)" = "${MASTER}"
+check  "verify passes after restore"                  KC verify
+run    "swap in a wrong master"                       bash -c 'security delete-generic-password -s "$1" "$3" >/dev/null && security add-generic-password -s "$1" -a pki_test -w "$2" "$3"' _ "${MASTER_ITEM}" wrong-password "${PKI_KEYCHAIN_FILE}"
+refuse "verify rejects a master that does not open"   "does not open" KC verify
+run    "drop the wrong master"                        security delete-generic-password -s "${MASTER_ITEM}" "${PKI_KEYCHAIN_FILE}"
+check  "right master restored"                        restore_master
+check  "verify passes again"                          KC verify
+
 # ================================================================ certificates
 step "chain, purpose, CRL"
 check "root CRL signature"              crl_ok root/crl/root.crl.pem root/certs/root.cert.pem
@@ -600,6 +622,8 @@ perm_audit() {
         find root intermediate intermediate_smime server codesign smime privoxy -path '*/private/*' -type f ! -perm 600
         find keychain -type d ! -perm 700
         find keychain -type f ! -perm 600
+        find keyfile -type d ! -perm 700
+        find keyfile -type f ! -perm 600
         find keyfile -type d ! -perm 700
         find keyfile -type f ! -perm 600
         find mdm-private -type d ! -perm 700

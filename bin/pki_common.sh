@@ -218,6 +218,9 @@ pki_ca_prepare() {
     # pki_structure.sh reports).
     [ -f "${cert}" ] || return 0
 
+    # Fail before anything is archived if the key passphrases are unreachable.
+    pki_kc verify >/dev/null
+
     if ! "${OPENSSL}" x509 -noout -in "${cert}" >/dev/null 2>&1; then
         echo "Error: cannot read '${cert}'." >&2
         exit 1

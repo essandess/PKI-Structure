@@ -5,7 +5,7 @@ PortGroup           github 1.0
 PortGroup           openssl 1.0
 
 # github.setup        essandess PKI-Structure 1.0.0 v
-github.setup        essandess pki-structure 081080999168de0d35ca5720971f79bafc8aa98e
+github.setup        essandess pki-structure 90825a8524de946cc96df72ee4d2cc71414df9ee
 version             1.0.0
 revision            0
 categories          security
@@ -25,9 +25,9 @@ long_description    {*}${description}. Creates a root and intermediate \
                     Creates signed PKI installer scripts and KeePassXC items \
                     for deployment.
 
-checksums           rmd160  1462bc55a735a1078204b279de45f443cedf0815 \
-                    sha256  8bb1f1f6db1f5aabe2a07ffc6375f27a621bca4810cafb2bf06e3820e3fae04e \
-                    size    108046
+checksums           rmd160  77d569e916873d0e659da44ef3ed096521838ee0 \
+                    sha256  281876683357a93b641c172f86ea5e4e6f011132e430511ddc8e432c7e0d5787 \
+                    size    116126
 
 # ${prefix}/var/macports/sources/rsync.macports.org/macports/release/tarballs/ports/_resources/port1.0/group/python-1.0.tcl
 set python_version  314
@@ -286,10 +286,9 @@ pre-test {
 test.run            yes
 test.asroot         yes
 test.dir            ${pki_test_dir}
-test.env-append     CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1 \
-                    PKI_ASSUME_YES=1
+test.env-append     PKI_TEST_DESTROY_PKI=1
 
-test.cmd            {printf "%s\n" "yes" | sh}
+test.cmd            sh
 test.target         test/pki_test.sh
 
 post-activate {

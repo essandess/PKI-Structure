@@ -5,7 +5,7 @@ PortGroup           github 1.0
 PortGroup           openssl 1.0
 
 # github.setup        essandess PKI-Structure 1.0.0 v
-github.setup        essandess pki-structure 46b47b331148a9506abdc5ec4f962ab864169db5
+github.setup        essandess pki-structure c204ee2a90b73998f82c9198f6dc3efe3786eb48
 version             1.0.0
 revision            0
 categories          security
@@ -16,18 +16,16 @@ platforms-append    any
 
 description         Private, configurable PKI toolkit with signed MDM, \
                     install scripts.
-long_description    {*}${description}. Creates a root and intermediate \
-                    certificate authority, server, S/MIME, code-signing, \
-                    and privoxy/adblock2privoxy certificates, with CRL \
-                    generation, publishing, and hosting daemons. Converts \
-                    user-defined yaml profiles into signed iOS MDM  \
-                    Apple Configurator.app .mobileconfig's packaged with PKI. \
-                    Creates signed PKI installer scripts and KeePassXC items \
-                    for deployment.
+long_description    {*}${description}. Shell tooling for a private PKI: \
+                    root, intermediate, and privoxy CAs\; server, code \
+                    signing, S/MIME, and adblock2privoxy certificates\; \
+                    CRL publication and revocation\; signed macOS install \
+                    scripts and MDM profiles\; KeePassXC password keychain \
+                    with macOS Keychain master password and separable keyfile.
 
-checksums           rmd160  29915d2041ef8c11c750db1f0195ae28546fa03d \
-                    sha256  f21fd11ca4984cad89e02ffa9f54c135f31a8ac964ecf34f5195fed0c1f196fd \
-                    size    125191
+checksums           rmd160  29859f599179aae007304f50ca242a718d2a704f \
+                    sha256  1a03c1619d67b068706d39d9f9869437cf06c5d32681433b2288446878478fdc \
+                    size    132637
 
 # ${prefix}/var/macports/sources/rsync.macports.org/macports/release/tarballs/ports/_resources/port1.0/group/python-1.0.tcl
 set python_version  314
@@ -47,26 +45,13 @@ depends_run-append  port:KeePassXC \
 
 depends_test-append port:KeePassXC
 
-post-patch {
-    foreach pyfile {configurate_yaml.py pki_validate.py}  {
-        reinplace -W ${worksrcpath} \
-                    "s|^#!/usr/bin/env python3|#!${python_bin}|" \
-                    bin/${pyfile}
-    }
-
-    reinplace -W ${worksrcpath} \
-                    "s|^PYTHON_DEFAULT=\"python3\"|PYTHON_DEFAULT=\"${python_bin_name}\"|" \
-                    bin/define_python.sh
-}
-
-post-patch {
-    reinplace "s|@PREFIX@|${prefix}|g" \
-                    ${worksrcpath}/etc/nginx.conf.sample
+proc is_private_path {path} {
+    return [regexp {(?:private|key)} [file tail $path]]
 }
 
 proc pki_lockdown {path {is_private 0}} {
     if {[file isdirectory $path]} {
-        if {[string match "*private*" [file tail $path]] || [file tail $path] in {keychain keyfile}} {
+        if {[[is_private_path $path]]} {
             set is_private 1
         }
         if {$is_private} {
@@ -95,6 +80,16 @@ proc pki_lockdown {path {is_private 0}} {
     }
 }
 
+proc url_to_reverse_dns {url} {
+    regexp {(?:[a-z]+://)?([^/:]+)(.*)} [string tolower $url] -> host path
+    set parts [lreverse [split $host .]]
+    # ignore trailing `.git` if the URL is a repo
+    foreach seg [split [string map {.git ""} $path] /] {
+        if {$seg ne ""} {lappend parts $seg}
+    }
+    join $parts .
+}
+
 set user_underscore_www         _www
 set group_underscore_www        _www
 
@@ -103,6 +98,30 @@ if {![existsuser ${user_underscore_www}]} {
 }
 if {![existsgroup ${group_underscore_www}]} {
     set group_underscore_www    nobody
+}
+
+post-patch {
+    foreach pyfile {configurate_yaml.py pki_keychain.py pki_validate.py}  {
+        reinplace -W ${worksrcpath} \
+                    "s|^#!/usr/bin/env python3|#!${python_bin}|" \
+                    bin/${pyfile}
+    }
+
+    reinplace -W ${worksrcpath} \
+                    "s|^PYTHON_DEFAULT=\"python3\"|PYTHON_DEFAULT=\"${python_bin_name}\"|" \
+                    bin/define_python.sh
+
+    foreach script \
+        {bin/pki_keychain.py bin/create_keepass_entry.sh test/pki_test.sh}  {
+        reinplace -W ${worksrcpath} \
+                    "s|[url_to_reverse_dns ${github.homepage}]|org.macports.${name}|g" \
+                    ${script}
+    }
+}
+
+post-patch {
+    reinplace "s|@PREFIX@|${prefix}|g" \
+                    ${worksrcpath}/etc/nginx.conf.sample
 }
 
 use_configure       no
@@ -115,14 +134,19 @@ set pki_etc_dir     [subst ${pki_etc_dir_str}]
 set pki_log_dir_str {${prefix}/var/log/pki-structure}
 set pki_log_dir     [subst ${pki_log_dir_str}]
 set pki_test_dir    ${workpath}/tmp/${name}
-set mdm_private_credentials     mdm-private/credentials
-set mdm_private_yaml            mdm-private/yaml
+
+set keepass_keychain_dir    keychain
+set keepass_keyfile_dir     keyfile
+set mdm_credentials_dir     mdm-private/credentials
+set mdm_yaml_dir            mdm-private/yaml
 
 destroot {
     # reference in share, live deployment in etc
     xinstall -d     ${destroot}${pki_share_dir} \
-                    ${destroot}${pki_etc_dir}/${mdm_private_credentials} \
-                    ${destroot}${pki_etc_dir}/${mdm_private_yaml} \
+                    ${destroot}${pki_etc_dir}/${keepass_keychain_dir} \
+                    ${destroot}${pki_etc_dir}/${keepass_keyfile_dir} \
+                    ${destroot}${pki_etc_dir}/${mdm_credentials_dir} \
+                    ${destroot}${pki_etc_dir}/${mdm_yaml_dir} \
                     ${destroot}${prefix}/var/log/nginx \
 
     # reference scripts and configurations in share
@@ -156,12 +180,14 @@ post-destroot {
 }
 
 # The deployment directory is where the user's actual PKI (keys, certs,
-# index files) will be created - keep it even though destroot itself
-# only populates it with the replicated scripts/configs
+# keychain, index files) will be created - keep these even though destroot
+# itself only populates some with replicated scripts/configs
 destroot.keepdirs-append \
                     ${destroot}${pki_etc_dir} \
-                    ${destroot}${pki_etc_dir}/${mdm_private_credentials} \
-                    ${destroot}${pki_etc_dir}/${mdm_private_yaml} \
+                    ${destroot}${pki_etc_dir}/${keepass_keychain_dir} \
+                    ${destroot}${pki_etc_dir}/${keepass_keyfile_dir} \
+                    ${destroot}${pki_etc_dir}/${mdm_credentials_dir} \
+                    ${destroot}${pki_etc_dir}/${mdm_yaml_dir} \
                     ${destroot}${pki_log_dir} \
                     ${destroot}${prefix}/var/log/nginx
 
@@ -311,11 +337,11 @@ post-activate {
         bin/create_organization_mdm.sh \
         etc/nginx.conf \
         etc/pf.conf \
-        "${mdm_private_yaml}/ios-restrictions-baseline.yaml" \
-        "${mdm_private_yaml}/ios-configurator-extras.yaml" \
-        "${mdm_private_yaml}/myorganization-settings.yaml" \
-        "${mdm_private_yaml}/myorganization-trust.yaml" \
-        "${mdm_private_yaml}/persona-settings.yaml" \
+        "${mdm_yaml_dir}/ios-restrictions-baseline.yaml" \
+        "${mdm_yaml_dir}/ios-configurator-extras.yaml" \
+        "${mdm_yaml_dir}/myorganization-settings.yaml" \
+        "${mdm_yaml_dir}/myorganization-trust.yaml" \
+        "${mdm_yaml_dir}/persona-settings.yaml" \
     ] {
         regsub {\.sample$} $personalized "" personalized_nosample
         if {[file exists ${pki_etc_dir}/${personalized_nosample}.sample]} {
@@ -333,7 +359,7 @@ post-activate {
         bin/create_organization_smime.sh \
         bin/create_organization_credentials.sh \
         bin/create_organization_mdm.sh \
-        "${mdm_private_yaml}/ios-restrictions-baseline.yaml" \
+        "${mdm_yaml_dir}/ios-restrictions-baseline.yaml" \
     ] {
         if {![file exists ${pki_etc_dir}/${personalized}]} {
             ui_msg "--->  Seeding ${pki_etc_dir}/${personalized} from the baseline template"

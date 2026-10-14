@@ -1,9 +1,10 @@
 # PKI Structure
 
-Shell tooling for a private PKI: root, intermediate, and `privoxy` CAs;
-server, code signing, S/MIME, and adblock2privoxy certificates; revocation and
-CRL publication; signed macOS install scripts; KeePassXC storage of their
-passwords; and signed MDM profiles. Private keys are passphrase protected.
+Shell tooling for a private PKI: root, intermediate, and privoxy CAs;
+server, code signing, S/MIME, and adblock2privoxy certificates; 
+CRL publication and revocation; signed macOS install scripts and MDM
+profiles; KeePassXC password keychain with macOS Keychain master password
+and separable keyfile.
 
 | Tool | Purpose |
 |---|---|

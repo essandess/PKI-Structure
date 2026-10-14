@@ -467,14 +467,14 @@ while val[o]:
 rounds = struct.unpack("<Q", p["I"])[0]
 mem = struct.unpack("<Q", p["M"])[0] >> 20
 lanes = struct.unpack("<I", p["P"])[0]
-assert rounds >= 32 and mem >= 64 and lanes == 4, f"{rounds} rounds, {mem} MiB, {lanes} lanes"
+assert rounds >= 16 and mem >= 64 and lanes == 4, f"{rounds} rounds, {mem} MiB, {lanes} lanes"
 PY
 }
 help_fits() { ! COLUMNS=80 "${PYTHON}" bin/pki_keychain.py --help | awk 'length($0) > 80 { bad = 1 } END { exit bad }' || return 0; }
 MASTER=$(master_pw)
 check  "master item: service (Where) is the reverse-DNS id, name is the label" has_label
 check  "database is KDBX4, Argon2, >= 64 MiB, 4 lanes" KC kdf-check
-check  "database KDF: >= 32 rounds, >= 64 MiB, 4 lanes" kdf_rounds_ok
+check  "database KDF: >= 16 rounds, >= 64 MiB, 4 lanes" kdf_rounds_ok
 check  "pki_keychain.py --help fits 80 columns"       help_fits
 check  "master item exists, is readable, opens the database" KC verify
 fails  "database does not open without the key file"  no_keyfile

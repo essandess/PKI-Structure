@@ -33,7 +33,7 @@
 # re-runs change nothing; --force-update re-stamps it (use it after a new
 # master password).
 #
-# Entries go into the database's root group, Passwords (--group PATH below it).
+# Entries go into the database's root group, Password (--group PATH below it).
 #
 # Signature: before anything is decrypted, the signature of INSTALLER
 # (detached PKCS#7 between __SIGNATURE_BELOW__ and __PAYLOAD_BELOW__) is
@@ -143,6 +143,9 @@ trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
 # ---------------------------------------------------------------- options
+
+# not actually an option
+KEEPASS_GROUP_NAME="Password"
 
 DB="" KEYFILE="" NOPASS=0 TITLE="" GROUP="" XML_OUT="" ROOT_CERT=""
 FORCE=0 BACKUP=1 KP_PROMPT=0 DRYRUN=0 INDIVIDUAL=0
@@ -686,7 +689,7 @@ emit_entry() {
     emit_string Title "${TITLE}"
     emit_string UserName ""
     pw=${INSTALLER_PW}
-    emit_string Password "${pw}" protect
+    emit_string "${KEEPASS_GROUP_NAME}" "${pw}" protect
     emit_string URL ""
     printf '\t\t\t<String><Key>Notes</Key><Value>%s</Value></String>\n' \
         "$(xml_esc "${notes}" 1)"
@@ -728,7 +731,7 @@ emit_xml() {
     printf '<KeePassFile>\n\t<Meta>\n'
     printf '\t\t<Generator>%s</Generator>\n' "${0##*/}"
     printf '\t</Meta>\n\t<Root>\n'
-    emit_group_open Passwords ""
+    emit_group_open Password ""
     if [ -n "${GROUP}" ]; then IFS=/ read -r -a parts <<<"${GROUP}"; fi
     for p in "${parts[@]}"; do
         path="${path}/${p}"

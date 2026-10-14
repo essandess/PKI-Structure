@@ -4,7 +4,7 @@
 password in the macOS keychain, its key file on disk.
 
 Database  $PKI_KEYCHAIN_DIR (default <PKI_ROOT>/keychain)/pki-structure.kdbx; dir 0700, file 0600.
-          KDBX4, Argon2id, 64 MiB, 4 lanes, ~$PKI_KEYCHAIN_KDF_MS (64) ms; written here because
+          KDBX4, Argon2id, 64 MiB, 4 lanes, ~$PKI_KEYCHAIN_KDF_ROUNDS (16); written here because
           keepassxc-cli db-create makes KDBX3.
 Key file  $PKI_KEYCHAIN_KEYFILE (default <PKI_ROOT>/keyfile/pki-structure.keyx), KeePassXC
           XML v2, 0600. Required to open the database; keep a copy offline. Generated
@@ -77,11 +77,17 @@ KEYFILE_NAME = "pki-structure.keyx"
 SECURITY = "/usr/bin/security"
 SYSTEM_KEYCHAIN = "/Library/Keychains/System.keychain"
 ERR_NOT_FOUND = 44  # security(1) exit status for errSecItemNotFound
-KDF_MS = int(os.environ.get("PKI_KEYCHAIN_KDF_MS") or 64)  # master is 192 random bits: a slow KDF adds nothing
+KDF_MS = 250  # 1/4 s
+KDF_ROUNDS_MIN = 16  # master is 192 random bits: a slow KDF adds nothing
+KDF_ROUNDS = int(os.environ.get("PKI_KEYCHAIN_KDF_ROUNDS") or KDF_ROUNDS_MIN)
 KDF_MEM_MIB, KDF_LANES = 64, 4
+PASSWORD_GROUP = "Password"
+
+# https://keepass.info/help/kb/kdbx.html
 ARGON2D = bytes.fromhex("ef636ddf8c29444b91f7a9a403e30a0c")
 ARGON2ID = bytes.fromhex("9e298b1956db4773b23dfc3ec6f0a1e6")
 AES256_CIPHER = bytes.fromhex("31c1f2e6bf714350be5805216afc5aff")
+
 TITLE_RE = re.compile(r"^[0-9a-f]{16} :: ")
 os.umask(0o077)
 
@@ -376,14 +382,15 @@ def make_kdbx4(path: Path, password: str, kf: Path) -> None:
     composite = hashlib.sha256(hashlib.sha256(password.encode()).digest() + keyfile_key(kf)).digest()
     seed, iv, salt = os.urandom(32), os.urandom(16), os.urandom(32)
 
-    def argon(iters: int) -> bytes:
-        return Argon2id(salt=salt, length=32, iterations=iters, lanes=KDF_LANES,
+    def argon(rounds: int) -> bytes:
+        return Argon2id(salt=salt, length=32,
+                        iterations=rounds, lanes=KDF_LANES,
                         memory_cost=KDF_MEM_MIB * 1024).derive(composite)
 
     t0 = time.perf_counter()
     argon(1)
-    iters = max(1, round(KDF_MS / max(1e-3, (time.perf_counter() - t0) * 1000)))
-    transformed = argon(iters)
+    rounds = max(KDF_ROUNDS, round(KDF_MS / max(1e-3, (time.perf_counter() - t0) * 1000)))
+    transformed = argon(rounds)
 
     def field(i: int, data: bytes) -> bytes:
         return struct.pack("<BI", i, len(data)) + data
@@ -391,7 +398,7 @@ def make_kdbx4(path: Path, password: str, kf: Path) -> None:
     kdfp = _vdict([(0x42, "$UUID", ARGON2ID), (0x42, "S", salt),
                    (0x04, "P", struct.pack("<I", KDF_LANES)),
                    (0x05, "M", struct.pack("<Q", KDF_MEM_MIB << 20)),
-                   (0x05, "I", struct.pack("<Q", iters)), (0x04, "V", struct.pack("<I", 0x13))])
+                   (0x05, "I", struct.pack("<Q", rounds)), (0x04, "V", struct.pack("<I", 0x13))])
     header = (struct.pack("<III", 0x9AA2D903, 0xB54BFB67, 0x00040000)
               + field(2, AES256_CIPHER) + field(3, struct.pack("<I", 1)) + field(4, seed)
               + field(7, iv) + field(11, kdfp) + field(0, b"\r\n\r\n"))
@@ -407,7 +414,7 @@ def make_kdbx4(path: Path, password: str, kf: Path) -> None:
            '<MemoryProtection><ProtectTitle>False</ProtectTitle><ProtectUserName>False</ProtectUserName>'
            '<ProtectPassword>True</ProtectPassword><ProtectURL>False</ProtectURL>'
            '<ProtectNotes>False</ProtectNotes></MemoryProtection><RecycleBinEnabled>True</RecycleBinEnabled>'
-           f'</Meta><Root><Group><UUID>{guid}</UUID><Name>Passwords</Name><IconID>48</IconID><Times>'
+           f'</Meta><Root><Group><UUID>{guid}</UUID><Name>{PASSWORD_GROUP}</Name><IconID>48</IconID><Times>'
            f'<CreationTime>{now}</CreationTime><LastModificationTime>{now}</LastModificationTime>'
            f'<LastAccessTime>{now}</LastAccessTime><ExpiryTime>{now}</ExpiryTime><Expires>False</Expires>'
            f'<UsageCount>0</UsageCount><LocationChanged>{now}</LocationChanged></Times>'

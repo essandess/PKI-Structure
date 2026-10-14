@@ -5,10 +5,11 @@
 # Usage: create_keepass_entry.sh --db FILE [--key-file FILE | --no-password]
 #            [--title TITLE] [--group PATH] [--individual-smime-passwords]
 #            [--force-update] [--no-backup] [--kp-prompt] [-n|--dry-run]
-#            [--root-cert FILE]
-#            INSTALLER
+#            [--root-cert FILE] [--export-master] [--master-title TITLE]
+#            [INSTALLER]
 #        create_keepass_entry.sh --xml-out FILE [--title TITLE]
-#            [--group PATH] [--individual-smime-passwords] [--root-cert FILE] INSTALLER
+#            [--group PATH] [--individual-smime-passwords] [--root-cert FILE]
+#            [--export-master] [INSTALLER]
 #
 # Example:
 #   bin/create_keepass_entry.sh --db MYDBFILE.keypass \
@@ -21,6 +22,18 @@
 # is used to decrypt the payload (the same openssl steps the installer
 # runs; the installer itself is never executed), which proves the password
 # is right and gives the contents.
+#
+# PKI_KEYCHAIN_PATCH_V3
+# --export-master: also store the PKI master password (the macOS keychain item
+# bin/pki_keychain.py export-master reads: System keychain as root, else the
+# login keychain) as an entry titled --master-title (default 'PKI-Structure
+# KeePassXC Passphrase') in the same database. Without INSTALLER only that
+# entry is written. The PKI database also needs keyfile/pki-structure.keyx and
+# the .kdbx itself: back all three up. The entry's time is the key file's, so
+# re-runs change nothing; --force-update re-stamps it (use it after a new
+# master password).
+#
+# Entries go into the database's root group, Passwords (--group PATH below it).
 #
 # Signature: before anything is decrypted, the signature of INSTALLER
 # (detached PKCS#7 between __SIGNATURE_BELOW__ and __PAYLOAD_BELOW__) is
@@ -102,8 +115,20 @@ die()  { echo "Error: $*" >&2; exit 1; }
 warn() { echo "Warning: $*" >&2; }
 
 usage() {
-    sed -n '3,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
-    echo "See the comments at the top of ${0##*/} for details."
+    cat <<'USAGE'
+Usage: create_keepass_entry.sh --db FILE [--key-file FILE | --no-password]
+         [--title TITLE] [--group PATH] [--individual-smime-passwords]
+         [--force-update] [--no-backup] [--kp-prompt] [-n|--dry-run]
+         [--root-cert FILE] [--export-master] [--master-title TITLE]
+         [INSTALLER]
+       create_keepass_entry.sh --xml-out FILE [--group PATH]
+         [--individual-smime-passwords] [--root-cert FILE]
+         [--export-master] [INSTALLER]
+
+Stores an installer's password (and, with --export-master, the PKI master
+password from the macOS keychain) in a KeePassXC database. INSTALLER is
+optional only with --export-master. See the top of this file for details.
+USAGE
 }
 
 # Private temporary directory: holds the decrypted payload and the XML
@@ -121,6 +146,8 @@ trap 'exit 143' TERM HUP
 
 DB="" KEYFILE="" NOPASS=0 TITLE="" GROUP="" XML_OUT="" ROOT_CERT=""
 FORCE=0 BACKUP=1 KP_PROMPT=0 DRYRUN=0 INDIVIDUAL=0
+EXPORT_MASTER=0 MASTER_TITLE="PKI-Structure KeePassXC Passphrase"
+MASTER_SERVICE="com.github.essandess.pki-structure.keepassxc-passphrase"
 ARGS=()
 
 need_arg() { if [ "$1" -lt 2 ]; then die "$2 needs an argument"; fi; }
@@ -134,6 +161,8 @@ while [ $# -gt 0 ]; do
         --group)         need_arg $# "$1"; GROUP=$2; shift 2 ;;
         --xml-out)       need_arg $# "$1"; XML_OUT=$2; shift 2 ;;
         --root-cert)     need_arg $# "$1"; ROOT_CERT=$2; shift 2 ;;
+        --export-master) EXPORT_MASTER=1; shift ;;
+        --master-title)  need_arg $# "$1"; MASTER_TITLE=$2; shift 2 ;;
         --individual-smime-passwords) INDIVIDUAL=1; shift ;;
         --force-update)  FORCE=1; shift ;;
         --no-backup)     BACKUP=0; shift ;;
@@ -146,9 +175,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ "${#ARGS[@]}" -eq 0 ]; then usage >&2; die "no INSTALLER given"; fi
-if [ "${#ARGS[@]}" -gt 1 ]; then die "give exactly one INSTALLER"; fi
-INSTALLER=${ARGS[0]}
+if [ "${#ARGS[@]}" -eq 0 ] && [ "${EXPORT_MASTER}" -eq 0 ]; then
+    usage >&2; die "no INSTALLER given (or --export-master)"
+fi
+if [ "${#ARGS[@]}" -gt 1 ]; then die "give at most one INSTALLER"; fi
+INSTALLER=${ARGS[0]:-}
 if [ -n "${XML_OUT}" ] && [ -n "${DB}" ]; then
     die "--xml-out and --db are alternatives"
 fi
@@ -164,12 +195,16 @@ fi
 GROUP=${GROUP#/}; GROUP=${GROUP%/}
 if [[ ${GROUP} == *//* ]]; then die "--group has an empty path part"; fi
 
-if [ ! -f "${INSTALLER}" ] || [ ! -r "${INSTALLER}" ]; then
-    die "cannot read installer ${INSTALLER}"
+INST_BASE=""
+if [ -n "${INSTALLER}" ]; then
+    if [ ! -f "${INSTALLER}" ] || [ ! -r "${INSTALLER}" ]; then
+        die "cannot read installer ${INSTALLER}"
+    fi
+    INST_BASE=${INSTALLER##*/}
+    if [ -z "${TITLE}" ]; then TITLE="S/MIME installer: ${INST_BASE}"; fi
+else
+    TITLE=${TITLE:-${MASTER_TITLE}}
 fi
-INST_BASE=${INSTALLER##*/}
-
-if [ -z "${TITLE}" ]; then TITLE="S/MIME installer: ${INST_BASE}"; fi
 
 # ---------------------------------------------------------------- helpers
 
@@ -246,6 +281,15 @@ parse_name() {
     ID="${rest#* :: }"
 }
 
+TMPD=$(mktemp -d "${TMPDIR:-/tmp}/kpentry.XXXXXX")
+WORK="${TMPD}/payload"
+mkdir "${WORK}"
+M_TYPE=() M_GROUP=() M_KEY=() M_FILE=() M_NOTE=()
+R_FILE=() R_GROUP=() R_SRC=() R_START=() R_END=() R_NOTE=() R_HASH=()
+SKIPPED=() G_MEM=() ORDER=()
+MOD=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+if [ -n "${INSTALLER}" ]; then   # everything about the installer, up to the plan
 # --------------------------------------------- the installer and its payload
 
 # hdr_val NAME: value of NAME="..." in the installer's header lines
@@ -284,9 +328,7 @@ extract_payload() {
         | tar -xJf - -C "$1"
 }
 
-TMPD=$(mktemp -d "${TMPDIR:-/tmp}/kpentry.XXXXXX")
-WORK="${TMPD}/payload"
-mkdir "${WORK}"
+
 # ------------------------------------------- signature of the installer
 
 # create_credentials.sh signs every installer (detached PKCS#7, DER, base64,
@@ -467,10 +509,20 @@ else
     MOD=$(file_mtime_iso "${INSTALLER}")
 fi
 
+fi   # -n INSTALLER
+
 # ------------------------------------------------------------------- plan
 
 print_plan() {
     local g i k s m
+    if [ "${EXPORT_MASTER}" -eq 1 ]; then
+        echo "Master password: entry '${MASTER_TITLE}'"
+        echo "  (PKI keychain item ${MASTER_SERVICE})"
+    fi
+    if [ -z "${INSTALLER}" ]; then
+        echo "Database:    ${DB:-none (--xml-out)}"
+        return 0
+    fi
     echo "S/MIME installer: ${INSTALLER}"
     echo "Entry title: ${TITLE}${GROUP:+  (group ${GROUP})}"
     if [ -n "${DB}" ]; then echo "Database:    ${DB}"; fi
@@ -531,6 +583,20 @@ fi
 # -------------------------------------------------------------------- XML
 
 TS_OLD="2000-01-01T00:00:00Z"   # never newer than what the database has
+
+# --export-master: read the master password before anything is written
+MASTER_PW="" MASTER_MOD=${TS_OLD}
+if [ "${EXPORT_MASTER}" -eq 1 ]; then
+    MASTER_PW=$("${PYTHON}" "${SCRIPT_DIR}/pki_keychain.py" export-master) \
+        || die "cannot read the master password from the macOS keychain"
+    [ -n "${MASTER_PW}" ] || die "the master password is empty"
+    MASTER_KEYFILE=${PKI_KEYCHAIN_KEYFILE:-${PKI_ROOT}/keyfile/pki-structure.keyx}
+    if [ "${FORCE}" -eq 1 ]; then
+        MASTER_MOD=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+    elif [ -f "${MASTER_KEYFILE}" ]; then
+        MASTER_MOD=$(file_mtime_iso "${MASTER_KEYFILE}")
+    fi
+fi
 
 # xml_esc STRING ALLOW_NEWLINES: STRING escaped for XML text
 xml_esc() {
@@ -632,19 +698,44 @@ emit_entry() {
     printf '\t\t</Entry>\n'
 }
 
+build_master_notes() {
+    echo "PKI-Structure KeePassXC master password. This Notes text holds no secrets."
+    echo "macOS keychain item: ${MASTER_SERVICE}"
+    echo "keychain/pki-structure.kdbx opens only with this password and the key"
+    echo "file keyfile/pki-structure.keyx: back up all three."
+    echo "Data as of ${MASTER_MOD}."
+}
+
+emit_master_entry() {
+    local notes
+    notes=$(build_master_notes)
+    printf '\t\t<Entry>\n\t\t\t<UUID>%s</UUID>\n' \
+        "$(det_uuid "entry:${GROUP}/${MASTER_TITLE}")"
+    printf '\t\t\t<IconID>0</IconID>\n\t\t\t<Tags>pki;master</Tags>\n'
+    emit_times "${MASTER_MOD}"
+    emit_string Title "${MASTER_TITLE}"
+    emit_string UserName ""
+    emit_string Password "${MASTER_PW}" protect
+    emit_string URL ""
+    printf '\t\t\t<String><Key>Notes</Key><Value>%s</Value></String>\n' \
+        "$(xml_esc "${notes}" 1)"
+    printf '\t\t</Entry>\n'
+}
+
 emit_xml() {
     local parts=() p path=""
     printf '<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n'
     printf '<KeePassFile>\n\t<Meta>\n'
     printf '\t\t<Generator>%s</Generator>\n' "${0##*/}"
     printf '\t</Meta>\n\t<Root>\n'
-    emit_group_open Root ""
+    emit_group_open Passwords ""
     if [ -n "${GROUP}" ]; then IFS=/ read -r -a parts <<<"${GROUP}"; fi
     for p in "${parts[@]}"; do
         path="${path}/${p}"
         emit_group_open "${p}" "${path}"
     done
-    emit_entry
+    if [ -n "${INSTALLER}" ]; then emit_entry; fi
+    if [ "${EXPORT_MASTER}" -eq 1 ]; then emit_master_entry; fi
     for p in "${parts[@]}"; do printf '\t\t</Group>\n'; done
     printf '\t\t</Group>\n\t</Root>\n</KeePassFile>\n'
 }

@@ -8,7 +8,7 @@
 # the S/MIME intermediate (intermediate_smime/). If
 # certificates named CERTNAME already exist, they are first moved to
 # SHA1-named files, ${CERTNAME}-{signature,encryption}.${CERTSHA1}.{key,cert,chain}.pem,
-# .cer, .p12 and .p12.pass, and new certificates are issued in their place.
+# .cer and .p12, and new certificates are issued in their place.
 # Any other still-valid certificate the intermediate CA has on record under
 # the same CommonName (EMAIL - signature / EMAIL - encryption) is revoked as
 # superseded, but only once BOTH replacements are issued and complete: if
@@ -45,7 +45,7 @@ SMIME_FILES="private/key.pem private/p12 certs/cert.pem certs/chain.pem certs/ce
 # Move existing signature/encryption certificates for CERTNAME to SHA1-named
 # files so that new ones can be issued. Each one is named after its own
 # fingerprint, so the signature and encryption archives never collide.
-# passphrase.txt is left in place: it protects the archived and new keys.
+# Key passphrases stay in the keychain: an archived key keeps its entry.
 archive_existing_smime() {
     local ext old_cert sha1 item dir suffix
     for ext in signature encryption; do
@@ -59,7 +59,8 @@ archive_existing_smime() {
 	fi
 	ARCHIVED="${ARCHIVED} ${ext}:${sha1}"
 
-	echo "Archiving existing ${CERTNAME}-${ext} certificate as ${CERTNAME}-${ext}.${sha1}.*" >&2
+	echo "Archiving existing ${CERTNAME}-${ext} certificate as" >&2
+	echo "  ${CERTNAME}-${ext}.${sha1}.*" >&2
 	for item in ${SMIME_FILES}; do
 	    dir=${item%%/*}
 	    suffix=${item#*/}
@@ -77,7 +78,8 @@ restore_archived_smime() {
     if [ -z "${ARCHIVED}" ] || [ -n "${REISSUED}" ]; then
 	return 0
     fi
-    echo "Reissuing the ${CERTNAME} S/MIME certificates failed; restoring the previous ones." >&2
+    echo "Reissuing the ${CERTNAME} S/MIME certificates failed;" >&2
+    echo "restoring the previous ones." >&2
     local pair ext sha1 item dir suffix
     for pair in ${ARCHIVED}; do
 	ext=${pair%%:*}
@@ -115,7 +117,9 @@ CERTNAME="$2"
 # certificate exists. "encryption" is the longer role, so it decides.
 CN_LONGEST="${EMAIL} - encryption"
 if [ "${#CN_LONGEST}" -gt 64 ]; then
-    echo "Error: EMAIL '${EMAIL}' is too long: the CN '${CN_LONGEST}' would be ${#CN_LONGEST} characters and X.509 allows 64, so EMAIL may have at most 51." >&2
+    echo "Error: EMAIL '${EMAIL}' is too long:" >&2
+    echo "the CN '${CN_LONGEST}' would be ${#CN_LONGEST} characters;" >&2
+    echo "X.509 allows 64, so EMAIL may have at most 51." >&2
     exit 1
 fi
 
@@ -220,4 +224,6 @@ for i in "${!REVOKE_CN[@]}"; do
     fi
 done
 
-echo "The .p12 password of ${CERTNAME}: bin/pki_keychain.py get --cert ${CERTDIR}/certs/${CERTNAME}-signature.cert.pem --field p12 (give it only to the recipient)." >&2
+echo "The .p12 password of ${CERTNAME} (give it only to the recipient):" >&2
+echo "  bin/pki_keychain.py get --field p12 \\" >&2
+echo "    --cert ${CERTDIR}/certs/${CERTNAME}-signature.cert.pem" >&2

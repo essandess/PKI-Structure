@@ -10,7 +10,7 @@ passwords; and signed MDM profiles. Private keys are passphrase protected.
 | `create_{root,intermediate,intermediate_smime,server,codesign,smime,privoxy,adblock2privoxy}.sh` | CAs and leaf certificates; reissue supersedes the predecessor |
 | `revoke_certificate.sh`, `create_crl.sh`, `publish_crls.sh` | Revocation, CRL generation and publication |
 | `create_credentials.sh` | Signed macOS install scripts for CA certificates and S/MIME identities |
-| `create_keepass_entry.sh` | Install-script passwords into KeePassXC |
+| `create_keepass_entry.sh` | Install-script and master passwords into KeePassXC |
 | `configurate_yaml.py` | Signed `.mobileconfig` profiles from YAML |
 | `create_organization_{smime,mdm,credentials}.sh` | Per-deployment driver scripts, seeded from `.sample` |
 | `certs_that_expire_soon.sh`, `updatedb_and_delete_expired_certs.sh` | Expiry reports and cleanup |
@@ -24,7 +24,8 @@ passwords; and signed MDM profiles. Private keys are passphrase protected.
   `OPENSSL=/path`. Apple's LibreSSL is rejected (`openssl.cnf` uses `.include`).
   Generated installers run on the macOS-native `openssl`, `tar` with xz, and
   `security`.
-* Python 3.9+ with `cryptography` 44+ (Argon2id: KDBX4 database creation) (certificate validation) and `PyYAML` (MDM profiles).
+* Python 3.9+ with `cryptography` 44+ (certificate validation, KDBX4 database
+  creation) and `PyYAML` (MDM profiles).
 * `keepassxc-cli` (key passphrases, KeePassXC integration; `KEEPASSXC_CLI` overrides lookup) and macOS `security`.
 * `rsync` (deployment); `sf-pwgen` (optional; falls back to `openssl rand`).
 
@@ -104,7 +105,9 @@ Passphrase` in the System keychain (root) or the login keychain; it is created o
 absent, never replaced or deleted, and never next to an existing database. The database
 also needs a key file (KeePassXC XML v2, 0600): `keyfile/pki-structure.keyx`, or the path in
 `PKI_KEYCHAIN_KEYFILE`; keep a copy offline. Back up the database, the key file and the item
-together: any one missing makes the others useless.
+together: any one missing makes the others useless. The database is KDBX4
+(Argon2id, 64 MiB, 4 lanes, at least 32 rounds); `kdf-check` and `verify`
+check it. `PKI_KEYCHAIN_KDF_ITER` sets the rounds for a new database.
 
 ```sh
 bin/pki_keychain.py get --cert CERT [--field p12]     # print a secret
@@ -112,7 +115,6 @@ bin/pki_keychain.py list | prune [-n] | acl-check
 bin/pki_keychain.py export-master | import-master     # escrow / restore the master item (stdin)
 bin/pki_keychain.py verify | kdf-check    # master item + database; KDBX4/Argon2 policy
 bin/pki_keychain.py installer-set | installer-get --name NAME   # installer passwords (stdin / stdout)
-bin/pki_keychain.py export-master | import-master     # escrow / restore the master item (stdin)
 ```
 
 
@@ -124,8 +126,8 @@ export CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1
 
 Order: root, intermediate, intermediate_smime, then leaf certificates; `privoxy` before
 `adblock2privoxy`. Options for every script: `-a EC|RSA`, `-c`/`--clean` and
-`-vc`/`--veryclean` (delete the directory's keys, certificates, and CA
-database; `-vc` also `passphrase.txt`; prompts; irreversible, and issued
+`-vc`/`--veryclean` (delete the directory's keys, certificates, CA
+database and their keychain entries; `-vc` also a legacy `passphrase.txt`; prompts; irreversible, and issued
 certificates can no longer be revoked), `-h`.
 
 | Script | Issuer | Default key | Validity | Output |
@@ -182,7 +184,7 @@ trusts the root. There are two intermediates, each restricted:
 S/MIME cannot carry `nameConstraints` (addresses include gmail.com and
 icloud.com), so its limit is the EKU. `create_intermediate_smime.sh` is
 `create_intermediate.sh` with `CERTDIR=intermediate_smime`; renewal, `--new-key`
-and archiving behave identically. Each has its own key, `passphrase.txt`,
+and archiving behave identically. Each has its own key,
 `index.txt` and CRL (`root`, `intermediate`, and `intermediate_smime`
 `.crl`/`.cer` are all published by `publish_crls.sh`). `create_intermediate.sh`
 refuses (and revokes) a certificate that does not carry its restrictions
@@ -363,7 +365,10 @@ installer's keychain password (never running the installer), so a missing or wro
 password fails before anything is stored. `--ca-certs-only` installers are unencrypted and rejected.
 
 * **Default:** one entry whose Password is the installer password; Notes list
-  the contents, no passwords.
+  the contents, no passwords. Entries go into the root group, `Passwords`.
+* **`--export-master`:** also (or, without `INSTALLER`, only) the PKI master
+  password from the macOS keychain, titled `PKI-Structure KeePassXC Passphrase`
+  (`--master-title`). Back up the key file and the `.kdbx` with it.
 * **`--individual-smime-passwords`:** also one protected attribute per S/MIME
   issuance (`<certname> [<issued>]`), each checked against its `.p12`.
 * Entry UUIDs derive from title and group, so re-runs update in place.
@@ -444,9 +449,9 @@ Environment: `CERTDIR`, `CERTNAME` (default `codesign`), `ISSUERCADIR`,
 `*/crl/*.crl`.
 
 **Permissions.** Signing does not encrypt: `mdm-private/` holds secrets
-(account passwords, installers, `.pass` files). `configurate_yaml.py` sets
+(account passwords, installers). `configurate_yaml.py` sets
 `umask 077` and does not check or change modes; `create_credentials.sh` sets
-`mdm-private/` and `credentials/` to 0700, installers 0750, `.pass` 0600;
+`mdm-private/` and `credentials/` to 0700, installers 0750;
 `replicate_pki_structure.sh` audits `mdm-private/` at the destination.
 
 **iOS trust.** A root installed by manually opening a profile is not trusted

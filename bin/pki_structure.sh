@@ -156,8 +156,9 @@ Useage:
 
 $(basename "$0") [-a|--algorithm [EC (default)|RSA]] [-h|--help] [-c|--clean] ${POSITIONAL_ARGS_USAGE}
 
-Key passphrases are random, one per key, in ./keychain/pki-structure.kdbx (KeePassXC);
-its master password is in the macOS keychain and its key file in ./keyfile (bin/pki_keychain.py).
+Key passphrases are random, one per key, in the KeePassXC database
+./keychain/pki-structure.kdbx. Its master password is in the macOS
+keychain and its key file in ./keyfile (bin/pki_keychain.py).
 USEAGE
     exit 0
 fi
@@ -173,7 +174,7 @@ fi
 if [ "${CLEAN}" == "1" ]; then
     if [ "${PKI_ASSUME_YES:-0}" == "0" ]; then
 	echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
-	read -p "This will delete existing keys and certificates in '${CERTDIR}'. Are you sure [y/N]? " -r < /dev/tty
+	read -p "This will delete the keys and certificates in '${CERTDIR}'."$'\n'"Are you sure [y/N]? " -r < /dev/tty
 	echo    # (optional) move to a new line
 	if [[ ! "${REPLY}" =~ ^[yY]$ ]]; then
 	    echo "Aborted." >&2

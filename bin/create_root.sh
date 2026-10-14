@@ -96,9 +96,11 @@ show_cert_text "${CERTDIR}"/certs/"${CERTNAME}".cert.pem
 "${PKI_ROOT}"/bin/create_crl.sh root
 
 if [ -n "${PKI_ARCHIVED_SHA1}" ]; then
-    echo "The previous root is archived as ${CERTNAME}.${PKI_ARCHIVED_SHA1}.*; it was not revoked." >&2
-    echo "The new root certificate has a new fingerprint: install and trust it on every device" >&2
-    echo "(bin/create_credentials.sh --ca-only, the MDM trust profile) before the old one expires." >&2
+    echo "The previous root is archived (not revoked) as" >&2
+    echo "  ${CERTNAME}.${PKI_ARCHIVED_SHA1}.*" >&2
+    echo "The new root certificate has a new fingerprint: install and" >&2
+    echo "trust it on every device (bin/create_credentials.sh," >&2
+    echo "the MDM trust profile) before the old one expires." >&2
     if [ "${PKI_RENEW}" != "1" ]; then
 	echo "This root has a NEW KEY: reissue the intermediate and everything below it." >&2
     fi

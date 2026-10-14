@@ -441,9 +441,41 @@ installer_roundtrip() {
     printf 'pw2\n' | KC installer-set --name test_installer.sh &&
     [ "$(KC installer-get --name test_installer.sh)" = pw2 ]
 }
+kdf_rounds_ok() {   # header of the KDBX4 file: Argon2 passes, memory, lanes
+    "${PYTHON}" - "${PKI_KEYCHAIN_DIR}/pki-structure.kdbx" <<'PY'
+import struct
+import sys
+
+d = open(sys.argv[1], "rb").read(1 << 16)
+assert d[:8] == bytes.fromhex("03d9a29a67fb4bb5"), "not a KDBX file"
+assert struct.unpack_from("<H", d, 10)[0] == 4, "not KDBX4"
+pos = 12
+while True:
+    i, size = d[pos], struct.unpack_from("<I", d, pos + 1)[0]
+    pos += 5
+    val, pos = d[pos:pos + size], pos + size
+    if i == 0:
+        sys.exit("no KDF parameters")
+    if i == 11:
+        break
+p, o = {}, 2
+while val[o]:
+    n = struct.unpack_from("<I", val, o + 1)[0]
+    name, o = val[o + 5:o + 5 + n].decode(), o + 5 + n
+    n = struct.unpack_from("<I", val, o)[0]
+    p[name], o = val[o + 4:o + 4 + n], o + 4 + n
+rounds = struct.unpack("<Q", p["I"])[0]
+mem = struct.unpack("<Q", p["M"])[0] >> 20
+lanes = struct.unpack("<I", p["P"])[0]
+assert rounds >= 32 and mem >= 64 and lanes == 4, f"{rounds} rounds, {mem} MiB, {lanes} lanes"
+PY
+}
+help_fits() { ! COLUMNS=80 "${PYTHON}" bin/pki_keychain.py --help | awk 'length($0) > 80 { bad = 1 } END { exit bad }' || return 0; }
 MASTER=$(master_pw)
 check  "master item: service (Where) is the reverse-DNS id, name is the label" has_label
 check  "database is KDBX4, Argon2, >= 64 MiB, 4 lanes" KC kdf-check
+check  "database KDF: >= 32 rounds, >= 64 MiB, 4 lanes" kdf_rounds_ok
+check  "pki_keychain.py --help fits 80 columns"       help_fits
 check  "master item exists, is readable, opens the database" KC verify
 fails  "database does not open without the key file"  no_keyfile
 check  "init keeps an existing master item"           KC init
@@ -582,6 +614,21 @@ check "keepass: xml export"                      bin/create_keepass_entry.sh --x
 check "keepass: xml well-formed, secrets protected" grep -q 'ProtectInMemory="True"' "${TMPD}/entry.xml"
 refuse "keepass: CA-only installer rejected"     "not encrypted" bin/create_keepass_entry.sh --db "${DB}" \
     --key-file "${KEYFILE}" --no-password "${INST_CA}"
+
+KP_MASTER_TITLE="PKI-Structure KeePassXC Passphrase"
+kpmaster() { bin/create_keepass_entry.sh --db "${DB}" --key-file "${KEYFILE}" --no-password --export-master; }
+kp_master_matches() {
+    local got
+    got=$("${KPCLI}" show -s -a Password -k "${KEYFILE}" --no-password "${DB}" "${KP_MASTER_TITLE}") || return 1
+    [ "${got}" = "$(master_pw)" ]
+}
+kp_master_in_passwords() {   # the entry sits in the root group, Passwords
+    "${KPCLI}" ls -k "${KEYFILE}" --no-password "${DB}" | grep -qxF "${KP_MASTER_TITLE}"
+}
+check "keepass: --export-master without an installer"  kpmaster
+check "keepass: the entry holds the master password"    kp_master_matches
+check "keepass: the entry is in the group Passwords"    kp_master_in_passwords
+check "keepass: --export-master re-run is idempotent"   kpmaster
 
 # ================================================================ MDM profiles
 step "MDM profiles"

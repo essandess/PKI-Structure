@@ -173,11 +173,16 @@ pki_sha1_files cp "${CERTDIR}" "${CERTNAME}" "${CERTNAME}" "${INTERMEDIATE_FILES
 "${PKI_ROOT}"/bin/create_crl.sh "${CERTDIR}"
 
 if [ -n "${PKI_ARCHIVED_SHA1}" ]; then
-    echo "The previous ${CERTNAME} is archived as ${CERTNAME}.${PKI_ARCHIVED_SHA1}.*; it was not revoked." >&2
+    echo "The previous ${CERTNAME} is archived (not revoked) as" >&2
+    echo "  ${CERTNAME}.${PKI_ARCHIVED_SHA1}.*" >&2
     if [ "${PKI_RENEW}" = "1" ]; then
-	echo "Renewed with the same key: certificates it issued stay valid. Publish the new ${CERTNAME}.cer (bin/publish_crls.sh)." >&2
+	echo "Renewed with the same key: certificates it issued stay valid." >&2
+	echo "Publish the new ${CERTNAME}.cer (bin/publish_crls.sh)." >&2
     else
 	echo "This ${CERTDIR} has a NEW KEY: reissue the ${LEAVES} certificates." >&2
-	echo "If the old key was compromised, revoke the old certificate: bin/revoke_certificate.sh ${CERTDIR}/certs/${CERTNAME}.${PKI_ARCHIVED_SHA1}.cert.pem root CACompromise" >&2
+	echo "If the old key was compromised, revoke the old certificate:" >&2
+	echo "  bin/revoke_certificate.sh \\" >&2
+	echo "    ${CERTDIR}/certs/${CERTNAME}.${PKI_ARCHIVED_SHA1}.cert.pem \\" >&2
+	echo "    root CACompromise" >&2
     fi
 fi

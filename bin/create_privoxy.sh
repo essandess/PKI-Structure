@@ -92,9 +92,12 @@ pki_finish_cert "${CERTDIR}" "${CERTNAME}" "${CERTDIR}" "${CERTNAME}"
 show_cert_text "${CERTDIR}"/certs/"${CERTNAME}".cert.pem
 
 if [ -n "${PKI_ARCHIVED_SHA1}" ]; then
-    echo "The previous ${CERTNAME} CA is archived as ${CERTNAME}.${PKI_ARCHIVED_SHA1}.*; it was not revoked." >&2
-    echo "Redeploy the new certificate where privoxy uses it (privoxy/README.md) and trust it on the devices that use the proxy." >&2
+    echo "The previous ${CERTNAME} CA is archived (not revoked) as" >&2
+    echo "  ${CERTNAME}.${PKI_ARCHIVED_SHA1}.*" >&2
+    echo "Redeploy the new certificate where privoxy uses it" >&2
+    echo "(privoxy/README.md) and trust it on the devices that use the proxy." >&2
     if [ "${PKI_RENEW}" != "1" ]; then
-	echo "This CA has a NEW KEY: reissue the certificates it signed (bin/create_adblock2privoxy.sh)." >&2
+	echo "This CA has a NEW KEY: reissue the certificates it signed" >&2
+	echo "(bin/create_adblock2privoxy.sh)." >&2
     fi
 fi

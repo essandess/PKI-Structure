@@ -740,7 +740,9 @@ find_codesign_signer() {
         die "no usable code-signing certificate '${certname}.<sha1>.cert.pem' in ${certdir}/certs${want:+ with sha1 ${want}} (see the reasons above)."
     fi
     if [ "${usable}" -gt 1 ]; then
-        echo "Note: ${usable} usable code-signing certificates; using the newest (${SIGNER_SHA1}); set PKI_CODESIGN_SHA1 to override." >&2
+        echo "Note: ${usable} usable code-signing certificates; using the newest" >&2
+        echo "(${SIGNER_SHA1})." >&2
+        echo "Set PKI_CODESIGN_SHA1 to override." >&2
     fi
 
     SIGNER_KEY="${certdir}/private/${certname}.${SIGNER_SHA1}.key.pem"
@@ -880,7 +882,8 @@ build_common() {
         echo "Using S/MIME intermediate: ${INTERMEDIATE_PEM}" >&2
         stage_ca_cert ca intermediate_smime "${INTERMEDIATE_PEM}"
     else
-        echo "Note: no valid intermediate_smime certificate; S/MIME certificates cannot validate." >&2
+        echo "Note: no valid intermediate_smime certificate;" >&2
+        echo "S/MIME certificates cannot validate." >&2
     fi
 
     # opt-in: the privoxy CA is for TLS interception on proxy clients only
@@ -1875,7 +1878,7 @@ done < <(list_smime_certnames)
 # S/MIME certificates matching any 'NAME_GLOB'
 UNION=()
 if [ "${#NAMES[@]}" -eq 0 ]; then
-    echo "Note: no 'NAME_GLOB' given; no S/MIME certificates will be included in the payload." >&2
+    echo "Note: no 'NAME_GLOB' given; no S/MIME certificates are included." >&2
 else
     for n in "${NAMES[@]}"; do
         select_certnames "${n}" \
@@ -1927,7 +1930,8 @@ if confirm "Create ${out}?"; then
         installer_pw=$(pki_random_password)
     fi
     write_installer "${label}" "${STAGE}/payload" "${out}" "${tarname}" "${installer_pw}"
-    echo "Created ${out}, signed with '$(cert_cn "${CS_CERT}")'." >&2
+    echo "Created ${out}" >&2
+    echo "  signed with '$(cert_cn "${CS_CERT}")'." >&2
     if [ "${ENCRYPT}" = 1 ]; then
         if ! printf '%s\n' "${installer_pw}" | pki_kc installer-set --name "${out##*/}"; then
             rm -f "${out}"
@@ -1935,11 +1939,16 @@ if confirm "Create ${out}?"; then
         fi
         installer_pw=""
         rm -f "${out}.pass"   # written by earlier versions
-        echo "The installer password (SECRET) is in the PKI keychain: bin/pki_keychain.py installer-get --name ${out##*/}" >&2
-        echo "Send it to the user by a different channel than ${out##*/}." >&2
+        echo "The installer password (SECRET) is in the PKI keychain," >&2
+        echo "entry ${out##*/}:" >&2
+        echo "  bin/pki_keychain.py installer-get --name NAME" >&2
+        echo "Send it by a different channel than the installer." >&2
     fi
-    echo "Send the root CA's SHA-256 fingerprint separately too, so that it can be checked on a machine that does not have the root yet:" >&2
-    "${OPENSSL}" x509 -noout -fingerprint -sha256 -in "${ROOT_CERT}" >&2
+    echo "Send the root CA's SHA-256 fingerprint separately too, so it" >&2
+    echo "can be checked on a machine that does not have the root yet:" >&2
+    fp=$("${OPENSSL}" x509 -noout -fingerprint -sha256 -in "${ROOT_CERT}" | sed 's/^.*=//')
+    printf '  %s\n  %s\n' "${fp:0:47}" "${fp:48}" >&2
 else
-    echo "Skipped ${out} (answer y at the prompt, or set PKI_ASSUME_YES=1)." >&2
+    echo "Skipped ${out}" >&2
+    echo "(answer y at the prompt, or set PKI_ASSUME_YES=1)." >&2
 fi

@@ -63,7 +63,8 @@ pki_archive_existing_cert() {
     fi
     PKI_ARCHIVED_SHA1="${sha1}"
 
-    echo "Archiving existing ${certname} as ${certname}.${PKI_ARCHIVED_SHA1}.*" >&2
+    echo "Archiving existing ${certname} as" >&2
+    echo "  ${certname}.${PKI_ARCHIVED_SHA1}.*" >&2
     local item dir ext
     for item in ${files}; do
         dir=${item%%/*}
@@ -126,8 +127,11 @@ pki_revoke_matching_cn() {
             continue
         fi
 
-        pki_confirm "An existing valid certificate with CommonName '${target_cn}' (serial ${serial}, in ${issuer_dir}) will be superseded and revoked."
-        echo "Revoking superseded certificate: serial ${serial}, CN=${target_cn}, in ${issuer_dir}" >&2
+        pki_confirm "An existing valid certificate will be superseded and revoked:
+  CommonName '${target_cn}'
+  serial ${serial}, in ${issuer_dir}"
+        echo "Revoking superseded certificate, CN=${target_cn}" >&2
+        echo "  serial ${serial}, in ${issuer_dir}" >&2
         "${OPENSSL}" ca -config "${issuer_config}" \
             -revoke "${newcert}" \
             -crl_reason superseded \
@@ -165,11 +169,13 @@ pki_cap_days() {
     now=$(date +%s)
     left=$(( (end - now) / 86400 - 1 ))
     if [ "${left}" -lt 1 ]; then
-        echo "Error: issuer certificate '${issuer}' expires in less than two days; renew it first." >&2
+        echo "Error: issuer certificate '${issuer}'" >&2
+        echo "expires in less than two days; renew it first." >&2
         return 1
     fi
     if [ "${left}" -lt "${days}" ]; then
-        echo "Note: validity shortened from ${days} to ${left} days because issuer '${issuer}' ends sooner." >&2
+        echo "Note: validity shortened from ${days} to ${left} days:" >&2
+        echo "  issuer '${issuer}' ends sooner." >&2
         days="${left}"
     fi
     printf '%s' "${days}"
@@ -228,23 +234,28 @@ pki_ca_prepare() {
     enddate=$("${OPENSSL}" x509 -noout -enddate -in "${cert}" | sed 's|^notAfter=||')
 
     if [ "${window_only}" = "1" ] && ! pki_expires_within "${cert}"; then
-        echo "Error: '${cert}' is valid until ${enddate}, more than ${PKI_RENEW_WINDOW_DAYS} days away." >&2
-        echo "A new ${certname} is issued only within ${PKI_RENEW_WINDOW_DAYS} days of expiry (change with PKI_RENEW_WINDOW_DAYS)," >&2
-        echo "or after cleaning with -c/-vc, which deletes the CA and everything it issued." >&2
+        echo "Error: '${cert}' is valid until ${enddate}," >&2
+        echo "more than ${PKI_RENEW_WINDOW_DAYS} days away." >&2
+        echo "A new ${certname} is issued only within ${PKI_RENEW_WINDOW_DAYS} days of expiry" >&2
+        echo "(change with PKI_RENEW_WINDOW_DAYS), or after cleaning with" >&2
+        echo "-c/-vc, which deletes the CA and everything it issued." >&2
         exit 1
     fi
 
     if [ "${new_key}" != "1" ]; then
         if [ ! -f "${key}" ]; then
-            echo "Error: '${key}' is missing, so '${cert}' cannot be renewed with its key; use --new-key." >&2
+            echo "Error: '${key}' is missing," >&2
+            echo "so '${cert}' cannot be renewed with its key; use --new-key." >&2
             exit 1
         fi
         PKI_RENEW=1
-        what="renew ${certname} (valid until ${enddate}) with its existing key"
+        what="renew ${certname} with its existing key"
     else
-        what="replace ${certname} (valid until ${enddate}) with a NEW KEY"
+        what="replace ${certname} with a NEW KEY"
     fi
-    pki_confirm "About to ${what}; the current files are archived as ${certname}.<sha1>.*." \
+    pki_confirm "About to ${what}.
+  Valid until ${enddate}; the current files are archived
+  as ${certname}.<sha1>.*." \
         "Aborted: declined to renew ${certname}."
 
     trap 'pki_restore_archived_cert "${PKI_CA_DIR}" "${PKI_CA_NAME}" "${PKI_CA_FILES}"' EXIT

@@ -761,7 +761,7 @@ def cmd_acl_check(a) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="PKI key passphrases in a KeePassXC database.")
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
 
     def sel(p):
         g = p.add_mutually_exclusive_group(required=True)
@@ -805,6 +805,7 @@ def main() -> None:
         p.add_argument("--name", required=True)
         p.set_defaults(func=fn)
 
+    ap.epilog = "commands: " + ", ".join(sub.choices)
     a = ap.parse_args()
     try:
         a.func(a)

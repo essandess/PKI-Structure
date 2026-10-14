@@ -15,9 +15,9 @@
 #       mdm-private/credentials/install_credentials_persona_S.sh
 #
 # INSTALLER is an encrypted installer made by create_credentials.sh, e.g.
-# install_credentials_persona_S.sh, with the installer password in
-# INSTALLER.pass (line 1). Nothing is searched for in the PKI tree: the
-# installer and its .pass file are the only inputs. The installer password
+# install_credentials_persona_S.sh. Its password is read from the PKI keychain
+# (bin/pki_keychain.py installer-get; entry = the installer's file name).
+# Nothing else is searched for in the PKI tree. The installer password
 # is used to decrypt the payload (the same openssl steps the installer
 # runs; the installer itself is never executed), which proves the password
 # is right and gives the contents.
@@ -30,7 +30,7 @@
 # no way to skip it. Revocation of the signer is not checked.
 #
 # Default: ONE entry in an existing KeePassXC database whose Password is the
-# installer password (INSTALLER.pass). Nothing else secret is stored. Its
+# installer password (from the PKI keychain). Nothing else secret is stored. Its
 # Notes list what the installer contains, never a password.
 #
 # --individual-smime-passwords: also store the password of each S/MIME .p12
@@ -96,6 +96,7 @@ if [ -f "${SCRIPT_DIR}/define_openssl.sh" ]; then
     . "${SCRIPT_DIR}/define_openssl.sh"
 fi
 OPENSSL=${OPENSSL:-openssl}
+. "${SCRIPT_DIR}/define_python.sh"
 
 die()  { echo "Error: $*" >&2; exit 1; }
 warn() { echo "Warning: $*" >&2; }
@@ -167,7 +168,6 @@ if [ ! -f "${INSTALLER}" ] || [ ! -r "${INSTALLER}" ]; then
     die "cannot read installer ${INSTALLER}"
 fi
 INST_BASE=${INSTALLER##*/}
-PASSFILE="${INSTALLER}.pass"
 
 if [ -z "${TITLE}" ]; then TITLE="S/MIME installer: ${INST_BASE}"; fi
 
@@ -268,10 +268,10 @@ if ! [[ ${ENC_CIPHER} =~ ^[a-z0-9-]+$ ]] || ! [[ ${ENC_ITER} =~ ^[0-9]+$ ]]; the
     die "cannot read the payload encryption settings from ${INST_BASE}"
 fi
 
-if [ ! -f "${PASSFILE}" ] || [ ! -r "${PASSFILE}" ]; then
-    die "cannot read ${PASSFILE} (made along with the installer)"
-fi
-if [ -z "$(read_pw "${PASSFILE}" 1)" ]; then die "${PASSFILE} line 1 is empty"; fi
+# the installer password lives in the PKI keychain (a shell variable: not exported, not in argv)
+INSTALLER_PW=$("${PYTHON}" "${SCRIPT_DIR}/pki_keychain.py" installer-get --name "${INST_BASE}") \
+    || die "no installer password for ${INST_BASE} in the PKI keychain"
+[ -n "${INSTALLER_PW}" ] || die "the installer password for ${INST_BASE} is empty"
 
 # extract_payload DIR: the installer's own steps (its payload function, then
 # tar -xJf): base64, openssl enc -d with the installer password on fd 3 (never
@@ -280,7 +280,7 @@ extract_payload() {
     sed '1,/^__PAYLOAD_BELOW__$/d' "${INSTALLER}" | "${OPENSSL}" base64 -d \
         | "${OPENSSL}" enc -d "-${ENC_CIPHER}" -pbkdf2 -md sha256 \
               -iter "${ENC_ITER}" \
-              -pass fd:3 3< <(printf '%s\n' "$(read_pw "${PASSFILE}" 1)") \
+              -pass fd:3 3< <(printf '%s\n' "${INSTALLER_PW}") \
         | tar -xJf - -C "$1"
 }
 
@@ -368,7 +368,7 @@ collect_anchors
 verify_installer_signature
 
 if ! extract_payload "${WORK}" 2>/dev/null; then
-    die "cannot decrypt the payload of ${INST_BASE} with ${PASSFILE##*/}"
+    die "cannot decrypt the payload of ${INST_BASE} with its keychain password"
 fi
 if [ ! -f "${WORK}/manifest" ]; then
     die "the decrypted payload has no manifest: wrong password file?"
@@ -459,14 +459,12 @@ mapfile -t ORDER < <(
         printf '%s\t%s\n' "${G_LABEL[g]}" "${g}"
     done | sort -t$'\t' -k1,1 | cut -f2)
 
-# Entry time: the newer of the installer and its .pass file, so unchanged
-# sources mean no update
+# Entry time: the installer's mtime (a new password means a new installer), so
+# an unchanged installer means no update
 if [ "${FORCE}" -eq 1 ]; then
     MOD=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 else
-    newest=${INSTALLER}
-    if [ "${PASSFILE}" -nt "${newest}" ]; then newest=${PASSFILE}; fi
-    MOD=$(file_mtime_iso "${newest}")
+    MOD=$(file_mtime_iso "${INSTALLER}")
 fi
 
 # ------------------------------------------------------------------- plan
@@ -477,7 +475,7 @@ print_plan() {
     echo "Entry title: ${TITLE}${GROUP:+  (group ${GROUP})}"
     if [ -n "${DB}" ]; then echo "Database:    ${DB}"; fi
     echo
-    echo "Password field: installer password (${PASSFILE##*/}, line 1);" \
+    echo "Password field: installer password (PKI keychain);" \
          "it decrypts the payload"
     echo "The payload holds ${#M_TYPE[@]} item(s):"
     for ((m = 0; m < ${#M_TYPE[@]}; m++)); do
@@ -590,7 +588,7 @@ build_notes() {
     local g i m
     echo "S/MIME credentials installer. This Notes text holds no passwords."
     echo "Installer: ${INST_BASE}"
-    echo "The Password field is the installer password (${INST_BASE}.pass);"
+    echo "The Password field is the installer password (PKI keychain: ${INST_BASE});"
     echo "it decrypts the installer's payload."
     echo "Data as of ${MOD} (newest source file)."
     echo
@@ -621,7 +619,7 @@ emit_entry() {
     emit_times "${MOD}"
     emit_string Title "${TITLE}"
     emit_string UserName ""
-    pw=$(read_pw "${PASSFILE}" 1)
+    pw=${INSTALLER_PW}
     emit_string Password "${pw}" protect
     emit_string URL ""
     printf '\t\t\t<String><Key>Notes</Key><Value>%s</Value></String>\n' \

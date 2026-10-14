@@ -87,6 +87,8 @@ trap 'exit 143' TERM HUP
 # the master password goes into a throwaway keychain, never the real one
 command -v security >/dev/null 2>&1 || die "macOS security(1) required."
 export PKI_KEYCHAIN_FILE="${TMPD}/pki_test.keychain-db"
+# the database and key file are useless once this master is gone: keep them out of the tree
+export PKI_KEYCHAIN_DIR="${TMPD}/keychain" PKI_KEYCHAIN_KEYFILE="${TMPD}/keyfile/pki-structure.keyx"
 security create-keychain -p pki_test "${PKI_KEYCHAIN_FILE}" >/dev/null
 security set-keychain-settings "${PKI_KEYCHAIN_FILE}"
 security unlock-keychain -p pki_test "${PKI_KEYCHAIN_FILE}"
@@ -414,10 +416,10 @@ key_opens() { "${OPENSSL}" pkey -in "$1" -noout -passin fd:3 3< <(KC get --cert 
 p12_opens() { "${OPENSSL}" pkcs12 -legacy -noout -in "$1" -passin fd:3 3< <(KC get --cert "$2" --field p12); }
 p12_shared() { [ "$(KC get --cert "$1" --field p12)" = "$(KC get --cert "$2" --field p12)" ]; }
 check "no passphrase files in the tree"             no_secret_files
-check "keychain directory 0700"                     mode_is keychain 700
-check "database 0600"                               mode_is keychain/pki-structure.kdbx 600
-check "key file 0600"                               mode_is keyfile/pki-structure.keyx 600
-check "key file directory 0700"                     mode_is keyfile 700
+check "keychain directory 0700"                     mode_is "${PKI_KEYCHAIN_DIR}" 700
+check "database 0600"                               mode_is "${PKI_KEYCHAIN_DIR}/pki-structure.kdbx" 600
+check "key file 0600"                               mode_is "${PKI_KEYCHAIN_KEYFILE}" 600
+check "key file directory 0700"                     mode_is "${PKI_KEYCHAIN_KEYFILE%/*}" 700
 check "root key opens with its keychain passphrase" key_opens root/private/root.key.pem root/certs/root.cert.pem
 check "intermediate key opens"                      key_opens intermediate/private/intermediate.key.pem intermediate/certs/intermediate.cert.pem
 check "S/MIME .p12 opens with its keychain password" p12_opens "smime/private/${SM}-signature.p12" "smime/certs/${SM}-signature.cert.pem"
@@ -426,41 +428,40 @@ run "stray certificate" "${OPENSSL}" req -x509 -newkey ec -pkeyopt ec_paramgen_c
     -subj /CN=stray -keyout "${TMPD}/stray.key" -out "${TMPD}/stray.pem"
 refuse "unknown key has no entry" "no keychain entry" KC get --cert "${TMPD}/stray.pem"
 
-MASTER_ITEM="PKI-Structure KeePassXC Passphrase"
-master_pw()      { security find-generic-password -s "${MASTER_ITEM}" -w "${PKI_KEYCHAIN_FILE}"; }
-no_keyfile()     { master_pw | "${KPCLI}" ls -q keychain/pki-structure.kdbx; }
+SERVICE="com.github.essandess.pki-structure.keepassxc-passphrase"
+LABEL="PKI-Structure KeePassXC Passphrase"
+master_pw()      { security find-generic-password -s "${SERVICE}" -w "${PKI_KEYCHAIN_FILE}"; }
+master_attrs()   { security find-generic-password -s "${SERVICE}" "${PKI_KEYCHAIN_FILE}"; }
+has_label()      { master_attrs | grep -q "=\"${LABEL}\""; }
+no_keyfile()     { master_pw | "${KPCLI}" ls -q "${PKI_KEYCHAIN_DIR}/pki-structure.kdbx"; }
 restore_master() { printf '%s\n' "${MASTER}" | KC import-master; }
+installer_roundtrip() {
+    printf 'pw-%s\n' "$$" | KC installer-set --name test_installer.sh &&
+    [ "$(KC installer-get --name test_installer.sh)" = "pw-$$" ] &&
+    printf 'pw2\n' | KC installer-set --name test_installer.sh &&
+    [ "$(KC installer-get --name test_installer.sh)" = pw2 ]
+}
 MASTER=$(master_pw)
+check  "master item: service (Where) is the reverse-DNS id, name is the label" has_label
+check  "database is KDBX4, Argon2, >= 64 MiB, 4 lanes" KC kdf-check
+check  "master item exists, is readable, opens the database" KC verify
 fails  "database does not open without the key file"  no_keyfile
 check  "init keeps an existing master item"           KC init
 check  "master item unchanged by init"                test "$(master_pw)" = "${MASTER}"
-run    "drop master item"                             security delete-generic-password -s "${MASTER_ITEM}" "${PKI_KEYCHAIN_FILE}"
-refuse "init refuses a new master next to a database" "master item" KC init
-fails  "master item not recreated"                    master_pw
-check  "import-master restores it"                    restore_master
-check  "restored master matches"                      test "$(master_pw)" = "${MASTER}"
-
-MASTER_ITEM="PKI-Structure KeePassXC Passphrase"
-master_pw()      { security find-generic-password -s "${MASTER_ITEM}" -w "${PKI_KEYCHAIN_FILE}"; }
-no_keyfile()     { master_pw | "${KPCLI}" ls -q keychain/pki-structure.kdbx; }
-restore_master() { printf '%s\n' "${MASTER}" | KC import-master; }
-MASTER=$(master_pw)
-check  "master item exists, is readable, opens the database"  KC verify
-fails  "database does not open without the key file"  no_keyfile
-check  "init keeps an existing master item"           KC init
-check  "master item unchanged by init"                test "$(master_pw)" = "${MASTER}"
-run    "drop master item"                             security delete-generic-password -s "${MASTER_ITEM}" "${PKI_KEYCHAIN_FILE}"
+run    "drop master item"                             security delete-generic-password -s "${SERVICE}" "${PKI_KEYCHAIN_FILE}"
 refuse "init refuses a new master next to a database" "master item" KC init
 fails  "master item not recreated"                    master_pw
 refuse "verify reports the missing master item"       "master item" KC verify
 check  "import-master restores it"                    restore_master
 check  "restored master matches"                      test "$(master_pw)" = "${MASTER}"
 check  "verify passes after restore"                  KC verify
-run    "swap in a wrong master"                       bash -c 'security delete-generic-password -s "$1" "$3" >/dev/null && security add-generic-password -s "$1" -a pki_test -w "$2" "$3"' _ "${MASTER_ITEM}" wrong-password "${PKI_KEYCHAIN_FILE}"
+run    "swap in a wrong master"                       bash -c 'security delete-generic-password -s "$1" "$3" >/dev/null && security add-generic-password -s "$1" -a pki_test -w "$2" "$3"' _ "${SERVICE}" wrong-password "${PKI_KEYCHAIN_FILE}"
 refuse "verify rejects a master that does not open"   "does not open" KC verify
-run    "drop the wrong master"                        security delete-generic-password -s "${MASTER_ITEM}" "${PKI_KEYCHAIN_FILE}"
+run    "drop the wrong master"                        security delete-generic-password -s "${SERVICE}" "${PKI_KEYCHAIN_FILE}"
 check  "right master restored"                        restore_master
 check  "verify passes again"                          KC verify
+check  "installer password: store, replace, retrieve" installer_roundtrip
+refuse "installer password: unknown name"             "no installer entry" KC installer-get --name nosuch.sh
 
 # ================================================================ certificates
 step "chain, purpose, CRL"
@@ -532,19 +533,21 @@ run "installer with old encryption certs" bin/create_credentials.sh 'persona_{gm
     --allow-expired-encryption --allow-superseded-encryption
 INST_CA=mdm-private/credentials/install_credentials_cacerts.sh
 INST=mdm-private/credentials/install_credentials_persona_LBgmailCcomcastRB_S_personb_S_2026.sh
-[ -f "${INST_CA}" ] && [ -f "${INST}" ] && [ -f "${INST}.pass" ] || die "installer outputs missing"
+[ -f "${INST_CA}" ] && [ -f "${INST}" ] || die "installer outputs missing"
+INST_PW_FILE="${TMPD}/installer.pw"
+KC installer-get --name "${INST##*/}" > "${INST_PW_FILE}" || die "no installer password in the PKI keychain"
 
 refuse "create_credentials: unmatched glob"    "matches no S/MIME" bin/create_credentials.sh 'nosuch_*'
 refuse "create_credentials: shell metachars"   "invalid .NAME_GLOB" bin/create_credentials.sh '$(id)'
 
 check  "CA installer: signature"               "${INST_CA}" --check-signature-integrity
-check  "S/MIME installer: signature (pty)"     ptyrun "${INST}.pass" "${INST}" --check-signature-integrity
+check  "S/MIME installer: signature (pty)"     ptyrun "${INST_PW_FILE}" "${INST}" --check-signature-integrity
 tamper_header  "${INST_CA}" "${TMPD}/t_ca.sh"
 tamper_payload "${INST_CA}" "${TMPD}/p_ca.sh"
 tamper_header  "${INST}"    "${TMPD}/t_in.sh"
 refuse "CA installer: tampered header rejected"   "SIGNATURE CHECK FAILED" "${TMPD}/t_ca.sh" --check-signature-integrity
 fails  "CA installer: tampered payload rejected"  "${TMPD}/p_ca.sh" --check-signature-integrity
-refuse "S/MIME installer: tampered header rejected" "SIGNATURE CHECK FAILED" ptyrun "${INST}.pass" "${TMPD}/t_in.sh" --check-signature-integrity
+refuse "S/MIME installer: tampered header rejected" "SIGNATURE CHECK FAILED" ptyrun "${INST_PW_FILE}" "${TMPD}/t_in.sh" --check-signature-integrity
 check  "S/MIME installer: signature check needs no password" "${INST}" --check-signature-integrity
 
 payload_has_no_secrets() {
@@ -554,7 +557,7 @@ payload_has_no_secrets() {
     ! grep -Eqi '\.(p12|pass|key|pem)( |$)' <<<"${listing}" && grep -q '\.cer$' <<<"${listing}"
 }
 check "CA installer payload: certificates only" payload_has_no_secrets
-embeds_password() { grep -qFf <(sed -n 1p "${INST}.pass") "${INST}"; }
+embeds_password() { grep -qFf "${INST_PW_FILE}" "${INST}"; }
 fails "installer script does not embed its password" embeds_password
 
 # ================================================================ KeePassXC (keyfile, no password)
@@ -567,7 +570,7 @@ kpentry() { bin/create_keepass_entry.sh --db "${DB}" --key-file "${KEYFILE}" --n
 kp_password_matches() {
     local got want
     got=$("${KPCLI}" show -s -a Password -k "${KEYFILE}" --no-password "${DB}" "pki_test installer") || return 1
-    want=$(sed -n 1p "${INST}.pass")
+    want=$(sed -n 1p "${INST_PW_FILE}")
     [ "${got}" = "${want}" ]
 }
 check "keepass: installer-password entry"        kpentry
@@ -620,12 +623,10 @@ perm_audit() {
     out=$( {
         find root intermediate intermediate_smime server codesign smime privoxy -type d -name private ! -perm 700
         find root intermediate intermediate_smime server codesign smime privoxy -path '*/private/*' -type f ! -perm 600
-        find keychain -type d ! -perm 700
-        find keychain -type f ! -perm 600
-        find keyfile -type d ! -perm 700
-        find keyfile -type f ! -perm 600
-        find keyfile -type d ! -perm 700
-        find keyfile -type f ! -perm 600
+        find "${PKI_KEYCHAIN_DIR}" -type d ! -perm 700
+        find "${PKI_KEYCHAIN_DIR}" -type f ! -perm 600
+        find "${PKI_KEYCHAIN_KEYFILE%/*}" -type d ! -perm 700
+        find "${PKI_KEYCHAIN_KEYFILE%/*}" -type f ! -perm 600
         find mdm-private -type d ! -perm 700
         find mdm-private -type f ! -perm 600 ! -name 'install_credentials_*.sh' ! -name '*.sample'
     } 2>/dev/null ) || true
@@ -633,7 +634,7 @@ perm_audit() {
 }
 check "private dirs 0700, key/secret files 0600" perm_audit
 check "installer 0750"        mode_is "${INST}" 750
-check "installer .pass 0600"  mode_is "${INST}.pass" 600
+fails "no .pass file is written next to the installer"  test -e "${INST}.pass"
 
 # ================================================================ summary
 printf '\n%d passed, %d failed\n' "${PASSED}" "${FAILED}"

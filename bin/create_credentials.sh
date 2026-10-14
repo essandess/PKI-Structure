@@ -23,8 +23,7 @@
 # the same layout, e.g. an older one holding expired certificates. Its root,
 # intermediate and CRLs, if present, are used for validation too.
 # Each .p12 must open with its keychain password (bin/pki_keychain.py; one per
-# issuance) or, for older trees, <p12>.pass or line 2 (else line 1) of its tree's
-# smime/private/passphrase.txt. The script reports the source, never the password.
+# issuance).
 #
 # Installer contents:
 #   CA certificates  root (trusted), valid intermediate, valid intermediate_smime
@@ -46,11 +45,11 @@
 #
 # Encryption: when S/MIME .p12 files are included, the tar holds their secret
 # password files and is therefore encrypted (openssl enc, PBKDF2) with a new
-# random password (pki_random_password). That password is written next to the
-# installer as install_credentials_<stem>.sh.pass (mode 0600) and the
-# installer asks for it on the terminal, as create_keepass_entry.sh asks for
-# its master password: never in argv or the environment. Treat the installer
-# and its .pass file as secrets and send them by different channels.
+# random password (pki_random_password). That password is stored in the PKI
+# keychain (bin/pki_keychain.py) as the entry install_credentials_<stem>.sh and
+# the installer asks for it on the terminal, never in argv or the environment.
+# Retrieve it with: bin/pki_keychain.py installer-get --name NAME. Send the
+# installer and its password by different channels.
 # mdm-private/ holds secrets; keep it out of version control. CA secret keys
 # and their passwords are never included.
 #
@@ -62,7 +61,7 @@
 # Signature: every installer is signed with the code signing certificate
 # (the newest valid codesign/certs/codesign.<sha1>.cert.pem and its
 # codesign/private/codesign.<sha1>.key.pem,
-# key passphrase on line 1 of codesign/private/passphrase.txt; see
+# key passphrase from the PKI keychain; see
 # PKI_CODESIGN_DIR and PKI_CODESIGN_NAME). It must be valid, chain to the
 # root, and allow code signing. The signature is a detached PKCS#7 (DER)
 # block inside the installer, between __SIGNATURE_BELOW__ and
@@ -239,9 +238,9 @@ PKI_ASSUME_YES=1 skips the prompt.
 
 When it includes S/MIME certificates, the installer's payload also holds the
 secret .p12 password files, so the payload is encrypted with a new random
-password, saved next to the installer as install_credentials_<stem>.sh.pass
-(mode 0600). The installer asks for that password; send it by a different
-channel than the installer.
+password, stored in the PKI keychain as the entry install_credentials_<stem>.sh
+(bin/pki_keychain.py installer-get --name NAME). The installer asks for that
+password; send it by a different channel than the installer.
 
 Every installer is signed with the code signing certificate (codesign/ by
 default; PKI_CODESIGN_DIR, PKI_CODESIGN_NAME). The installer checks the
@@ -290,7 +289,7 @@ STAGE=$(mktemp -d "${TMPDIR:-/tmp}/pki-credentials.XXXXXX")
 trap 'rm -rf "${STAGE}"' EXIT
 
 # S/MIME sources: this PKI tree first, then each --extra-pki-dir. Each source
-# is a separate password group because each tree has its own passphrase.txt.
+# is a separate password group because each tree has its own keychain.
 SM_DIRS=("${PKI_ROOT}")
 SM_GROUPS=(smime)
 for d in "${EXTRA_DIRS[@]}"; do
@@ -592,42 +591,24 @@ validate_smime_cert() {
     return 1
 }
 
-# p12_password P12 CERT FALLBACK TREE: set P12PW and P12PW_SRC (keychain, pass, line2,
-# line1) to the password that opens the .p12: its key's keychain entry (TREE/keychain),
-# then <P12>.pass, then lines 2 and 1 of FALLBACK (older trees). 1: none opens it; 2: no source.
+# p12_password P12 CERT TREE: set P12PW to the password that opens the .p12: its key's
+# keychain entry (the main tree's, or TREE/keychain for an --extra-pki-dir tree).
+# Returns 1 if there is none or it does not open the .p12.
 p12_password() {
-    local p12="$1" cert="$2" fallback="$3" tree="$4" i f n pw found=0 kf
-    local srcs=(keychain pass line2 line1) files=("" "${p12}.pass" "${fallback}" "${fallback}") lines=(0 1 2 1)
+    local p12="$1" cert="$2" tree="$3" pw
 
-    P12PW="" P12PW_SRC=""
-    for i in 0 1 2 3; do
-        f="${files[i]}"
-        n="${lines[i]}"
-        if [ "${i}" = 0 ]; then
-            [ -d "${tree}/keychain" ] || continue
-            # other trees have their own key file; the override applies to this tree only
-            kf=${PKI_KEYCHAIN_KEYFILE:-}
-            [ "${tree}" = "${PKI_ROOT}" ] || kf="${tree}/keyfile/pki-structure.keyx"
-            pw=$(PKI_KEYCHAIN_DIR="${tree}/keychain" PKI_KEYCHAIN_KEYFILE="${kf}" pki_kc get --cert "${cert}" --field p12 2>/dev/null) || continue
-            found=1
-        else
-            [ -f "${f}" ] || continue
-            found=1
-            pw=$(sed -n "${n}p" "${f}")
-        fi
-        [ -n "${pw}" ] || continue
-        if "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin fd:3 \
-               3< <(printf '%s\n' "${pw}") >/dev/null 2>&1; then
-            P12PW="${pw}"
-            P12PW_SRC="${srcs[i]}"
-            return 0
-        fi
-    done
-    pw=""
-    if [ "${found}" = 1 ]; then
-        return 1
+    P12PW=""
+    if [ "${tree}" = "${PKI_ROOT}" ]; then
+        pw=$(pki_kc get --cert "${cert}" --field p12 2>/dev/null) || return 1
+    else
+        [ -d "${tree}/keychain" ] || return 1
+        pw=$(PKI_KEYCHAIN_DIR="${tree}/keychain" PKI_KEYCHAIN_KEYFILE="${tree}/keyfile/pki-structure.keyx" \
+                 pki_kc get --cert "${cert}" --field p12 2>/dev/null) || return 1
     fi
-    return 2
+    [ -n "${pw}" ] || return 1
+    "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin fd:3 \
+        3< <(printf '%s\n' "${pw}") >/dev/null 2>&1 || return 1
+    P12PW="${pw}"
 }
 
 # p12_check_content P12 PASSWORD CERT: succeeds if the .p12 holds CERT (read from inside
@@ -1018,34 +999,20 @@ build_payload_dir() {
             esac
             seen="${seen}${sha1} "
 
-            # the .p12 must open with its keychain password (older trees: .p12.pass or
-            # passphrase.txt) and hold this certificate together with its private key
-            pf="${sd}/smime/private/passphrase.txt"
-            grp="${group}"
-            rc=0
-            p12_password "${p12}" "${f}" "${pf}" "${sd}" || rc=$?
-            case "${rc}" in
-                0)
-                    if ! why=$(p12_check_content "${p12}" "${P12PW}" "${f}"); then
-                        warn "skipping ${p12}: ${why}"
-                        rejected=$((rejected + 1))
-                        continue
-                    fi
-                    if [ "${P12PW_SRC}" = keychain ] || [ "${P12PW_SRC}" = pass ]; then
-                        # one password per issuance
-                        pwid=$(printf '%s' "${P12PW}" | "${OPENSSL}" dgst -sha256 | sed 's/.*= *//' | cut -c1-6)
-                        grp="${group}/${certname}/${pwid}"
-                    fi
-                    ;;
-                1)
-                    warn "skipping ${p12}: no keychain entry, ${p12}.pass or line of ${pf} opens it"
-                    rejected=$((rejected + 1))
-                    continue
-                    ;;
-                *)
-                    warn "no password source for ${p12}: cannot check its password, certificate and key; the installer will ask for its password"
-                    ;;
-            esac
+            # the .p12 must open with its keychain password and hold this certificate with its key
+            if ! p12_password "${p12}" "${f}" "${sd}"; then
+                warn "skipping ${p12}: no keychain entry opens it"
+                rejected=$((rejected + 1))
+                continue
+            fi
+            if ! why=$(p12_check_content "${p12}" "${P12PW}" "${f}"); then
+                warn "skipping ${p12}: ${why}"
+                rejected=$((rejected + 1))
+                continue
+            fi
+            # one password per issuance
+            pwid=$(printf '%s' "${P12PW}" | "${OPENSSL}" dgst -sha256 | sed 's/.*= *//' | cut -c1-6)
+            grp="${group}/${certname}/${pwid}"
 
             # the name gives the role; a keyUsage that does not fit it is rejected
             role="${ext}"
@@ -1061,13 +1028,8 @@ build_payload_dir() {
             [ ! -e "${dir}/smime/${name}.p12" ] \
                 || die "payload file name '${name}' is used twice (a clash of the last six sha1 digits)."
             cp "${p12}" "${dir}/smime/${name}.p12"
-            if [ -n "${P12PW}" ]; then
-                # the secret that opens this .p12; the payload is encrypted
-                stage_p12_password "${P12PW}" "${dir}/smime/${name}.p12.pass"
-                if [ "${P12PW_SRC}" = line1 ]; then
-                    warn "${p12} opens only with line 1 of ${pf} (the key passphrase); that line goes into the encrypted payload"
-                fi
-            fi
+            # the secret that opens this .p12; the payload is encrypted
+            stage_p12_password "${P12PW}" "${dir}/smime/${name}.p12.pass"
             printf 'smime\t%s\t%s\t1\t%s\t%s\n' "${grp}" "${sha1}" "${name}" \
                    "${role}, ${state}${src}" >> "${dir}/manifest"
             count=$((count + 1))
@@ -1098,8 +1060,8 @@ show_payload() {
             pws=$((pws + 1))
         done
         echo "  ${items} item(s), ${keys} private key(s), ${pws} SECRET .p12 password file(s)." >&2
-        echo "  The payload will be encrypted with a new installer password, saved as" >&2
-        echo "  ${out}.pass" >&2
+        echo "  The payload will be encrypted with a new installer password, stored in the" >&2
+        echo "  PKI keychain as '${out##*/}'." >&2
     else
         echo "  ${items} item(s), ${keys} private key(s); no passwords are included." >&2
     fi
@@ -1176,7 +1138,7 @@ example PKI_P12_PASSWORD_SMIME (GROUP is the name shown in the prompt,
 upper-cased, with other characters replaced by _).
 
 An encrypted payload (PAYLOAD_ENCRYPTED=1 in this script) asks for the
-installer password, which comes in a separate .pass file. It is read from the
+installer password, which the sender provides separately. It is read from the
 terminal only, never from the environment, and it also supplies the .p12
 passwords, which are inside the payload.
 USAGE
@@ -1333,7 +1295,7 @@ get_installer_password() {
         echo "No terminal to ask for the installer password." >&2
         return 1
     fi
-    IFS= read -r -s -p "Installer password (from the .pass file): " pw </dev/tty \
+    IFS= read -r -s -p "Installer password: " pw </dev/tty \
         || return 1
     echo >&2
     [ -n "${pw}" ] || return 1
@@ -1961,16 +1923,20 @@ if confirm "Create ${out}?"; then
     installer_pw=""
     if [ "${ENCRYPT}" = 1 ]; then
         tarname="${tarname}.enc"
+        pki_kc verify >/dev/null   # the password is stored there: check before building
         installer_pw=$(pki_random_password)
     fi
     write_installer "${label}" "${STAGE}/payload" "${out}" "${tarname}" "${installer_pw}"
     echo "Created ${out}, signed with '$(cert_cn "${CS_CERT}")'." >&2
     if [ "${ENCRYPT}" = 1 ]; then
-        printf '%s\n' "${installer_pw}" > "${out}.pass"
-        chmod 0600 "${out}.pass"
+        if ! printf '%s\n' "${installer_pw}" | pki_kc installer-set --name "${out##*/}"; then
+            rm -f "${out}"
+            die "cannot store the installer password in the PKI keychain; ${out} removed."
+        fi
         installer_pw=""
-        echo "Created ${out}.pass: the installer password (SECRET)." >&2
-        echo "Send it to the user by a different channel than ${out##*/}; both are secret." >&2
+        rm -f "${out}.pass"   # written by earlier versions
+        echo "The installer password (SECRET) is in the PKI keychain: bin/pki_keychain.py installer-get --name ${out##*/}" >&2
+        echo "Send it to the user by a different channel than ${out##*/}." >&2
     fi
     echo "Send the root CA's SHA-256 fingerprint separately too, so that it can be checked on a machine that does not have the root yet:" >&2
     "${OPENSSL}" x509 -noout -fingerprint -sha256 -in "${ROOT_CERT}" >&2

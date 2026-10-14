@@ -24,7 +24,7 @@ passwords; and signed MDM profiles. Private keys are passphrase protected.
   `OPENSSL=/path`. Apple's LibreSSL is rejected (`openssl.cnf` uses `.include`).
   Generated installers run on the macOS-native `openssl`, `tar` with xz, and
   `security`.
-* Python 3.9+ with `cryptography` 39+ (certificate validation) and `PyYAML` (MDM profiles).
+* Python 3.9+ with `cryptography` 44+ (Argon2id: KDBX4 database creation) (certificate validation) and `PyYAML` (MDM profiles).
 * `keepassxc-cli` (key passphrases, KeePassXC integration; `KEEPASSXC_CLI` overrides lookup) and macOS `security`.
 * `rsync` (deployment); `sf-pwgen` (optional; falls back to `openssl rand`).
 
@@ -98,21 +98,21 @@ Each private key has its own random passphrase in `keychain/pki-structure.kdbx` 
 directory 0700, file 0600), found by SHA-256 of the key's public key, so a renewal
 with the same key finds it. Entry `<id16> :: <CN>`: Password = key passphrase,
 UserName = serial, URL = certificate SHA-256; `... :: p12` holds the `.p12` export
-password. The master password (192 random bits) is the item `PKI-Structure KeePassXC
+password. The master password (192 random bits) is the generic password item with service ("Where")
+`com.github.essandess.pki-structure.keepassxc-passphrase` and name `PKI-Structure KeePassXC
 Passphrase` in the System keychain (root) or the login keychain; it is created only when
 absent, never replaced or deleted, and never next to an existing database. The database
 also needs a key file (KeePassXC XML v2, 0600): `keyfile/pki-structure.keyx`, or the path in
 `PKI_KEYCHAIN_KEYFILE`; keep a copy offline. Back up the database, the key file and the item
-together: any one missing makes the others useless. A pre-keyfile `pki.kdbx` is migrated by
-the next `pki_keychain.py init` (kept as `pki.kdbx.pre-keyfile`).
+together: any one missing makes the others useless.
 
 ```sh
 bin/pki_keychain.py get --cert CERT [--field p12]     # print a secret
 bin/pki_keychain.py list | prune [-n] | acl-check
 bin/pki_keychain.py export-master | import-master     # escrow / restore the master item (stdin)
-bin/pki_keychain.py verify                            # master item readable and opens the database
+bin/pki_keychain.py verify | kdf-check    # master item + database; KDBX4/Argon2 policy
+bin/pki_keychain.py installer-set | installer-get --name NAME   # installer passwords (stdin / stdout)
 bin/pki_keychain.py export-master | import-master     # escrow / restore the master item (stdin)
-bin/pki_keychain.py migrate DIR [--rotate] [--remove-legacy]   # from passphrase.txt
 ```
 
 
@@ -307,9 +307,9 @@ CA private keys are never included.
   The file name gives the role; a keyUsage that does not fit it is rejected.
 * **Encryption.** A payload with `.p12` files also holds their password files,
   so it is encrypted (`openssl enc -aes-256-cbc -pbkdf2`, 600000 iterations)
-  with a random 24-character password written to `<installer>.pass` (0600).
-  The installer reads it from the terminal only. Send installer and `.pass` by
-  different channels.
+  with a random 24-character password stored in the PKI keychain as the entry
+  `<installer file name>` (`pki_keychain.py installer-get --name NAME`). The installer
+  reads it from the terminal only. Send installer and password by different channels.
 * **Signature.** A detached PKCS#7 (DER) over the script and encrypted payload,
   stored between `__SIGNATURE_BELOW__` and `__PAYLOAD_BELOW__`, signed per
   [Signer selection](#signer-selection). The installer verifies that the file is
@@ -359,8 +359,8 @@ bin/create_keepass_entry.sh --xml-out FILE [--individual-smime-passwords] INSTAL
 ```
 
 `INSTALLER` is an encrypted installer. The script decrypts its payload with the
-`.pass` file (never running the installer), so a wrong `.pass` fails before
-anything is stored. `--ca-certs-only` installers are unencrypted and rejected.
+installer's keychain password (never running the installer), so a missing or wrong
+password fails before anything is stored. `--ca-certs-only` installers are unencrypted and rejected.
 
 * **Default:** one entry whose Password is the installer password; Notes list
   the contents, no passwords.

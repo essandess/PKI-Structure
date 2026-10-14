@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
-# PKI_KEYCHAIN_PATCH_V3
+# PKI_KEYCHAIN_PATCH_V6
 """pki_keychain.py -- key passphrases in a KeePassXC database; its master
 password in the macOS keychain, its key file on disk.
 
 Database  $PKI_KEYCHAIN_DIR (default <PKI_ROOT>/keychain)/pki-structure.kdbx; dir 0700, file 0600.
+          KDBX4, Argon2id, 64 MiB, 4 lanes, ~$PKI_KEYCHAIN_KDF_MS (64) ms; written here because
+          keepassxc-cli db-create makes KDBX3.
 Key file  $PKI_KEYCHAIN_KEYFILE (default <PKI_ROOT>/keyfile/pki-structure.keyx), KeePassXC
           XML v2, 0600. Required to open the database; keep a copy offline. Generated
           only when no database exists yet, never for an existing one.
-Master    192 random bits, item "PKI-Structure KeePassXC Passphrase"
-          ($PKI_KEYCHAIN_ITEM): System keychain as root (verified unreadable by
+Master    192 random bits, generic password item, service ("Where")
+          com.github.essandess.pki-structure.keepassxc-passphrase ($PKI_KEYCHAIN_ITEM),
+          name "PKI-Structure KeePassXC Passphrase": System keychain as root (verified unreadable by
           other users), login keychain otherwise ($PKI_KEYCHAIN_FILE: another
           keychain file, for tests). Created only when definitively absent and
           never next to an existing database; an existing item is never replaced
           or deleted.
+Installer passwords: entry "<installer file name>" (installer-set / installer-get).
 Entries   one per private key, found by SHA-256 of its public key, so every
           certificate of that key (same-key renewal) finds it.
           "<id16> :: <CN>": Password = key passphrase, UserName = serial,
           URL = certificate SHA-256. "<id16> :: <CN> :: p12": Password =
           .p12 export password.
 
-  init                                   master item, key file and database; migrates pki.kdbx
+  init                                   master item, key file and database
   genkey --alg EC|RSA [--curve C] [--bits N] --out KEY [--label CN]
                                          encrypted key with a new passphrase; prints the key id
   id --cert CERT                         key id of a certificate
@@ -28,27 +32,36 @@ Entries   one per private key, found by SHA-256 of its public key, so every
                                          print a secret (stdout only)
   forget (--id ID | --cert CERT)         delete the key's entries
   verify                                 master item readable and opens the database
+  selftest                               create, read, delete a scratch item (production path)
+  kdf-check                              database is KDBX4 with Argon2 >= 64 MiB, 4 lanes
+  installer-set --name NAME              store an installer password (stdin) as entry NAME
+  installer-get --name NAME              print it
   export-master                          print the master password (escrow)
   import-master                          restore the master item from stdin; refuses if present
-  migrate DIR [--rotate] [--remove-legacy]
-                                         import DIR/private/passphrase.txt keys
   prune [-n]   list   acl-check
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import contextlib
 import fcntl
 import getpass
+import gzip
 import hashlib
+import hmac
 import os
 import pty
 import re
 import secrets
 import select
 import shutil
+import struct
 import subprocess
 import sys
+import time
+import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 
 from cryptography import x509
@@ -56,14 +69,19 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.x509.oid import NameOID
 
 PKI_ROOT = Path(__file__).resolve().parent.parent
-ITEM = os.environ.get("PKI_KEYCHAIN_ITEM") or "PKI-Structure KeePassXC Passphrase"
+# "Where" in Keychain Access is the service attribute, "Name" the label
+ITEM_LABEL = "PKI-Structure KeePassXC Passphrase"
+ITEM = os.environ.get("PKI_KEYCHAIN_ITEM") or "com.github.essandess.pki-structure.keepassxc-passphrase"
 DB_NAME = "pki-structure.kdbx"
-LEGACY_DB_NAME = "pki.kdbx"
 KEYFILE_NAME = "pki-structure.keyx"
 SECURITY = "/usr/bin/security"
 SYSTEM_KEYCHAIN = "/Library/Keychains/System.keychain"
 ERR_NOT_FOUND = 44  # security(1) exit status for errSecItemNotFound
-KDF_MS = "100"  # master is 192 random bits: a slow KDF adds nothing
+KDF_MS = int(os.environ.get("PKI_KEYCHAIN_KDF_MS") or 64)  # master is 192 random bits: a slow KDF adds nothing
+KDF_MEM_MIB, KDF_LANES = 64, 4
+ARGON2D = bytes.fromhex("ef636ddf8c29444b91f7a9a403e30a0c")
+ARGON2ID = bytes.fromhex("9e298b1956db4773b23dfc3ec6f0a1e6")
+AES256_CIPHER = bytes.fromhex("31c1f2e6bf714350be5805216afc5aff")
 TITLE_RE = re.compile(r"^[0-9a-f]{16} :: ")
 os.umask(0o077)
 
@@ -117,18 +135,6 @@ def cert_cn(c: x509.Certificate) -> str:
         if a:
             return str(a[0].value).replace("/", "_")
     return "unnamed"
-
-
-def p12_opens(p12, pw: str) -> bool:
-    r, w = os.pipe()
-    os.write(w, (pw + "\n").encode())
-    os.close(w)
-    try:
-        p = subprocess.run([openssl(), "pkcs12", "-legacy", "-noout", "-in", str(p12),
-                            "-passin", f"fd:{r}"], pass_fds=(r,), capture_output=True)
-    finally:
-        os.close(r)
-    return p.returncode == 0
 
 
 # ---------------------------------------------------------------- macOS keychain
@@ -227,7 +233,7 @@ def root_only_ok() -> bool:
 def mk_create(pw: str) -> None:
     """Add the master item. Never replaces or removes an existing item."""
     acct = "root" if os.geteuid() == 0 else getpass.getuser()
-    base = ["add-generic-password", "-s", ITEM, "-l", ITEM, "-a", acct,
+    base = ["add-generic-password", "-s", ITEM, "-l", ITEM_LABEL, "-a", acct,
             "-D", "PKI-Structure", "-T", SECURITY]
     if os.environ.get("PKI_KEYCHAIN_FILE"):
         # test keychain only: -w must be last to prompt, so no keychain argument
@@ -341,32 +347,146 @@ def kp(args: list[str], lines: list[str], check: bool = True) -> subprocess.Comp
     return r
 
 
+def _vdict(items: list[tuple[int, str, bytes]]) -> bytes:
+    """KDBX VariantDictionary."""
+    out = struct.pack("<H", 0x0100)
+    for typ, key, val in items:
+        k = key.encode()
+        out += struct.pack("<BI", typ, len(k)) + k + struct.pack("<I", len(val)) + val
+    return out + b"\x00"
+
+
+def keyfile_key(kf: Path) -> bytes:
+    root = ET.fromstring(Path(kf).read_bytes())
+    if not (root.findtext("Meta/Version") or "").startswith("2"):
+        fail(f"{kf} is not a KeePassXC XML v2 key file")
+    return bytes.fromhex("".join((root.findtext("Key/Data") or "").split()))
+
+
+def make_kdbx4(path: Path, password: str, kf: Path) -> None:
+    """Write an empty KDBX4 database (AES-256, Argon2id, KDF_MEM_MIB x KDF_LANES, iterations
+    calibrated to KDF_MS) keyed by password + key file."""
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    try:
+        from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
+    except ImportError:
+        fail("cryptography >= 44 is required (Argon2id)")
+
+    composite = hashlib.sha256(hashlib.sha256(password.encode()).digest() + keyfile_key(kf)).digest()
+    seed, iv, salt = os.urandom(32), os.urandom(16), os.urandom(32)
+
+    def argon(iters: int) -> bytes:
+        return Argon2id(salt=salt, length=32, iterations=iters, lanes=KDF_LANES,
+                        memory_cost=KDF_MEM_MIB * 1024).derive(composite)
+
+    t0 = time.perf_counter()
+    argon(1)
+    iters = max(1, round(KDF_MS / max(1e-3, (time.perf_counter() - t0) * 1000)))
+    transformed = argon(iters)
+
+    def field(i: int, data: bytes) -> bytes:
+        return struct.pack("<BI", i, len(data)) + data
+
+    kdfp = _vdict([(0x42, "$UUID", ARGON2ID), (0x42, "S", salt),
+                   (0x04, "P", struct.pack("<I", KDF_LANES)),
+                   (0x05, "M", struct.pack("<Q", KDF_MEM_MIB << 20)),
+                   (0x05, "I", struct.pack("<Q", iters)), (0x04, "V", struct.pack("<I", 0x13))])
+    header = (struct.pack("<III", 0x9AA2D903, 0xB54BFB67, 0x00040000)
+              + field(2, AES256_CIPHER) + field(3, struct.pack("<I", 1)) + field(4, seed)
+              + field(7, iv) + field(11, kdfp) + field(0, b"\r\n\r\n"))
+    cipher_key = hashlib.sha256(seed + transformed).digest()
+    hmac_base = hashlib.sha512(seed + transformed + b"\x01").digest()
+    hdr_mac = hmac.new(hashlib.sha512(b"\xff" * 8 + hmac_base).digest(), header, hashlib.sha256).digest()
+
+    now = base64.b64encode(struct.pack("<q", int(
+        (datetime.now(timezone.utc) - datetime(1, 1, 1, tzinfo=timezone.utc)).total_seconds()))).decode()
+    guid = base64.b64encode(os.urandom(16)).decode()
+    xml = ('<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n<KeePassFile><Meta>'
+           '<Generator>pki_keychain</Generator><DatabaseName>PKI-Structure</DatabaseName>'
+           '<MemoryProtection><ProtectTitle>False</ProtectTitle><ProtectUserName>False</ProtectUserName>'
+           '<ProtectPassword>True</ProtectPassword><ProtectURL>False</ProtectURL>'
+           '<ProtectNotes>False</ProtectNotes></MemoryProtection><RecycleBinEnabled>True</RecycleBinEnabled>'
+           f'</Meta><Root><Group><UUID>{guid}</UUID><Name>Passwords</Name><IconID>48</IconID><Times>'
+           f'<CreationTime>{now}</CreationTime><LastModificationTime>{now}</LastModificationTime>'
+           f'<LastAccessTime>{now}</LastAccessTime><ExpiryTime>{now}</ExpiryTime><Expires>False</Expires>'
+           f'<UsageCount>0</UsageCount><LocationChanged>{now}</LocationChanged></Times>'
+           '<IsExpanded>True</IsExpanded></Group></Root></KeePassFile>').encode()
+    inner = (struct.pack("<BII", 1, 4, 3) + field(2, os.urandom(64)) + struct.pack("<BI", 0, 0))
+    padder = padding.PKCS7(128).padder()
+    enc = Cipher(algorithms.AES(cipher_key), modes.CBC(iv)).encryptor()
+    ct = enc.update(padder.update(gzip.compress(inner + xml)) + padder.finalize()) + enc.finalize()
+
+    def block(i: int, data: bytes) -> bytes:
+        idx, size = struct.pack("<Q", i), struct.pack("<I", len(data))
+        key = hashlib.sha512(idx + hmac_base).digest()
+        return hmac.new(key, idx + size + data, hashlib.sha256).digest() + size + data
+
+    tmp = Path(str(path) + ".tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(header + hashlib.sha256(header).digest() + hdr_mac + block(0, ct) + block(1, b""))
+    os.replace(tmp, path)
+
+
+def kdbx_params(path) -> dict:
+    """Format and KDF settings from the unencrypted KDBX header."""
+    d = Path(path).read_bytes()[:65536]
+    s1, s2, ver = struct.unpack_from("<III", d, 0)
+    if (s1, s2) != (0x9AA2D903, 0xB54BFB67):
+        fail(f"{path} is not a KDBX file")
+    out: dict = {"kdbx": ver >> 16}
+    if out["kdbx"] < 4:
+        return out
+    off, vd = 12, b""
+    while off + 5 <= len(d):
+        fid, size = struct.unpack_from("<BI", d, off)
+        data, off = d[off + 5:off + 5 + size], off + 5 + size
+        if fid == 11:
+            vd = data
+        if fid == 0:
+            break
+    pos, vals = 2, {}
+    while pos < len(vd) and vd[pos] != 0:
+        kl = struct.unpack_from("<I", vd, pos + 1)[0]
+        key = vd[pos + 5:pos + 5 + kl].decode()
+        pos += 5 + kl
+        vl = struct.unpack_from("<I", vd, pos)[0]
+        vals[key] = vd[pos + 4:pos + 4 + vl]
+        pos += 4 + vl
+    uuid = vals.get("$UUID", b"")
+    out["kdf"] = {ARGON2D: "Argon2d", ARGON2ID: "Argon2id"}.get(uuid, uuid.hex())
+    out["memory_mib"] = int.from_bytes(vals.get("M", b""), "little") >> 20
+    out["lanes"] = int.from_bytes(vals.get("P", b""), "little")
+    out["iterations"] = int.from_bytes(vals.get("I", vals.get("R", b"")), "little")
+    return out
+
+
+def kdf_ok(p: dict) -> bool:
+    return (p.get("kdbx", 0) >= 4 and p.get("kdf") in ("Argon2d", "Argon2id")
+            and p.get("memory_mib", 0) >= KDF_MEM_MIB and p.get("lanes", 0) >= KDF_LANES)
+
+
+def fmt_params(p: dict) -> str:
+    s = f"KDBX{p['kdbx']}"
+    if "kdf" in p:
+        s += f", {p['kdf']}, {p['memory_mib']} MiB, {p['lanes']} lanes, {p['iterations']} iterations"
+    return s
+
+
+def create_db(db: Path, kf: Path, mp: str) -> None:
+    """Write the KDBX4 database and check keepassxc-cli opens it with the intended KDF."""
+    make_kdbx4(db, mp, kf)
+    kp(["ls", "-k", str(kf), str(db)], [mp])
+    if not kdf_ok(kdbx_params(db)):
+        fail("unexpected KDF parameters")
+
+
 def _undo_new(db: Path, kf: Path, new_kf: bool) -> None:
     db.unlink(missing_ok=True)
     if new_kf:
         kf.unlink(missing_ok=True)
-
-
-def migrate_legacy(d: Path) -> None:
-    """Add a key file to a pre-keyfile pki.kdbx. The original is kept as pki.kdbx.pre-keyfile."""
-    old, db, kf = d / LEGACY_DB_NAME, dbfile(d), keyfile(d)
-    if not mk_state():
-        fail(f"{old} exists but master item '{ITEM}' is not in {mk_target()}; nothing was changed")
-    mp = mk_get()
-    new_kf = not kf.exists()
-    if new_kf:
-        write_keyfile(kf)
-    shutil.copy2(old, db)
-    os.chmod(db, 0o600)
-    try:
-        kp(["db-edit", "--set-key-file", str(kf), str(db)], [mp])
-        kp(["ls", "-k", str(kf), str(db)], [mp])
-    except KeychainError:
-        _undo_new(db, kf, new_kf)
-        raise
-    old.rename(d / (LEGACY_DB_NAME + ".pre-keyfile"))
-    print(f"Migrated {old.name} to {db.name} with key file {kf}; original kept as "
-          f"{LEGACY_DB_NAME}.pre-keyfile. Back up the key file offline.", file=sys.stderr)
 
 
 def ensure_db(d: Path | None = None) -> None:
@@ -381,19 +501,14 @@ def ensure_db(d: Path | None = None) -> None:
                  "Restore it or set PKI_KEYCHAIN_KEYFILE")
         verify_open(db, kf)
         return
-    if (d / LEGACY_DB_NAME).exists():
-        migrate_legacy(d)
-        return
     ensure_master()
     new_kf = not kf.exists()
     if new_kf:
         write_keyfile(kf)
     mp = mk_get()
     try:
-        kp(["db-create", "-p", "-t", KDF_MS, "--set-key-file", str(kf), str(db)], [mp, mp])
-        os.chmod(db, 0o600)
-        kp(["ls", "-k", str(kf), str(db)], [mp])
-    except KeychainError:
+        create_db(db, kf, mp)
+    except Exception:
         _undo_new(db, kf, new_kf)
         raise
 
@@ -410,6 +525,9 @@ class Db:
 
     def kp(self, args: list[str], extra: list[str] | None = None, check: bool = True):
         return kp([args[0], "-k", self.keyfile, *args[1:]], [self.mp, *(extra or [])], check)
+
+    def has(self, title: str) -> bool:
+        return title in self.kp(["ls", "-R", "-f", self.file]).stdout.splitlines()
 
     def titles(self) -> list[str]:
         out = self.kp(["ls", "-R", "-f", self.file]).stdout
@@ -574,19 +692,63 @@ def cmd_prune(a) -> None:
                     db.rm(t)
 
 
+def cmd_selftest(a) -> None:
+    """Create, read back and delete a scratch item through the production path."""
+    global ITEM
+    ITEM += " selftest"
+    if mk_state():
+        fail(f"'{ITEM}' exists in {mk_target()}; remove it first")
+    pw = new_secret()
+    mk_create(pw)
+    try:
+        if mk_get() != pw:
+            fail("read-back differs from the stored password")
+    finally:
+        mk_delete()
+    print(f"ok: created, read and deleted '{ITEM}' in {mk_target()}")
+
+
+NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def cmd_installer_set(a) -> None:
+    """Store an installer password (stdin, line 1) as the entry NAME; replaces an entry of that name."""
+    if not NAME_RE.match(a.name):
+        fail("NAME must be an installer file name (letters, digits, _ . -)")
+    pw = sys.stdin.readline().rstrip("\n")
+    if not pw:
+        fail("no password on stdin")
+    with lock():
+        db = Db()
+        if db.has(a.name):
+            db.rm(a.name)
+        db.add(a.name, "installer", "", pw)
+
+
+def cmd_installer_get(a) -> None:
+    db = Db()
+    if not db.has(a.name):
+        fail(f"no installer entry '{a.name}' in {db.file}")
+    print(db.show(a.name))
+
+
+def cmd_kdf_check(a) -> None:
+    p = kdbx_params(dbfile())
+    print(fmt_params(p))
+    if not kdf_ok(p):
+        fail(f"database is not KDBX4 with Argon2 >= {KDF_MEM_MIB} MiB and {KDF_LANES} lanes")
+
+
 def cmd_verify(a) -> None:
     d = kdir()
-    db, kf, old = dbfile(d), keyfile(d), d / LEGACY_DB_NAME
-    if db.exists():
-        if not kf.is_file():
-            fail(f"key file {kf} is missing")
-        verify_open(db, kf)
-    elif old.exists():
-        verify_open(old, None)
-    else:
+    db, kf = dbfile(d), keyfile(d)
+    if not db.exists():
         print("no database; nothing to verify")
         return
-    print("ok: master item readable, database opens")
+    if not kf.is_file():
+        fail(f"key file {kf} is missing")
+    verify_open(db, kf)
+    print("ok: master item readable, database opens; " + fmt_params(kdbx_params(db)))
 
 
 def cmd_acl_check(a) -> None:
@@ -595,75 +757,6 @@ def cmd_acl_check(a) -> None:
     if not root_only_ok():
         fail("the item is readable by user 'nobody'")
     print("ok")
-
-
-def cmd_migrate(a) -> None:
-    base = Path(a.dir)
-    priv = base / "private"
-    pf = priv / "passphrase.txt"
-    if not pf.is_file():
-        fail(f"{pf} not found")
-    lines = pf.read_text().splitlines()
-    kpw, shared = lines[0], (lines[1] if len(lines) > 1 else "")
-    items: dict[str, dict] = {}
-    problems = 0
-    for cert in sorted((base / "certs").glob("*.cert.pem")):
-        stem = cert.name[:-len(".cert.pem")]
-        keyf = priv / f"{stem}.key.pem"
-        if not keyf.is_file():
-            continue
-        c = load_cert(cert)
-        kid = spki_id(c.public_key())
-        try:
-            pk = serialization.load_pem_private_key(keyf.read_bytes(), kpw.encode())
-        except (ValueError, TypeError):
-            print(f"skip {keyf}: does not open with line 1 of {pf}", file=sys.stderr)
-            problems += 1
-            continue
-        if spki_id(pk.public_key()) != kid:
-            print(f"skip {keyf}: does not match {cert.name}", file=sys.stderr)
-            problems += 1
-            continue
-        it = items.setdefault(kid, {"cert": c, "keys": [], "p12": None})
-        it["keys"].append((keyf, pk))
-        p12 = priv / f"{stem}.p12"
-        if p12.is_file() and it["p12"] is None:
-            pwf = priv / f"{stem}.p12.pass"
-            cand = pwf.read_text().splitlines()[0] if pwf.is_file() else shared
-            if p12_opens(p12, cand):
-                it["p12"] = cand
-            else:
-                print(f"warning: no known password opens {p12}", file=sys.stderr)
-                problems += 1
-    with lock():
-        ensure_db()
-        db = Db()
-        for kid, it in items.items():
-            if db.find(kid):
-                print(f"{kid[:16]}: already in the keychain")
-                continue
-            c = it["cert"]
-            pw = new_secret() if a.rotate else kpw
-            title = f"{kid[:16]} :: {cert_cn(c)}"
-            db.add(title, f"serial {c.serial_number:X}",
-                   "sha256:" + c.fingerprint(hashes.SHA256()).hex(), pw)
-            if it["p12"]:
-                db.add(title + " :: p12", "p12", "", it["p12"])
-            if a.rotate:  # entry first, so a crash never strands a re-encrypted key
-                enc = serialization.BestAvailableEncryption(pw.encode())
-                for keyf, pk in it["keys"]:
-                    tmp = keyf.with_name(keyf.name + ".tmp")
-                    tmp.write_bytes(pk.private_bytes(serialization.Encoding.PEM,
-                                                     serialization.PrivateFormat.PKCS8, enc))
-                    os.chmod(tmp, 0o600)
-                    os.replace(tmp, keyf)
-            print(f"{kid[:16]}: imported {title}" + (" (rotated)" if a.rotate else ""))
-    if a.remove_legacy:
-        if problems:
-            fail("legacy files kept: some keys or .p12 files were not imported")
-        pf.unlink()
-        for f in priv.glob("*.p12.pass"):
-            f.unlink()
 
 
 def main() -> None:
@@ -699,17 +792,18 @@ def main() -> None:
     p = sub.add_parser("forget")
     sel(p)
     p.set_defaults(func=cmd_forget)
-    p = sub.add_parser("migrate")
-    p.add_argument("dir")
-    p.add_argument("--rotate", action="store_true")
-    p.add_argument("--remove-legacy", action="store_true")
-    p.set_defaults(func=cmd_migrate)
     p = sub.add_parser("prune")
     p.add_argument("-n", "--dry-run", action="store_true")
     p.set_defaults(func=cmd_prune)
     sub.add_parser("list").set_defaults(func=cmd_list)
     sub.add_parser("acl-check").set_defaults(func=cmd_acl_check)
     sub.add_parser("verify").set_defaults(func=cmd_verify)
+    sub.add_parser("selftest").set_defaults(func=cmd_selftest)
+    sub.add_parser("kdf-check").set_defaults(func=cmd_kdf_check)
+    for name, fn in (("installer-set", cmd_installer_set), ("installer-get", cmd_installer_get)):
+        p = sub.add_parser(name)
+        p.add_argument("--name", required=True)
+        p.set_defaults(func=fn)
 
     a = ap.parse_args()
     try:

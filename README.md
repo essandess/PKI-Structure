@@ -136,11 +136,11 @@ certificates can no longer be revoked), `-h`.
 | `create_root.sh` | self | EC P-384 | 7305 days | `root.{cert.pem,cer}`, `root.{key.pem,p12}`, CRL |
 | `create_intermediate.sh` | root | EC P-384 | 3653 days | `intermediate.*` and `intermediate.<sha1>.*`, CRL; TLS/code signing only, name-constrained |
 | `create_intermediate_smime.sh` | root | EC P-384 | 3653 days | `intermediate_smime.*` and `intermediate_smime.<sha1>.*`, CRL; emailProtection only |
-| `create_server.sh` | intermediate | EC P-256 (RSA 2048) | 825 days | `<SERVER_FQDN>.<sha1>.*`, incl. `key.pem.decrypted` (0600) |
+| `create_server.sh` | intermediate | EC P-256 (RSA 2048) | 825 days | `<SERVER_FQDN>.<sha1>.*`; with `--decrypt-key` also `key.pem.decrypted` (0600, unencrypted) |
 | `create_codesign.sh` | intermediate | EC P-256 (RSA 2048) | 825 days | `codesign.<sha1>.*` (no unsuffixed names) |
 | `create_smime.sh EMAIL CERTNAME` | intermediate_smime | signature EC P-256; encryption RSA 3072 | 825 days | `CERTNAME-{signature,encryption}.*` plus `<sha1>` copies |
 | `create_privoxy.sh` | self | EC P-256 | 825 days | `privoxy.*` |
-| `create_adblock2privoxy.sh` | privoxy | EC P-256 | 825 days | `adblock2privoxy-nginx.<sha1>.*`, incl. `key.pem.decrypted` |
+| `create_adblock2privoxy.sh` | privoxy | EC P-256 | 825 days | `adblock2privoxy-nginx.<sha1>.*`; with `--decrypt-key` also `key.pem.decrypted` (unencrypted) |
 
 A leaf's validity is shortened to end a day before its issuer's.
 

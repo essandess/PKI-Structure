@@ -396,7 +396,7 @@ run_yes "PKI build" bin/clean_everything_and_create_pki.sh --create-pki
 step "supersede: intermediate renewal, S/MIME reissue"
 run "intermediate renewal" bin/create_intermediate.sh
 run "S/MIME reissue" bin/create_organization_smime.sh
-run "revocation-test server cert" bin/create_server.sh --server-fqdn "revoketest.${DOMAIN_NAME}"
+run "revocation-test server cert" bin/create_server.sh --decrypt-key --server-fqdn "revoketest.${DOMAIN_NAME}"
 
 SRV=$(latest server/certs/"${SERVER_FQDN}".*.cert.pem)
 CS=$(latest codesign/certs/codesign.*.cert.pem)
@@ -544,6 +544,21 @@ RV="revoketest.${DOMAIN_NAME}"
 RVC=$(latest server/certs/"${RV}".*.cert.pem)
 [ -f "${RVC}" ] || die "revocation-test certificate missing"
 check  "pre-revocation: verifies"        vfy sslserver "${RVC}"
+decrypted_of() { local b=${1##*/}; printf 'server/private/%s.key.pem.decrypted' "${b%.cert.pem}"; }
+key_matches()  { [ "$("${OPENSSL}" pkey -in "$1" -pubout)" = "$("${OPENSSL}" x509 -in "$2" -noout -pubkey)" ]; }
+no_adblock_decrypted() { ! ls privoxy/adblock2privoxy/private/*.decrypted >/dev/null 2>&1; }
+adblock_decrypted_ok() {
+    local k c
+    k=$(latest privoxy/adblock2privoxy/private/adblock2privoxy-nginx.*.key.pem.decrypted)
+    c=$(latest privoxy/adblock2privoxy/certs/adblock2privoxy-nginx.*.cert.pem)
+    [ -f "${k}" ] && mode_is "${k}" 600 && key_matches "${k}" "${c}"
+}
+check  "create_server --decrypt-key: file is 0600"              mode_is "$(decrypted_of "${RVC}")" 600
+check  "create_server --decrypt-key: key matches the certificate" key_matches "$(decrypted_of "${RVC}")" "${RVC}"
+fails  "create_server: no decrypted key by default"             test -e "$(decrypted_of "${SRV}")"
+check  "create_adblock2privoxy: no decrypted key by default"    no_adblock_decrypted
+run    "adblock2privoxy with --decrypt-key"                     bin/create_adblock2privoxy.sh --decrypt-key
+check  "create_adblock2privoxy --decrypt-key: 0600, matches"    adblock_decrypted_ok
 check  "revoke_certificate keyCompromise" revoke "${RVC}" intermediate keyCompromise
 refuse "revoked certificate rejected"    "certificate revoked" vfy sslserver "${RVC}"
 check  "intermediate CRL still verifies" crl_ok intermediate/crl/intermediate.crl.pem intermediate/certs/intermediate.cert.pem

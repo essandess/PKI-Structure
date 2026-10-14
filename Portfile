@@ -51,7 +51,7 @@ proc is_private_path {path} {
 
 proc pki_lockdown {path {is_private 0}} {
     if {[file isdirectory $path]} {
-        if {[[is_private_path $path]]} {
+        if {[is_private_path $path]} {
             set is_private 1
         }
         if {$is_private} {
@@ -395,7 +395,7 @@ System-level PKI is installed in ${pki_etc_dir}, whose\
 Content details:
     ${pki_share_dir}
         Pristine reference copy of the scripts and openssl configs.
-        Replaced on every upgrade; do not edit in place.
+        Replaced on every upgrade\; do not edit in place.
 
     ${pki_etc_dir}
         Live PKI deployment. pki_identity.env, 

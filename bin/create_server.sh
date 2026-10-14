@@ -5,7 +5,10 @@
 # https://support.apple.com/en-us/HT210176
 DAYS=825
 
-# Usage: create_server.sh [--server-fqdn SERVER_FQDN] [-a EC|RSA] [-c|--clean|-vc|--veryclean] [-h|--help]
+# Usage: create_server.sh [--server-fqdn SERVER_FQDN] [--decrypt-key] [-a EC|RSA] [-c|--clean|-vc|--veryclean] [-h|--help]
+#
+# --decrypt-key also writes private/<name>.<sha1>.key.pem.decrypted (0600): the UNENCRYPTED
+# key, for daemons that cannot ask for a passphrase (postfix, dovecot, nginx). Off by default.
 #
 # SERVER_FQDN comes from ./pki_identity.env; --server-fqdn overrides it for this
 # run. It must equal DOMAIN_NAME or be under it: the intermediate's
@@ -20,6 +23,16 @@ cd "${PKI_ROOT}" || exit
 . "${SCRIPT_DIR}/pki_common.sh"
 
 # --server-fqdn is ours; everything else is for pki_structure.sh
+
+# --decrypt-key is ours too: it also writes the UNENCRYPTED key (private/*.key.pem.decrypted)
+DECRYPT_KEY=0
+_args=()
+for _a in "$@"; do
+    if [ "${_a}" = "--decrypt-key" ]; then DECRYPT_KEY=1; else _args+=("${_a}"); fi
+done
+set -- ${_args[@]+"${_args[@]}"}
+DECRYPT_FILES=""
+if [ "${DECRYPT_KEY}" = "1" ]; then DECRYPT_FILES=" private/key.pem.decrypted"; fi
 SERVER_FQDN_FLAG=""
 ARGS=()
 
@@ -49,7 +62,7 @@ while [[ $# -gt 0 ]]; do
 done
 set -- "${ARGS[@]}"
 
-POSITIONAL_ARGS_USAGE="${POSITIONAL_ARGS_USAGE:-[--server-fqdn SERVER_FQDN]}"
+POSITIONAL_ARGS_USAGE="${POSITIONAL_ARGS_USAGE:-[--server-fqdn SERVER_FQDN] [--decrypt-key]}"
 
 if [ -n "${SERVER_FQDN_FLAG}" ]; then
     SERVER_FQDN=$(printf '%s' "${SERVER_FQDN_FLAG}" | tr '[:upper:]' '[:lower:]')
@@ -145,7 +158,8 @@ fi
 
 pki_finish_cert "${CERTDIR}" "${CERTNAME}" "${ISSUERCADIR}" "${ISSUERCANAME}"
 
-# decrypt private key
+# decrypt private key (--decrypt-key only)
+if [ "${DECRYPT_KEY}" = "1" ]; then
 case ${ALGORITHM} in
     EC)
         "${OPENSSL}" ec -in "${CERTDIR}"/private/"${CERTNAME}".key.pem -out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted -passin fd:3 3< <(pki_kc get --cert "${CERTDIR}/certs/${CERTNAME}.cert.pem")
@@ -157,7 +171,8 @@ case ${ALGORITHM} in
 	echo "Unknown algorithm '${ALGORITHM}'"
 	exit 1
 esac
+fi
 
 # rename certificate
 pki_sha1_files mv "${CERTDIR}" "${CERTNAME}" "${SERVER_FQDN}" \
-    "private/key.pem private/key.pem.decrypted private/p12 certs/cer certs/cert.pem certs/chain.pem"
+    "private/key.pem private/p12 certs/cer certs/cert.pem certs/chain.pem${DECRYPT_FILES}"

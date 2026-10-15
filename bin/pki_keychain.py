@@ -38,7 +38,7 @@ Entries   one per private key, found by SHA-256 of its public key, so every
   installer-get --name NAME              print it
   export-master                          print the master password (escrow)
   import-master                          restore the master item from stdin; refuses if present
-  prune [-n]   list   acl-check
+  prune [-n]   reap   list   acl-check
 """
 from __future__ import annotations
 
@@ -600,9 +600,32 @@ def target(a) -> str:
     return a.id or cert_id(a.cert)
 
 
+def reap_pending() -> None:
+    """Remove `pending` entries (key made, certificate never recorded)
+    whose key file is gone: a failed issuance. Caller holds the lock."""
+    if not dbfile().exists():
+        return
+    db = Db()
+    rows = db.entries()
+    if rows is None:
+        return
+    for r in rows:
+        t, url = r["Title"], r.get("URL", "")
+        if (TITLE_RE.match(t) and r.get("Username") == "pending"
+                and url.startswith("file:") and not Path(url[5:]).exists()):
+            print("removing orphaned entry " + t, file=sys.stderr)
+            db.rm(t)
+
+
+def cmd_reap(a) -> None:
+    with lock():
+        reap_pending()
+
+
 def cmd_init(a) -> None:
     with lock():
         ensure_db()
+        reap_pending()
 
 
 def cmd_export_master(a) -> None:
@@ -652,7 +675,8 @@ def cmd_genkey(a) -> None:
         key = serialization.load_pem_private_key(out.read_bytes(), pw.encode())
         kid = spki_id(key.public_key())
         try:
-            Db().add(f"{kid[:16]} :: {a.label.replace('/', '_')}", "pending", "", pw)
+            Db().add(f"{kid[:16]} :: {a.label.replace('/', '_')}", "pending",
+                     f"file:{out.resolve()}", pw)
         except KeychainError:
             out.unlink(missing_ok=True)
             raise
@@ -836,6 +860,7 @@ def main() -> None:
     p.add_argument("-n", "--dry-run", action="store_true")
     p.set_defaults(func=cmd_prune)
     sub.add_parser("list").set_defaults(func=cmd_list)
+    sub.add_parser("reap").set_defaults(func=cmd_reap)
     sub.add_parser("acl-check").set_defaults(func=cmd_acl_check)
     sub.add_parser("verify").set_defaults(func=cmd_verify)
     sub.add_parser("selftest").set_defaults(func=cmd_selftest)

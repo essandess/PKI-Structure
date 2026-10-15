@@ -114,7 +114,7 @@ check it. `PKI_KEYCHAIN_KDF_ROUNDS` sets the rounds for a new database.
 
 ```sh
 bin/pki_keychain.py get --cert CERT [--field p12]     # print a secret
-bin/pki_keychain.py list | prune [-n] | acl-check
+bin/pki_keychain.py list | prune [-n] | reap | acl-check  # reap: failed issuances
 bin/pki_keychain.py export-master | import-master     # escrow / restore the master item (stdin)
 bin/pki_keychain.py verify | kdf-check    # master item + database; KDBX4/Argon2 policy
 bin/pki_keychain.py installer-set | installer-get --name NAME   # installer passwords (stdin / stdout)

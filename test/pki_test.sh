@@ -435,6 +435,13 @@ master_attrs()   { security find-generic-password -s "${SERVICE}" "${PKI_KEYCHAI
 has_label()      { master_attrs | grep -q "=\"${LABEL}\""; }
 no_keyfile()     { master_pw | "${KPCLI}" ls -q "${PKI_KEYCHAIN_DIR}/pki-structure.kdbx"; }
 restore_master() { printf '%s\n' "${MASTER}" | KC import-master; }
+reap_test() {   # a failed issuance leaves no entry once init has run
+    local k="${TMPD}/reap.key.pem" id
+    id=$(KC genkey --alg EC --out "${k}" --label reap) || return 1
+    rm -f "${k}"
+    KC init
+    ! KC get --id "${id}"
+}
 installer_roundtrip() {
     printf 'pw-%s\n' "$$" | KC installer-set --name test_installer.sh &&
     [ "$(KC installer-get --name test_installer.sh)" = "pw-$$" ] &&
@@ -494,6 +501,7 @@ check  "right master restored"                        restore_master
 check  "verify passes again"                          KC verify
 check  "installer password: store, replace, retrieve" installer_roundtrip
 refuse "installer password: unknown name"             "no installer entry" KC installer-get --name nosuch.sh
+check  "init reaps a failed issuance" reap_test
 
 # ================================================================ certificates
 step "chain, purpose, CRL"

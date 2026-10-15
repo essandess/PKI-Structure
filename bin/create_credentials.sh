@@ -1909,7 +1909,7 @@ fi
 
 build_payload_dir
 if [ "${#NAMES[@]}" -gt 0 ] && [ "${SMIME_COUNT}" -eq 0 ]; then
-    die "none of the matching S/MIME certificates can be included (no .p12, or rejected by validation or by an --exclude flag: see above)."
+    die "none of the matching S/MIME certificates can be included (no .p12, or rejected by validation: see above)."
 fi
 
 # The payload is secret, and so encrypted, when it holds .p12 password files

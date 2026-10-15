@@ -470,7 +470,7 @@ lanes = struct.unpack("<I", p["P"])[0]
 assert rounds >= 16 and mem >= 64 and lanes == 4, f"{rounds} rounds, {mem} MiB, {lanes} lanes"
 PY
 }
-help_fits() { ! COLUMNS=80 "${PYTHON}" bin/pki_keychain.py --help | awk 'length($0) > 80 { bad = 1 } END { exit bad }' || return 0; }
+help_fits() { COLUMNS=80 "${PYTHON}" bin/pki_keychain.py --help | awk 'length($0) > 80 { bad = 1 } END { exit bad }'; }
 MASTER=$(master_pw)
 check  "master item: service (Where) is the reverse-DNS id, name is the label" has_label
 check  "database is KDBX4, Argon2, >= 64 MiB, 4 lanes" KC kdf-check

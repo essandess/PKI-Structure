@@ -689,7 +689,7 @@ emit_entry() {
     emit_string Title "${TITLE}"
     emit_string UserName ""
     pw=${INSTALLER_PW}
-    emit_string "${KEEPASS_GROUP_NAME}" "${pw}" protect
+    emit_string Password "${pw}" protect
     emit_string URL ""
     printf '\t\t\t<String><Key>Notes</Key><Value>%s</Value></String>\n' \
         "$(xml_esc "${notes}" 1)"
@@ -731,7 +731,7 @@ emit_xml() {
     printf '<KeePassFile>\n\t<Meta>\n'
     printf '\t\t<Generator>%s</Generator>\n' "${0##*/}"
     printf '\t</Meta>\n\t<Root>\n'
-    emit_group_open Password ""
+    emit_group_open "${KEEPASS_GROUP_NAME}" ""
     if [ -n "${GROUP}" ]; then IFS=/ read -r -a parts <<<"${GROUP}"; fi
     for p in "${parts[@]}"; do
         path="${path}/${p}"

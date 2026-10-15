@@ -1391,7 +1391,8 @@ def sign(unsigned: Path, signed: Path) -> None:
 
     with tempfile.TemporaryDirectory() as td:
         cmd = [
-            "openssl", "smime", "-sign", "-binary", "-nodetach",
+            os.environ.get("OPENSSL", "openssl"), "smime", "-sign",
+            "-binary", "-nodetach",
             "-md", digest,
             "-in", str(unsigned),
             "-signer", str(cert_file), "-inkey", str(key),
@@ -1426,7 +1427,8 @@ def sign(unsigned: Path, signed: Path) -> None:
         # round-trips byte-for-byte.
         out = Path(td) / "verified.out"
         v = subprocess.run(
-            ["openssl", "smime", "-verify", "-binary", "-inform", "der",
+            [os.environ.get("OPENSSL", "openssl"), "smime", "-verify",
+             "-binary", "-inform", "der",
              "-in", str(signed), "-noverify", "-out", str(out)],
             capture_output=True, text=True,
         )

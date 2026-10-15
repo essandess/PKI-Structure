@@ -28,7 +28,7 @@ and separable keyfile.
 * Python 3.9+ with `cryptography` 44+ (certificate validation, KDBX4 database
   creation) and `PyYAML` (MDM profiles).
 * `keepassxc-cli` (key passphrases, KeePassXC integration; `KEEPASSXC_CLI` overrides lookup) and macOS `security`.
-* `rsync` (deployment); `sf-pwgen` (optional; falls back to `openssl rand`).
+* `rsync` (deployment).
 
 ## Deploying to a new directory
 
@@ -105,10 +105,12 @@ password. The master password (192 random bits) is the generic password item wit
 Passphrase` in the System keychain (root) or the login keychain; it is created only when
 absent, never replaced or deleted, and never next to an existing database. The database
 also needs a key file (KeePassXC XML v2, 0600): `keyfile/pki-structure.keyx`, or the path in
-`PKI_KEYCHAIN_KEYFILE`; keep a copy offline. Back up the database, the key file and the item
+`PKI_KEYCHAIN_KEYFILE`; keep a copy offline. In the login keychain any process of the user can
+read the master item (`-T /usr/bin/security`); run as root to use the System
+keychain. Back up the database, the key file and the item
 together: any one missing makes the others useless. The database is KDBX4
-(Argon2id, 64 MiB, 4 lanes, at least 32 rounds); `kdf-check` and `verify`
-check it. `PKI_KEYCHAIN_KDF_ITER` sets the rounds for a new database.
+(Argon2id, 64 MiB, 4 lanes, at least 16 rounds); `kdf-check` and `verify`
+check it. `PKI_KEYCHAIN_KDF_ROUNDS` sets the rounds for a new database.
 
 ```sh
 bin/pki_keychain.py get --cert CERT [--field p12]     # print a secret
@@ -139,7 +141,7 @@ certificates can no longer be revoked), `-h`.
 | `create_server.sh` | intermediate | EC P-256 (RSA 2048) | 825 days | `<SERVER_FQDN>.<sha1>.*`; with `--decrypt-key` also `key.pem.decrypted` (0600, unencrypted) |
 | `create_codesign.sh` | intermediate | EC P-256 (RSA 2048) | 825 days | `codesign.<sha1>.*` (no unsuffixed names) |
 | `create_smime.sh EMAIL CERTNAME` | intermediate_smime | signature EC P-256; encryption RSA 3072 | 825 days | `CERTNAME-{signature,encryption}.*` plus `<sha1>` copies |
-| `create_privoxy.sh` | self | EC P-256 | 825 days | `privoxy.*` |
+| `create_privoxy.sh` | self | EC P-256 | 856 days | `privoxy.*` |
 | `create_adblock2privoxy.sh` | privoxy | EC P-256 | 825 days | `adblock2privoxy-nginx.<sha1>.*`; with `--decrypt-key` also `key.pem.decrypted` (unencrypted) |
 
 A leaf's validity is shortened to end a day before its issuer's.
@@ -270,7 +272,8 @@ A pinned certificate that fails the checks is an error, not a fallback.
 
 ```sh
 bin/create_credentials.sh [--user-keychain] [--extra-pki-dir DIR]...
-    [--exclude-expired-encryption] [--exclude-superseded-encryption] ['NAME_GLOB' ...]
+    [--with-privoxy] [--allow-expired-encryption]
+    [--allow-superseded-encryption] ['NAME_GLOB' ...]
 bin/create_credentials.sh --ca-certs-only [--user-keychain]
 ```
 
@@ -279,7 +282,7 @@ listing the payload and confirming. `-h` lists all options.
 
 | Mode | Payload | Encrypted |
 |---|---|---|
-| default | root, valid intermediate (both required) and privoxy CA certificates; S/MIME `.p12` files matching the globs | yes, if it has `.p12` files |
+| default | root, valid intermediate (both required), valid S/MIME intermediate; privoxy CA with `--with-privoxy`; S/MIME `.p12` files matching the globs | yes, if it has `.p12` files |
 | `--ca-certs-only` | the same CA certificates only; no `.p12`, no passwords | no |
 
 CA private keys are never included.
@@ -290,7 +293,8 @@ CA private keys are never included.
   `}` RB, `[` LBK, `]` RBK, `,` C, `!`/`^` N), `nosmimes` without globs, or
   `cacerts`. `--extra-pki-dir DIR` (repeatable) also searches `DIR/smime`, a
   tree with the same layout (e.g. an older one with expired certificates).
-* **`.p12` passwords.** Each `.p12` must open with its keychain password or, in older trees, `<p12>.pass`, else line 2, else line 1, of its `passphrase.txt`. The script also
+* **`.p12` passwords.** Each `.p12` must open with its keychain password (`--extra-pki-dir`: that
+  tree's `keychain/`). The script also
   checks that the `.p12` holds the expected certificate and matching key.
 * **Validation.** Root and privoxy CA must verify against themselves; the
   intermediate against the root. S/MIME certificates must verify through a
@@ -366,7 +370,7 @@ installer's keychain password (never running the installer), so a missing or wro
 password fails before anything is stored. `--ca-certs-only` installers are unencrypted and rejected.
 
 * **Default:** one entry whose Password is the installer password; Notes list
-  the contents, no passwords. Entries go into the root group, `Passwords`.
+  the contents, no passwords. Entries go into the root group, `Password`.
 * **`--export-master`:** also (or, without `INSTALLER`, only) the PKI master
   password from the macOS keychain, titled `PKI-Structure KeePassXC Passphrase`
   (`--master-title`). Back up the key file and the `.kdbx` with it.

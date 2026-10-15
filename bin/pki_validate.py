@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from cryptography import x509
+from cryptography.exceptions import InvalidSignature
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 SIGN = ("digital_signature", "content_commitment")
@@ -182,6 +183,28 @@ def _usage_problem(cert: x509.Certificate, name: str, role: Role) -> str | None:
     return None
 
 
+def issuer_eku_problem(cert: x509.Certificate, trust: Trust,
+                       eku: x509.ObjectIdentifier, name: str) -> str | None:
+    """`-purpose any` ignores CA EKUs: the issuing CA must allow `name`."""
+    pem = trust.ca_bundle.read_text()
+    for block in re.findall(
+            r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+            pem, re.S):
+        ca = x509.load_pem_x509_certificate(block.encode())
+        try:
+            cert.verify_directly_issued_by(ca)
+        except (ValueError, TypeError, InvalidSignature):
+            continue
+        try:
+            ekus = ca.extensions.get_extension_for_class(
+                x509.ExtendedKeyUsage).value
+        except x509.ExtensionNotFound:
+            return None   # unrestricted CA
+        if eku in ekus:
+            return None
+    return f"no issuing CA allows {name}"
+
+
 def validate(cert: x509.Certificate, cert_file: Path, role_name: str,
              trust: Trust, now: datetime, allow_expired: bool = False,
              allow_superseded: bool = False) -> tuple[list[str], str]:
@@ -191,6 +214,9 @@ def validate(cert: x509.Certificate, cert_file: Path, role_name: str,
     if now < nb:
         return [f"not valid until {nb:%Y-%m-%d %H:%M}Z"], ""
     problem = _usage_problem(cert, role_name, role)
+    if problem:
+        return [problem], ""
+    problem = issuer_eku_problem(cert, trust, role.eku, role.eku_name)
     if problem:
         return [problem], ""
 

@@ -112,6 +112,13 @@ fi
 EMAIL="$1"
 CERTNAME="$2"
 
+# EMAIL goes into -subj, CERTNAME into file names: no '/', '\' or '..'.
+if ! [[ "${EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] \
+       || ! [[ "${CERTNAME}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    echo "Error: invalid EMAIL, or CERTNAME not [A-Za-z0-9_.-]." >&2
+    exit 1
+fi
+
 # The CN is "EMAIL - ROLE" and X.509 caps a CN at 64 characters (OpenSSL
 # enforces it whatever the cnf says): refuse now, before any key or
 # certificate exists. "encryption" is the longer role, so it decides.

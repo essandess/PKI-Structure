@@ -9,9 +9,8 @@
 # CA's database.
 # pathlen:0 (it signs only leaf certificates) and extendedKeyUsage serverAuth
 # restrict it; devices should also trust it for TLS only (privoxy/README.md).
-# Validity is set by create_privoxy.sh (DAYS): 825 days, the same as the
-# certificates it issues, so that its key is not exposed for longer than
-# those are.
+# Validity is set by create_privoxy.sh (DAYS): 856 days (leaf 825 + 31), so
+# its key is not exposed much longer than the certificates it issues.
 
 .include ./common_policy.cnf
 

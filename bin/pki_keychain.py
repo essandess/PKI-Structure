@@ -53,10 +53,8 @@ import hashlib
 import hmac
 import io
 import os
-import pty
 import re
 import secrets
-import select
 import shutil
 import struct
 import subprocess
@@ -188,46 +186,6 @@ def mk_delete() -> None:
     sec("delete-generic-password", "-s", ITEM, mk_target())
 
 
-def pty_security(args: list[str], secret: str) -> tuple[int, int]:
-    """Run security(1) on a pty and answer its password prompts: the secret
-    never appears in argv."""
-    pid, fd = pty.fork()
-    if pid == 0:
-        try:
-            os.execv(SECURITY, [SECURITY, *args])
-        finally:
-            os._exit(127)
-    buf, sent = b"", 0
-    while True:
-        ready, _, _ = select.select([fd], [], [], 30)
-        if not ready:
-            os.kill(pid, 9)
-            os.waitpid(pid, 0)
-            fail("security(1) timed out")
-        try:
-            data = os.read(fd, 4096)
-        except OSError:
-            break
-        if not data:
-            break
-        buf += data
-        if re.search(rb"(?i)password[^\n]*: $", buf):
-            os.write(fd, secret.encode() + b"\n")
-            buf, sent = b"", sent + 1
-    _, status = os.waitpid(pid, 0)
-    return os.waitstatus_to_exitcode(status), sent
-
-
-def default_keychain_ok() -> bool:
-    """add-generic-password -w (prompting) takes no keychain argument and so
-    writes to the default keychain; it must be the one queried."""
-    if os.environ.get("PKI_KEYCHAIN_FILE"):
-        return True
-    r = sec("default-keychain")
-    p = r.stdout.strip().strip('"')
-    return r.returncode == 0 and bool(p) and os.path.realpath(p) == os.path.realpath(mk_target())
-
-
 def root_only_ok() -> bool:
     """True if user 'nobody' cannot read the System keychain item."""
     if os.geteuid() != 0 or os.environ.get("PKI_KEYCHAIN_FILE"):
@@ -238,23 +196,25 @@ def root_only_ok() -> bool:
     return r.returncode != 0 or not r.stdout.strip()
 
 
+def _sq(s: str) -> str:
+    """Quote a word for `security -i` (double quotes, backslash escapes)."""
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
 def mk_create(pw: str) -> None:
     """Add the master item. Never replaces or removes an existing item."""
+    if any(ord(c) < 32 or ord(c) == 127 for c in pw):
+        fail("password contains control characters")
     acct = "root" if os.geteuid() == 0 else getpass.getuser()
-    base = ["add-generic-password", "-s", ITEM, "-l", ITEM_LABEL, "-a", acct,
-            "-D", "PKI-Structure", "-T", SECURITY]
-    if os.environ.get("PKI_KEYCHAIN_FILE"):
-        # test keychain only: -w must be last to prompt, so no keychain argument
-        rc = sec(*base, "-w", pw, mk_target()).returncode
-    else:
-        if not default_keychain_ok():
-            fail(f"{mk_target()} is not the default keychain; the item would be stored elsewhere")
-        rc, sent = pty_security([*base, "-w"], pw)  # default keychain: System (root) / login
-        if sent < 1:
-            rc = rc or 1
-    if rc:
-        fail(f"cannot create '{ITEM}' in {mk_target()} (exit {rc}); "
-             + ("it already exists and was not replaced" if mk_state() else "nothing was stored"))
+    words = ["add-generic-password", "-s", ITEM, "-l", ITEM_LABEL, "-a", acct,
+             "-D", "PKI-Structure", "-T", SECURITY, "-w", pw, mk_target()]
+    # explicit keychain; the secret is on stdin, not in argv
+    r = subprocess.run([SECURITY, "-i"], input=" ".join(map(_sq, words)) + "\n",
+                       capture_output=True, text=True)
+    if r.returncode or "security:" in r.stderr:
+        fail(f"cannot create '{ITEM}' in {mk_target()}: {r.stderr.strip()}; "
+             + ("it already exists and was not replaced" if mk_state()
+                else "nothing was stored"))
     if not mk_state():
         fail(f"'{ITEM}' not found in {mk_target()} after creation")
     if not root_only_ok():

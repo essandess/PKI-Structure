@@ -165,7 +165,7 @@ RSYNC_EXCLUDE_INCLUDE=(
     --exclude='*'
 )
 
-RSYNC_FLAGS=(-rtm -o -g --chmod=ugo=rwX,D0750,F0640)
+RSYNC_FLAGS=(-rtm --chmod=D0750,F0640)
 RSYNC_OVERWRITE_FLAGS=(--ignore-existing)
 
 if [ "${OVERWRITE}" == "1" ]; then

@@ -153,8 +153,7 @@ RSYNC_EXCLUDE_INCLUDE=(
     --exclude='*.env'
     --exclude='*.conf'
     --exclude='*.yaml'
-    --exclude='create_organization_smime.sh'
-    --exclude='create_organization_mdm.sh'
+    --exclude='create_organization_*.sh'
     --include='*/'
     --include='*.sh'
     --include='*.py'
@@ -166,11 +165,12 @@ RSYNC_EXCLUDE_INCLUDE=(
     --exclude='*'
 )
 
+RSYNC_FLAGS=(-rtm -o -g --chmod=ugo=rwX,D0750,F0640)
 RSYNC_OVERWRITE_FLAGS=(--ignore-existing)
 
 if [ "${OVERWRITE}" == "1" ]; then
     # Show what -ow would actually replace before asking.
-    CHANGES="$(rsync -rtm --dry-run --itemize-changes \
+    CHANGES="$(rsync "${RSYNC_FLAGS[@]}" --dry-run --itemize-changes \
         "${RSYNC_EXCLUDE_INCLUDE[@]}" \
         "${SRC}" "${DEST}/")"
     if [ -n "${CHANGES}" ]; then
@@ -194,7 +194,8 @@ if [ "${OVERWRITE}" == "1" ]; then
 fi
 
 # exclude/include to avoid any hint of overwriting exisiting personalized files
-TRANSFERRED="$(rsync -rtm --out-format='%n' "${RSYNC_OVERWRITE_FLAGS[@]}" \
+TRANSFERRED="$(rsync "${RSYNC_FLAGS[@]}" --out-format='%n' \
+    "${RSYNC_OVERWRITE_FLAGS[@]}" \
     "${RSYNC_EXCLUDE_INCLUDE[@]}" \
     "${SRC}" "${DEST}/")"
 
@@ -216,9 +217,10 @@ fi
 # Only seed necessary dependencies ; user expected to personalize the rest
 for PERSONALIZED in \
     pki_identity.env \
+    bin/create_organization_pki.sh \
     bin/create_organization_smime.sh \
-    bin/create_organization_mdm.sh \
     bin/create_organization_credentials.sh \
+    bin/create_organization_mdm.sh \
     "${MDM_PRIVATE_YAML}/ios-restrictions-baseline.yaml" \
     ; do
     BASELINE="${SRC}${PERSONALIZED}.sample"

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+
+# create_organization_credentials.sh
+
+set -e
+set -E
+set -o pipefail
+trap 'rc=$?; echo "Error: $(basename "$0") failed (exit ${rc}) at ${BASH_SOURCE[0]}:${LINENO}: ${BASH_COMMAND}" >&2' ERR
+if [ "$#" -gt 0 ]; then
+    echo "Error: $(basename "$0") takes no arguments (got $#)." >&2
+    echo "Usage: $(basename "$0")" >&2
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}" || exit
+
+# PKI chains of trust (with decrypted server and adblock2privoxy keys)
+
+bin/create_privoxy.sh && bin/create_adblock2privoxy.sh --decrypt-key
+
+bin/create_root.sh \
+    && bin/create_intermediate.sh \
+    && bin/create_intermediate_smime.sh \
+    && bin/create_server.sh --decrypt-key \
+    && bin/create_codesign.sh \
+    && bin/create_organization_smime.sh \
+    && bin/create_organization_credentials.sh \
+    && bin/create_organization_mdm.sh

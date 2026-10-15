@@ -45,11 +45,13 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import csv
 import fcntl
 import getpass
 import gzip
 import hashlib
 import hmac
+import io
 import os
 import pty
 import re
@@ -540,6 +542,21 @@ class Db:
         out = self.kp(["ls", "-R", "-f", self.file]).stdout
         return [t for t in out.splitlines() if TITLE_RE.match(t)]
 
+    def entries(self) -> list[dict[str, str]] | None:
+        """All entries in one open (CSV export); None to use ls + show.
+
+        Set PKI_KEYCHAIN_EXPORT=0 to disable; all secrets pass over the pipe.
+        """
+        if os.environ.get("PKI_KEYCHAIN_EXPORT") == "0":
+            return None
+        r = self.kp(["export", "-f", "csv", self.file], check=False)
+        if r.returncode:
+            return None
+        rows = list(csv.DictReader(io.StringIO(r.stdout)))
+        if rows and not {"Title", "Password"} <= set(rows[0]):
+            return None
+        return rows
+
     def find(self, kid: str, p12: bool = False) -> str | None:
         for t in self.titles():
             if t.startswith(kid[:16] + " :: ") and t.endswith(" :: p12") == p12:
@@ -563,7 +580,16 @@ class Db:
 def get_secret(cert=None, field: str = "key", kid: str | None = None,
                keychain_dir: Path | None = None) -> str:
     kid = kid or cert_id(cert)
-    t = (db := Db(keychain_dir)).find(kid, field == "p12")
+    db = Db(keychain_dir)
+    rows = db.entries()
+    if rows is not None:
+        pre = kid[:16] + " :: "
+        for r in rows:
+            t = r["Title"]
+            if t.startswith(pre) and t.endswith(" :: p12") == (field == "p12"):
+                return r["Password"]
+        fail(f"no keychain entry for key {kid[:16]} ({field})")
+    t = db.find(kid, field == "p12")
     if t is None:
         fail(f"no keychain entry for key {kid[:16]} ({field})")
     return db.show(t)
@@ -734,6 +760,13 @@ def cmd_installer_set(a) -> None:
 
 def cmd_installer_get(a) -> None:
     db = Db()
+    rows = db.entries()
+    if rows is not None:
+        hit = [r["Password"] for r in rows if r["Title"] == a.name]
+        if not hit:
+            fail(f"no installer entry '{a.name}' in {db.file}")
+        print(hit[0])
+        return
     if not db.has(a.name):
         fail(f"no installer entry '{a.name}' in {db.file}")
     print(db.show(a.name))

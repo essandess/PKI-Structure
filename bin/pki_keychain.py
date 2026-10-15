@@ -196,6 +196,17 @@ def root_only_ok() -> bool:
     return r.returncode != 0 or not r.stdout.strip()
 
 
+def root_can_read(pw: str) -> bool:
+    """True if root reads the item back without a prompt (20 s limit)."""
+    try:
+        r = subprocess.run([SECURITY, "find-generic-password", "-s", ITEM,
+                            "-w", mk_target()], capture_output=True,
+                           text=True, stdin=subprocess.DEVNULL, timeout=20)
+    except subprocess.TimeoutExpired:
+        return False
+    return r.returncode == 0 and r.stdout.rstrip("\n") == pw
+
+
 def _sq(s: str) -> str:
     """Quote a word for `security -i` (double quotes, backslash escapes)."""
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
@@ -206,8 +217,12 @@ def mk_create(pw: str) -> None:
     if any(ord(c) < 32 or ord(c) == 127 for c in pw):
         fail("password contains control characters")
     acct = "root" if os.geteuid() == 0 else getpass.getuser()
+    # System keychain: trust no application (security(1) is runnable by
+    # any user); root's read access is checked below
+    sysk = os.geteuid() == 0 and not os.environ.get("PKI_KEYCHAIN_FILE")
     words = ["add-generic-password", "-s", ITEM, "-l", ITEM_LABEL, "-a", acct,
-             "-D", "PKI-Structure", "-T", SECURITY, "-w", pw, mk_target()]
+             "-D", "PKI-Structure", "-T", "" if sysk else SECURITY,
+             "-w", pw, mk_target()]
     # explicit keychain; the secret is on stdin, not in argv
     r = subprocess.run([SECURITY, "-i"], input=" ".join(map(_sq, words)) + "\n",
                        capture_output=True, text=True)
@@ -220,6 +235,9 @@ def mk_create(pw: str) -> None:
     if not root_only_ok():
         mk_delete()  # created above; no database depends on it yet
         fail("System keychain item is readable by non-root users; removed it")
+    if sysk and not root_can_read(pw):
+        mk_delete()
+        fail("root cannot read the item without a prompt; removed it")
 
 
 def has_item(keychain: str) -> bool:

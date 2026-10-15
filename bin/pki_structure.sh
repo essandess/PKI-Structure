@@ -199,11 +199,9 @@ if [ "${CLEAN}" == "1" ]; then
 	    "${CERTDIR}"/crl/* \
 	    "${CERTDIR}"/newcerts/* \
 	; do
-	for ff in "${f[@]}"; do
-	    if [ -f "${ff}" ]; then
-		rm "${ff}"
-	    fi
-	done
+	if [ -f "${f}" ]; then
+	    rm "${f}"
+	fi
     done
     if [ "${VERYCLEAN}" == "1" ]; then
 	if [ "${PKI_ASSUME_YES:-0}" == "0" ]; then
@@ -218,11 +216,9 @@ if [ "${CLEAN}" == "1" ]; then
 	for f in \
 	    "${CERTDIR}"/private/passphrase.txt \
 	; do
-	for ff in "${f[@]}"; do
-	    if [ -f "${ff}" ]; then
-		rm "${ff}"
-	    fi
-	done
+	if [ -f "${f}" ]; then
+	    rm "${f}"
+	fi
     done
     fi
     for d in \

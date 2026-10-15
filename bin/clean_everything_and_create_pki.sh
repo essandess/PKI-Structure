@@ -43,7 +43,8 @@ Usage:
 
 $(basename "$0") [--create-pki] [-h|--help]
 
-Deletes every key, certificate and CA database in this PKI deployment.
+Deletes every key, certificate and CA database in this PKI deployment,
+and the generated installers and MDM profiles (not the YAML sources).
 With --create-pki, the PKI is then regenerated from scratch.
 Default is to clean only.
 USAGE
@@ -68,6 +69,8 @@ echo
 echo "This includes the root CA, both intermediate CAs, server, codesign, S/MIME,"
 echo "privoxy, and adblock2privoxy keys and certificates. Anything issued by"
 echo "the current root/intermediate will no longer be valid once this completes."
+echo "The generated installers and MDM profiles in mdm-private/ are deleted too"
+echo "(the YAML sources are kept)."
 if [ "${CREATE_PKI}" != "1" ]; then
     echo "The PKI will NOT be recreated (pass --create-pki to do so)."
 fi
@@ -86,6 +89,12 @@ cd "${PKI_ROOT}" || exit
 # Clear everything
 bin/create_root.sh -vc ; bin/create_intermediate.sh -vc ; bin/create_intermediate_smime.sh -vc ; bin/create_server.sh -vc ; bin/create_codesign.sh -vc ; bin/create_smime.sh -vc
 bin/create_privoxy.sh -vc ; bin/create_adblock2privoxy.sh -vc
+
+# Generated installers and profiles chain to the deleted CAs; YAML is kept
+rm -f mdm-private/credentials/install_credentials_*.sh \
+      mdm-private/credentials/install_credentials_*.sh.pass \
+      mdm-private/mobfileconfigs-unsigned/*.mobileconfig \
+      mdm-private/mobfileconfigs-signed/*.mobileconfig
 
 if [ "${CREATE_PKI}" == "1" ]; then
     # Create PKI chain of trust all at once

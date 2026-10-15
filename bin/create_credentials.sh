@@ -719,8 +719,11 @@ find_codesign_signer() {
             fi
         fi
         if [ -z "${why}" ]; then
-            if ! out=$(verify_chain "${f}"); then
-                why="failed chain/CRL verification: $(verify_error "${out}")"
+            # chain, CRLs, index.txt, EKUs incl. the issuing CA's (one validator)
+            if ! out=$("${PYTHON}" "${SCRIPT_DIR}/pki_validate.py" codesign "${f}" \
+                           --ca-bundle "${CA_BUNDLE}" --crl-bundle "${CRL_ALL}" \
+                           "${INDEX_ARGS[@]}" 2>&1); then
+                why="${out}"
             fi
         fi
         if [ -n "${why}" ]; then
@@ -1449,6 +1452,29 @@ pem_sha256() {
 }
 
 
+# signer_issuer_ok SIGNER: the CA that issued SIGNER must allow codeSigning
+# (`-purpose any` ignores CA EKUs). The issuer is the block certificate through
+# which SIGNER verifies to the root; a CA with no EKU is refused.
+signer_issuer_ok() {
+    local f eku
+
+    if openssl verify -CAfile "${ROOT_PEM}" "$1" >/dev/null 2>&1; then
+        return 0   # issued by the root itself
+    fi
+    for f in "${WORK}"/.sigcert.*.pem; do
+        [ -f "${f}" ] || continue
+        openssl verify -CAfile "${ROOT_PEM}" -untrusted "${f}" "$1" \
+            >/dev/null 2>&1 || continue
+        eku=$(openssl x509 -noout -ext extendedKeyUsage -in "${f}" 2>/dev/null) \
+            || eku=""
+        case "${eku}" in
+            *"Code Signing"*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+
 # verify_signature: runs BEFORE the payload is decrypted or parsed. The
 # detached PKCS#7 (between __SIGNATURE_BELOW__ and __PAYLOAD_BELOW__) carries
 # the signer, the intermediates and the root. The signed content is all of
@@ -1502,6 +1528,8 @@ verify_signature() {
     case "${text}" in
         *"CA:TRUE"*) signature_failed "the signer is a CA certificate." ;;
     esac
+    signer_issuer_ok "${signer}" \
+        || signature_failed "the signer's issuing CA does not allow codeSigning."
 
     ROOT_SHA256=$(pem_sha256 "${ROOT_PEM}")
     [ -n "${ROOT_SHA256}" ] || signature_failed "cannot compute the SHA-256 of the root CA."

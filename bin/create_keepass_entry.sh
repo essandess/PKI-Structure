@@ -372,6 +372,33 @@ collect_anchors() {
     fi
 }
 
+# signer_issuer_ok SIGNER SIG: the CA that issued SIGNER must allow
+# codeSigning (`-purpose any` ignores CA EKUs); a CA with no EKU is refused.
+signer_issuer_ok() {
+    local signer=$1 sig=$2 f eku
+    local certs="${TMPD}/sig.certs"
+
+    if "${OPENSSL}" verify -CAfile "${ANCHORS}" "${signer}" >/dev/null 2>&1; then
+        return 0   # issued by the root itself
+    fi
+    "${OPENSSL}" pkcs7 -inform DER -in "${sig}" -print_certs -out "${certs}" \
+        2>/dev/null || return 1
+    awk -v p="${TMPD}/sig.cert" '
+        /-----BEGIN CERTIFICATE-----/ { n++; f = sprintf("%s.%d.pem", p, n) }
+        f { print > f }
+        /-----END CERTIFICATE-----/ { close(f); f = "" }' "${certs}"
+    for f in "${TMPD}"/sig.cert.*.pem; do
+        "${OPENSSL}" verify -CAfile "${ANCHORS}" -untrusted "${f}" "${signer}" \
+            >/dev/null 2>&1 || continue
+        eku=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage -in "${f}" \
+                  2>/dev/null) || eku=""
+        case "${eku}" in
+            *"Code Signing"*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 verify_installer_signature() {
     local signed="${TMPD}/installer.signed" sig="${TMPD}/installer.sig.der"
     local signer="${TMPD}/installer.signer.pem" out text
@@ -405,6 +432,8 @@ verify_installer_signature() {
     case "${text}" in
         *"CA:TRUE"*) die "the signer of ${INST_BASE} is a CA certificate" ;;
     esac
+    signer_issuer_ok "${signer}" "${sig}" \
+        || die "the issuing CA of the signer of ${INST_BASE} does not allow codeSigning"
     echo "Signature OK: ${INST_BASE} signed by" \
          "$("${OPENSSL}" x509 -noout -subject -in "${signer}" | sed 's/^subject= *//')." >&2
 }

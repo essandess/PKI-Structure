@@ -254,7 +254,8 @@ grep '^R' intermediate/index.txt        # revoked; '^V' for valid
 1. is within its validity period;
 2. has status `V` in `intermediate/index.txt` (revoked or superseded is never
    accepted);
-3. carries `codeSigning` in ExtendedKeyUsage, if that extension is present;
+3. carries `codeSigning` in ExtendedKeyUsage, if present, and its issuing CA
+   allows `codeSigning`;
 4. passes `openssl verify -crl_check_all` through a valid intermediate, with
    current CRLs for the whole chain.
 
@@ -321,7 +322,8 @@ CA private keys are never included.
   stored between `__SIGNATURE_BELOW__` and `__PAYLOAD_BELOW__`, signed per
   [Signer selection](#signer-selection). The installer verifies that the file is
   unchanged, that the signer chains to the root and intermediates carried in the
-  signature block (checked before the payload is decrypted or unpacked), and that the signer is a code signing, non-CA certificate. A recipient
+  signature block (checked before the payload is decrypted or unpacked), and that the signer is a non-CA code signing certificate whose issuing CA
+  allows code signing. A recipient
   has no CRL for the signer, so a signer revoked after signing is not detected.
 * **Root anchor.** A chain inside the file cannot show who built it. Before
   installing, the installer requires that the payload's root is already

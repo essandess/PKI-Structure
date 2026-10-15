@@ -9,8 +9,8 @@
 # CA's database.
 # pathlen:0 (it signs only leaf certificates) and extendedKeyUsage serverAuth
 # restrict it; devices should also trust it for TLS only (privoxy/README.md).
-# Validity is set by create_privoxy.sh (DAYS): 856 days (leaf 825 + 31), so
-# its key is not exposed much longer than the certificates it issues.
+# Validity: 825 + (PKI_RENEW_WINDOW_DAYS - 1) = 854 days, set by
+# create_privoxy.sh (DAYS), so the CA can be renewed before its leaf expires.
 
 .include ./common_policy.cnf
 

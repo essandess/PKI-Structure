@@ -141,7 +141,7 @@ certificates can no longer be revoked), `-h`.
 | `create_server.sh` | intermediate | EC P-256 (RSA 2048) | 825 days | `<SERVER_FQDN>.<sha1>.*`; with `--decrypt-key` also `key.pem.decrypted` (0600, unencrypted) |
 | `create_codesign.sh` | intermediate | EC P-256 (RSA 2048) | 825 days | `codesign.<sha1>.*` (no unsuffixed names) |
 | `create_smime.sh EMAIL CERTNAME` | intermediate_smime | signature EC P-256; encryption RSA 3072 | 825 days | `CERTNAME-{signature,encryption}.*` plus `<sha1>` copies |
-| `create_privoxy.sh` | self | EC P-256 | 856 days | `privoxy.*` |
+| `create_privoxy.sh` | self | EC P-256 | 854 days (825 + (`PKI_RENEW_WINDOW_DAYS` - 1)) | `privoxy.*` |
 | `create_adblock2privoxy.sh` | privoxy | EC P-256 | 825 days | `adblock2privoxy-nginx.<sha1>.*`; with `--decrypt-key` also `key.pem.decrypted` (unencrypted) |
 
 A leaf's validity is shortened to end a day before its issuer's.

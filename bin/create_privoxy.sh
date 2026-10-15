@@ -16,11 +16,11 @@
 # privoxy/README.md) and trust the new certificate on the devices that use
 # the proxy.
 
-# simply replicate the relative short expiration of a private server cert
+# replicate the relative short expiration of a private server cert
 # because the server cert must be reissued anyway and longer Root CA lifetime
 # doesn't offer any real advantage
 # https://support.apple.com/en-us/HT210176
-DAYS=856  # 825 + 31
+# DAYS = 825 + (PKI_RENEW_WINDOW_DAYS - 1), set below (needs pki_common.sh).
 
 CATRUE=${CATRUE:-1}
 CERTDIR=${CERTDIR:-privoxy}
@@ -36,6 +36,13 @@ cd "${PKI_ROOT}" || exit
 . "${SCRIPT_DIR}/pki_common.sh"
 . "${PKI_ROOT}/bin/define_openssl.sh"
 PRIVOXY_FILES="private/key.pem private/p12 certs/cert.pem certs/chain.pem certs/cer"
+
+# The renewal window must open before the leaf (<= 825 days, capped to this
+# CA's life) expires, or the leaf can then only be reissued with a short life.
+[[ "${PKI_RENEW_WINDOW_DAYS}" =~ ^[0-9]+$ ]] \
+    && (( PKI_RENEW_WINDOW_DAYS >= 1 && PKI_RENEW_WINDOW_DAYS <= 365 )) \
+    || { echo "Error: PKI_RENEW_WINDOW_DAYS must be 1-365." >&2; exit 1; }
+DAYS=$((825 + (PKI_RENEW_WINDOW_DAYS - 1)))
 
 # --new-key is ours; everything else is for pki_structure.sh
 NEW_KEY=0

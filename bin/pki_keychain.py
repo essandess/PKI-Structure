@@ -1,44 +1,50 @@
 #!/usr/bin/env python3
-# PKI_KEYCHAIN_PATCH_V6
-"""pki_keychain.py -- key passphrases in a KeePassXC database; its master
-password in the macOS keychain, its key file on disk.
+# PKI_KEYCHAIN_PATCH_V7
+"""pki_keychain.py -- key passphrases in a KeePassXC database.
 
-Database  $PKI_KEYCHAIN_DIR (default <PKI_ROOT>/keychain)/pki-structure.kdbx; dir 0700, file 0600.
-          KDBX4, Argon2id, 64 MiB, 4 lanes, ~$PKI_KEYCHAIN_KDF_ROUNDS (16); written here because
+Layout    keepassxc/ (0700) holds keychain/, keyfile/ and master/.
+Database  $PKI_KEYCHAIN_DIR (default keepassxc/keychain)/pki-structure.kdbx;
+          dir 0700, file 0600. KDBX4, Argon2id, 64 MiB, 4 lanes,
+          ~$PKI_KEYCHAIN_KDF_ROUNDS (16); written here because
           keepassxc-cli db-create makes KDBX3.
-Key file  $PKI_KEYCHAIN_KEYFILE (default <PKI_ROOT>/keyfile/pki-structure.keyx), KeePassXC
-          XML v2, 0600. Required to open the database; keep a copy offline. Generated
-          only when no database exists yet, never for an existing one.
-Master    192 random bits, generic password item, service ("Where")
-          com.github.essandess.pki-structure.keepassxc-passphrase ($PKI_KEYCHAIN_ITEM),
-          name "PKI-Structure KeePassXC Passphrase": System keychain as root (verified unreadable by
-          other users), login keychain otherwise ($PKI_KEYCHAIN_FILE: another
-          keychain file, for tests). Created only when definitively absent and
-          never next to an existing database; an existing item is never replaced
-          or deleted.
-Installer passwords: entry "<installer file name>" (installer-set / installer-get).
+Key file  $PKI_KEYCHAIN_KEYFILE (default keepassxc/keyfile/pki-structure.keyx),
+          KeePassXC XML v2, 0600. Required to open the database; keep a copy
+          offline. Generated only when no database exists yet.
+Master    192 random bits; created only when absent and never next to an
+          existing database; never replaced or deleted.
+          root: 0600 file $PKI_KEYCHAIN_MASTER (default
+          keepassxc/master/pki-structure.pass); protects against other
+          users only.
+          other users: generic password item in the login keychain
+          ($PKI_KEYCHAIN_FILE: another keychain file, for tests), service
+          com.github.essandess.pki-structure.keepassxc-passphrase
+          ($PKI_KEYCHAIN_ITEM), name "PKI-Structure KeePassXC Passphrase".
+Installer passwords: entry "<installer file name>" (installer-set /
+          installer-get).
 Entries   one per private key, found by SHA-256 of its public key, so every
           certificate of that key (same-key renewal) finds it.
           "<id16> :: <CN>": Password = key passphrase, UserName = serial,
           URL = certificate SHA-256. "<id16> :: <CN> :: p12": Password =
           .p12 export password.
 
-  init                                   master item, key file and database
+  init                      master, key file and database
   genkey --alg EC|RSA [--curve C] [--bits N] --out KEY [--label CN]
-                                         encrypted key with a new passphrase; prints the key id
-  id --cert CERT                         key id of a certificate
-  record --cert CERT [--p12-like CERT]   attach certificate data; create the .p12 entry
+                            encrypted key, new passphrase; prints the key id
+  id --cert CERT            key id of a certificate
+  record --cert CERT [--p12-like CERT]
+                            attach certificate data; create the .p12 entry
   get (--id ID | --cert CERT) [--field key|p12]
-                                         print a secret (stdout only)
-  forget (--id ID | --cert CERT)         delete the key's entries
-  verify                                 master item readable and opens the database
-  selftest                               create, read, delete a scratch item (production path)
-  kdf-check                              database is KDBX4 with Argon2 >= 64 MiB, 4 lanes
-  installer-set --name NAME              store an installer password (stdin) as entry NAME
-  installer-get --name NAME              print it
-  export-master                          print the master password (escrow)
-  import-master                          restore the master item from stdin; refuses if present
-  prune [-n]   reap   list   acl-check
+                            print a secret (stdout only)
+  forget (--id ID | --cert CERT)
+                            delete the key's entries
+  verify                    master readable and opens the database
+  selftest                  scratch keychain item: create, read, delete
+  kdf-check                 database is KDBX4, Argon2 >= 64 MiB, 4 lanes
+  installer-set --name NAME store an installer password (stdin) as entry NAME
+  installer-get --name NAME print it
+  export-master             print the master password (escrow)
+  import-master             restore the master from stdin; refuses if present
+  prune [-n]   reap   list
 """
 from __future__ import annotations
 
@@ -143,7 +149,58 @@ def cert_cn(c: x509.Certificate) -> str:
     return "unnamed"
 
 
-# ---------------------------------------------------------------- macOS keychain
+# ---------------------------------------------------------------- master
+# Root: a 0600 file. Others (and tests, via PKI_KEYCHAIN_FILE): a generic
+# password item in a keychain.
+MASTER_NAME = "pki-structure.pass"
+
+
+def master_file() -> Path:
+    """$PKI_KEYCHAIN_MASTER, else keepassxc/master/ beside keychain/."""
+    env = os.environ.get("PKI_KEYCHAIN_MASTER")
+    if env:
+        return Path(env).expanduser()
+    return kdir().parent / "master" / MASTER_NAME
+
+
+def use_file() -> bool:
+    """The master is a file: as root, or when PKI_KEYCHAIN_MASTER is set."""
+    if os.environ.get("PKI_KEYCHAIN_MASTER"):
+        return True
+    return os.geteuid() == 0 and not os.environ.get("PKI_KEYCHAIN_FILE")
+
+
+def mf_state() -> bool:
+    """True if the master file exists; a symlink or non-file raises."""
+    p = master_file()
+    if p.is_symlink() or (p.exists() and not p.is_file()):
+        fail(f"{p} is not a regular file")
+    return p.exists()
+
+
+def mf_get() -> str:
+    p = master_file()
+    try:
+        st = p.stat()
+        if st.st_uid != os.geteuid() or st.st_mode & 0o077:
+            fail(f"{p} must be owned by you, mode 0600")
+        return p.read_text().rstrip("\n")
+    except OSError as e:
+        return fail(f"cannot read {p}: {e}")
+
+
+def mf_create(pw: str) -> None:
+    """Write the master file (0600); never replaces an existing one."""
+    p = master_file()
+    p.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except OSError as e:
+        return fail(f"cannot create {p}: {e}")
+    with os.fdopen(fd, "w") as f:
+        f.write(pw + "\n")
+
+
 def sec(*args, **kw) -> subprocess.CompletedProcess:
     return subprocess.run([SECURITY, *args], capture_output=True, text=True,
                           stdin=subprocess.DEVNULL, **kw)
@@ -153,8 +210,6 @@ def mk_target() -> str:
     f = os.environ.get("PKI_KEYCHAIN_FILE")
     if f:
         return f
-    if os.geteuid() == 0:
-        return SYSTEM_KEYCHAIN
     home = Path.home() / "Library" / "Keychains"
     for n in ("login.keychain-db", "login.keychain"):
         if (home / n).exists():
@@ -162,7 +217,7 @@ def mk_target() -> str:
     return fail("login keychain not found")
 
 
-def mk_state() -> bool:
+def kc_state() -> bool:
     """True if the master item exists, False only if the keychain says it is
     absent; any other failure (locked, unavailable) raises. Never infer absence."""
     r = sec("find-generic-password", "-s", ITEM, mk_target())
@@ -174,37 +229,16 @@ def mk_state() -> bool:
                 f"{r.stderr.strip()}; nothing was changed")
 
 
-def mk_get() -> str:
+def kc_get() -> str:
     r = sec("find-generic-password", "-s", ITEM, "-w", mk_target())
     if r.returncode:
         fail(f"cannot read '{ITEM}' from {mk_target()}: {r.stderr.strip()}")
     return r.stdout.rstrip("\n")
 
 
-def mk_delete() -> None:
+def kc_delete() -> None:
     """Only for an item created in this process with nothing depending on it."""
     sec("delete-generic-password", "-s", ITEM, mk_target())
-
-
-def root_only_ok() -> bool:
-    """True if user 'nobody' cannot read the System keychain item."""
-    if os.geteuid() != 0 or os.environ.get("PKI_KEYCHAIN_FILE"):
-        return True
-    r = subprocess.run([SECURITY, "find-generic-password", "-s", ITEM, "-w", SYSTEM_KEYCHAIN],
-                       capture_output=True, text=True, stdin=subprocess.DEVNULL, user="nobody",
-                       env={"PATH": "/usr/bin:/bin", "HOME": "/var/empty"})
-    return r.returncode != 0 or not r.stdout.strip()
-
-
-def root_can_read(pw: str) -> bool:
-    """True if root reads the item back without a prompt (20 s limit)."""
-    try:
-        r = subprocess.run([SECURITY, "find-generic-password", "-s", ITEM,
-                            "-w", mk_target()], capture_output=True,
-                           text=True, stdin=subprocess.DEVNULL, timeout=20)
-    except subprocess.TimeoutExpired:
-        return False
-    return r.returncode == 0 and r.stdout.rstrip("\n") == pw
 
 
 def _sq(s: str) -> str:
@@ -212,32 +246,41 @@ def _sq(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def mk_create(pw: str) -> None:
+def kc_create(pw: str) -> None:
     """Add the master item. Never replaces or removes an existing item."""
     if any(ord(c) < 32 or ord(c) == 127 for c in pw):
         fail("password contains control characters")
-    acct = "root" if os.geteuid() == 0 else getpass.getuser()
-    # System keychain: trust no application (security(1) is runnable by
-    # any user); root's read access is checked below
-    sysk = os.geteuid() == 0 and not os.environ.get("PKI_KEYCHAIN_FILE")
-    words = ["add-generic-password", "-s", ITEM, "-l", ITEM_LABEL, "-a", acct,
-             "-D", "PKI-Structure", "-T", "" if sysk else SECURITY,
-             "-w", pw, mk_target()]
+    words = ["add-generic-password", "-s", ITEM, "-l", ITEM_LABEL,
+             "-a", getpass.getuser(), "-D", "PKI-Structure",
+             "-T", SECURITY, "-w", pw, mk_target()]
     # explicit keychain; the secret is on stdin, not in argv
     r = subprocess.run([SECURITY, "-i"], input=" ".join(map(_sq, words)) + "\n",
                        capture_output=True, text=True)
     if r.returncode or "security:" in r.stderr:
         fail(f"cannot create '{ITEM}' in {mk_target()}: {r.stderr.strip()}; "
-             + ("it already exists and was not replaced" if mk_state()
+             + ("it already exists and was not replaced" if kc_state()
                 else "nothing was stored"))
-    if not mk_state():
+    if not kc_state():
         fail(f"'{ITEM}' not found in {mk_target()} after creation")
-    if not root_only_ok():
-        mk_delete()  # created above; no database depends on it yet
-        fail("System keychain item is readable by non-root users; removed it")
-    if sysk and not root_can_read(pw):
-        mk_delete()
-        fail("root cannot read the item without a prompt; removed it")
+
+
+def mk_state() -> bool:
+    return mf_state() if use_file() else kc_state()
+
+
+def mk_get() -> str:
+    return mf_get() if use_file() else kc_get()
+
+
+def mk_create(pw: str) -> None:
+    if use_file():
+        mf_create(pw)
+    else:
+        kc_create(pw)
+
+
+def mk_where() -> str:
+    return str(master_file()) if use_file() else mk_target()
 
 
 def has_item(keychain: str) -> bool:
@@ -245,12 +288,13 @@ def has_item(keychain: str) -> bool:
 
 
 def other_keychains() -> list[str]:
-    """Existing keychains, other than the queried one, that could hold the item."""
+    """Existing keychains, other than the one in use, that could hold the item."""
     cand = [SYSTEM_KEYCHAIN, str(Path.home() / "Library" / "Keychains" / "login.keychain-db")]
     for dom in ("user", "system", "common"):
         cand += [ln.strip().strip('"') for ln in sec("list-keychains", "-d", dom).stdout.splitlines()
                  if ln.strip()]
-    me, out = os.path.realpath(mk_target()), []
+    me = "" if use_file() else os.path.realpath(mk_target())
+    out = []
     for k in cand:
         if os.path.exists(k) and os.path.realpath(k) != me and k not in out:
             out.append(k)
@@ -258,34 +302,40 @@ def other_keychains() -> list[str]:
 
 
 def verify_open(db: Path, kf: Path | None) -> None:
-    """The master item must exist, be readable, and open the database."""
+    """The master must exist, be readable, and open the database."""
     if not mk_state():
         where = [k for k in other_keychains() if has_item(k)]
-        fail(f"master item '{ITEM}' is not in {mk_target()}; "
+        fail(f"master item is not in {mk_where()}; "
              + (f"it is in {', '.join(where)} (run as the matching user, or import-master)" if where
-                else "it is in no keychain searched, so the database cannot be opened")
+                else "it is nowhere searched, so the database cannot be opened")
              + ". Restore: pki_keychain.py import-master (password on stdin). Nothing was changed")
     mp = mk_get()
     try:
         kp(["ls", *(["-k", str(kf)] if kf else []), str(db)], [mp])
     except KeychainError as e:
-        fail(f"master item '{ITEM}' is readable but does not open {db.name} "
-             f"(wrong item or key file): {e}")
+        fail(f"master item in {mk_where()} is readable but does not open "
+             f"{db.name} (wrong item or key file): {e}")
 
 
 def ensure_master() -> bool:
-    """Create the master item if definitively absent; True if created."""
+    """Create the master if definitively absent; True if created."""
     if mk_state():
         return False
     mk_create(new_secret())
-    print(f"Created master item '{ITEM}' in {mk_target()}. Escrow it now: "
-          "pki_keychain.py export-master", file=sys.stderr)
+    where = mk_where()
+    if use_file():
+        print(f"WARNING: master passphrase created in {where} (0600); "
+              "it is readable by root.", file=sys.stderr)
+    else:
+        print(f"Created master item '{ITEM}' in {where}.", file=sys.stderr)
+    print("Escrow it now: pki_keychain.py export-master", file=sys.stderr)
     return True
 
 
 # ---------------------------------------------------------------- key file, database
 def kdir() -> Path:
-    return Path(os.environ.get("PKI_KEYCHAIN_DIR") or PKI_ROOT / "keychain")
+    env = os.environ.get("PKI_KEYCHAIN_DIR")
+    return Path(env) if env else PKI_ROOT / "keepassxc" / "keychain"
 
 
 def dbfile(d: Path | None = None) -> Path:
@@ -488,6 +538,10 @@ def ensure_db(d: Path | None = None) -> None:
                  "Restore it or set PKI_KEYCHAIN_KEYFILE")
         verify_open(db, kf)
         return
+    old = PKI_ROOT / "keychain" / DB_NAME
+    if old.exists() and not os.environ.get("PKI_KEYCHAIN_DIR"):
+        fail(f"{old} is the old location: move keychain/ and keyfile/ "
+             "into keepassxc/. Nothing was changed")
     ensure_master()
     new_kf = not kf.exists()
     if new_kf:
@@ -616,7 +670,7 @@ def cmd_import_master(a) -> None:
         fail("no password on stdin")
     with lock():
         if mk_state():
-            fail(f"'{ITEM}' already exists in {mk_target()}; not replaced")
+            fail(f"master item already exists in {mk_where()}; not replaced")
         d = kdir()
         if dbfile(d).is_file():
             if not keyfile(d).is_file():
@@ -728,18 +782,20 @@ def cmd_prune(a) -> None:
 
 
 def cmd_selftest(a) -> None:
-    """Create, read back and delete a scratch item through the production path."""
+    """Create, read back and delete a scratch keychain item."""
     global ITEM
+    if use_file():
+        fail("the master is a file; nothing to test")
     ITEM += " selftest"
-    if mk_state():
+    if kc_state():
         fail(f"'{ITEM}' exists in {mk_target()}; remove it first")
     pw = new_secret()
-    mk_create(pw)
+    kc_create(pw)
     try:
-        if mk_get() != pw:
+        if kc_get() != pw:
             fail("read-back differs from the stored password")
     finally:
-        mk_delete()
+        kc_delete()
     print(f"ok: created, read and deleted '{ITEM}' in {mk_target()}")
 
 
@@ -793,14 +849,6 @@ def cmd_verify(a) -> None:
     print("ok: master item readable, database opens; " + fmt_params(kdbx_params(db)))
 
 
-def cmd_acl_check(a) -> None:
-    if not mk_state():
-        fail(f"no '{ITEM}' in {mk_target()}")
-    if not root_only_ok():
-        fail("the item is readable by user 'nobody'")
-    print("ok")
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description="PKI key passphrases in a KeePassXC database.")
     sub = ap.add_subparsers(dest="cmd", required=True, metavar="COMMAND")
@@ -839,7 +887,6 @@ def main() -> None:
     p.set_defaults(func=cmd_prune)
     sub.add_parser("list").set_defaults(func=cmd_list)
     sub.add_parser("reap").set_defaults(func=cmd_reap)
-    sub.add_parser("acl-check").set_defaults(func=cmd_acl_check)
     sub.add_parser("verify").set_defaults(func=cmd_verify)
     sub.add_parser("selftest").set_defaults(func=cmd_selftest)
     sub.add_parser("kdf-check").set_defaults(func=cmd_kdf_check)

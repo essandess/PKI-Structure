@@ -592,7 +592,7 @@ validate_smime_cert() {
 }
 
 # p12_password P12 CERT TREE: set P12PW to the password that opens the .p12: its key's
-# keychain entry (the main tree's, or TREE/keychain for an --extra-pki-dir tree).
+# keychain entry (the main tree's, or an extra tree's keepassxc/keychain).
 # Returns 1 if there is none or it does not open the .p12.
 p12_password() {
     local p12="$1" cert="$2" tree="$3" pw
@@ -601,8 +601,8 @@ p12_password() {
     if [ "${tree}" = "${PKI_ROOT}" ]; then
         pw=$(pki_kc get --cert "${cert}" --field p12 2>/dev/null) || return 1
     else
-        [ -d "${tree}/keychain" ] || return 1
-        pw=$(PKI_KEYCHAIN_DIR="${tree}/keychain" PKI_KEYCHAIN_KEYFILE="${tree}/keyfile/pki-structure.keyx" \
+        [ -d "${tree}/keepassxc/keychain" ] || return 1
+        pw=$(PKI_KEYCHAIN_DIR="${tree}/keepassxc/keychain" PKI_KEYCHAIN_KEYFILE="${tree}/keepassxc/keyfile/pki-structure.keyx" \
                  pki_kc get --cert "${cert}" --field p12 2>/dev/null) || return 1
     fi
     [ -n "${pw}" ] || return 1

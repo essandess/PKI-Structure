@@ -710,7 +710,7 @@ def p12_password(path: Path, fallback: Callable[[], str]) -> str:
     tree = path.parent.parent.parent
     # the main tree's database follows PKI_KEYCHAIN_DIR; other trees keep their own
     kdir = (pki_keychain.kdir() if tree.resolve() == PKI_ROOT.resolve()
-            else tree / "keychain")
+            else tree / "keepassxc" / "keychain")
     if cert.is_file() and kdir.is_dir():
         try:
             return pki_keychain.get_secret(cert, "p12", keychain_dir=kdir)

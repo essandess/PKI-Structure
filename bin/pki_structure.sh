@@ -157,8 +157,9 @@ Useage:
 $(basename "$0") [-a|--algorithm [EC (default)|RSA]] [-h|--help] [-c|--clean] ${POSITIONAL_ARGS_USAGE}
 
 Key passphrases are random, one per key, in the KeePassXC database
-./keychain/pki-structure.kdbx. Its master password is in the macOS
-keychain and its key file in ./keyfile (bin/pki_keychain.py).
+./keepassxc/keychain/pki-structure.kdbx. Its master password is a
+root-only file or a login keychain item; its key file is in
+./keepassxc/keyfile (bin/pki_keychain.py).
 USEAGE
     exit 0
 fi

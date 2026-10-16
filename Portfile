@@ -21,7 +21,7 @@ long_description    {*}${description}. Shell tooling for a private PKI: \
                     signing, S/MIME, and adblock2privoxy certificates\; \
                     CRL publication and revocation\; signed macOS install \
                     scripts and MDM profiles\; KeePassXC password keychain \
-                    with macOS Keychain master password and separable keyfile.
+                    with a root-only master password file and separable keyfile.
 
 checksums           rmd160  29859f599179aae007304f50ca242a718d2a704f \
                     sha256  1a03c1619d67b068706d39d9f9869437cf06c5d32681433b2288446878478fdc \
@@ -46,7 +46,7 @@ depends_run-append  port:KeePassXC \
 depends_test-append port:KeePassXC
 
 proc is_private_path {path} {
-    return [regexp {(?:private|key)} [file tail $path]]
+    return [regexp {^keepassxc$|private|key|master} [file tail $path]]
 }
 
 proc pki_lockdown {path {is_private 0}} {
@@ -135,8 +135,9 @@ set pki_log_dir_str {${prefix}/var/log/pki-structure}
 set pki_log_dir     [subst ${pki_log_dir_str}]
 set pki_test_dir    ${workpath}/tmp/${name}
 
-set keepass_keychain_dir    keychain
-set keepass_keyfile_dir     keyfile
+set keepass_keychain_dir    keepassxc/keychain
+set keepass_keyfile_dir     keepassxc/keyfile
+set keepass_master_dir      keepassxc/master
 set mdm_credentials_dir     mdm-private/credentials
 set mdm_yaml_dir            mdm-private/yaml
 
@@ -145,6 +146,7 @@ destroot {
     xinstall -d     ${destroot}${pki_share_dir} \
                     ${destroot}${pki_etc_dir}/${keepass_keychain_dir} \
                     ${destroot}${pki_etc_dir}/${keepass_keyfile_dir} \
+                    ${destroot}${pki_etc_dir}/${keepass_master_dir} \
                     ${destroot}${pki_etc_dir}/${mdm_credentials_dir} \
                     ${destroot}${pki_etc_dir}/${mdm_yaml_dir} \
                     ${destroot}${prefix}/var/log/nginx \
@@ -153,6 +155,10 @@ destroot {
     system -W ${worksrcpath} \
         "${worksrcpath}/bin/replicate_pki_structure.sh \
             ${destroot}${pki_share_dir}"
+
+    # default replication sets D0750,F0640, want o+rX in share
+    system -W ${worksrcpath} \
+        "chmod -R o+rX ${destroot}${pki_share_dir}"
 
     # nginx.conf template: same pattern, tracked under ${prefix}/etc
     xinstall -m 644 \
@@ -186,6 +192,7 @@ destroot.keepdirs-append \
                     ${destroot}${pki_etc_dir} \
                     ${destroot}${pki_etc_dir}/${keepass_keychain_dir} \
                     ${destroot}${pki_etc_dir}/${keepass_keyfile_dir} \
+                    ${destroot}${pki_etc_dir}/${keepass_master_dir} \
                     ${destroot}${pki_etc_dir}/${mdm_credentials_dir} \
                     ${destroot}${pki_etc_dir}/${mdm_yaml_dir} \
                     ${destroot}${pki_log_dir} \
@@ -332,6 +339,7 @@ post-activate {
     # are seeded from these in post-activate, once, only if not already present
     foreach personalized [list \
         pki_identity.env \
+        bin/create_organization_pki.sh \
         bin/create_organization_smime.sh \
         bin/create_organization_credentials.sh \
         bin/create_organization_mdm.sh \
@@ -404,6 +412,9 @@ Content details:
         never overwritten. Edit pki_identity.env, then run the
         create_*.sh scripts from this directory.
 
+    ${pki_share_dir}/test/pki_test.sh
+        Test script and example usage.
+
     ${prefix}/etc/nginx-pki.conf
         Live nginx config, seeded once, not overwritten thereafter.
 
@@ -416,13 +427,16 @@ Destructive overwrite of ${pki_etc_dir}:
         ${pki_share_dir}/bin/replicate_pki_structure.sh \\
             --overwrite ${pki_etc_dir}'
 
+Example PKI creation:
+    sudo bash -c 'CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1 \\
+        PKI_ASSUME_YES=1 \\
+        ${pki_etc_dir}/bin/create_organization_pki.sh'
+
 Destructive clean of PKI:
-    sudo bash -c 'PKI_ASSUME_YES=1 \\
+    sudo bash -c 'CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1 \\
+        PKI_ASSUME_YES=1 \\
         ${pki_etc_dir}/bin/clean_everything_and_create_pki.sh \\
             \[--create-pki]'
-
-    ${pki_share_dir}/test/pki_test.sh
-        Test script and example usage.
 
 port load ${name} launches an nginx web server that listens\
     on port 80 in the CRL endpoint directory specified by\

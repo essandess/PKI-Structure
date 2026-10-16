@@ -3,8 +3,8 @@
 Shell tooling for a private PKI: root, intermediate, and privoxy CAs;
 server, code signing, S/MIME, and adblock2privoxy certificates; 
 CRL publication and revocation; signed macOS install scripts and MDM
-profiles; KeePassXC password keychain with macOS Keychain master password
-and separable keyfile.
+profiles; KeePassXC password keychain with a root-only master password
+file (login keychain item for other users) and separable keyfile.
 
 | Tool | Purpose |
 |---|---|
@@ -45,7 +45,7 @@ bin/replicate_pki_structure.sh [-ow|--overwrite] [DEST]      # DEST defaults to 
 * Seeds when absent, from `<file>.sample` (else the source file):
   `pki_identity.env`, `bin/create_organization_{smime,mdm,credentials}.sh`,
   `mdm-private/yaml/ios-restrictions-baseline.yaml`.
-* Modes on `DEST`: directories 0755, or 0700 for `*private*` and below; scripts
+* Modes on `DEST`: directories 0755, or 0700 for `*private*`, `keepassxc` and below; scripts
   0750; other files 0640, or 0600 under a private directory. An existing
   `DEST/mdm-private/` is audited, with a `[y/N]` prompt before any change.
 
@@ -59,6 +59,7 @@ bin/                scripts
 root/  intermediate/  intermediate_smime/  server/  codesign/  smime/
 privoxy/            separate trust anchor
 privoxy/adblock2privoxy/
+keepassxc/          secrets; keychain/ keyfile/ master/
 mdm-private/        secrets; keep out of version control
     yaml/  mobfileconfigs-unsigned/  mobfileconfigs-signed/  credentials/
 ```
@@ -96,28 +97,37 @@ Environment (tool-specific variables are listed with each tool):
 
 ## Key passphrases
 
-Each private key has its own random passphrase in `keychain/pki-structure.kdbx` (KeePassXC;
-directory 0700, file 0600), found by SHA-256 of the key's public key, so a renewal
-with the same key finds it. Entry `<id16> :: <CN>`: Password = key passphrase,
-UserName = serial, URL = certificate SHA-256; `... :: p12` holds the `.p12` export
-password. The master password (192 random bits) is the generic password item with service ("Where")
-`com.github.essandess.pki-structure.keepassxc-passphrase` and name `PKI-Structure KeePassXC
-Passphrase` in the System keychain (root) or the login keychain; it is created only when
-absent, never replaced or deleted, and never next to an existing database. The database
-also needs a key file (KeePassXC XML v2, 0600): `keyfile/pki-structure.keyx`, or the path in
-`PKI_KEYCHAIN_KEYFILE`; keep a copy offline. In the login keychain any process of the user can
-read the master item (`-T /usr/bin/security`); run as root to use the System
-keychain. Back up the database, the key file and the item
-together: any one missing makes the others useless. The database is KDBX4
-(Argon2id, 64 MiB, 4 lanes, at least 16 rounds); `kdf-check` and `verify`
-check it. `PKI_KEYCHAIN_KDF_ROUNDS` sets the rounds for a new database.
+Each private key has its own random passphrase in
+`keepassxc/keychain/pki-structure.kdbx` (KeePassXC; KDBX4, Argon2id, 64 MiB,
+4 lanes, at least 16 rounds; `PKI_KEYCHAIN_KDF_ROUNDS` sets the rounds of a new
+database), found by SHA-256 of the key's public key, so a same-key renewal
+finds it. Entry `<id16> :: <CN>`: Password = key passphrase, UserName = serial,
+URL = certificate SHA-256; `... :: p12` holds the `.p12` export password.
+
+The database opens only with the master password (192 random bits) and the
+key file `keepassxc/keyfile/pki-structure.keyx` (`PKI_KEYCHAIN_KEYFILE`; 0600;
+keep a copy offline). The master is created once, never replaced or deleted,
+and never next to an existing database:
+
+| Run as | Master | Protection |
+|---|---|---|
+| root | `keepassxc/master/pki-structure.pass`, 0600 (`PKI_KEYCHAIN_MASTER`) | file mode: other users cannot read it |
+| other user | login keychain item, service `com.github.essandess.pki-structure.keepassxc-passphrase`, name `PKI-Structure KeePassXC Passphrase` | any process of that user can read it |
+
+Root and each user have separate masters and databases. The root file protects
+against non-root users only: escrow it (`export-master`) and back up the
+master, key file and database together; any one missing makes the others
+useless. To keep the master off the server, escrow it offline, keep the key
+file on removable media (`PKI_KEYCHAIN_KEYFILE`) and delete the `.pass` file;
+restore it with `import-master` before issuing or refreshing CRLs.
+Migrating: move `keychain/` and `keyfile/` into `keepassxc/`.
 
 ```sh
 bin/pki_keychain.py get --cert CERT [--field p12]     # print a secret
-bin/pki_keychain.py list | prune [-n] | reap | acl-check  # reap: failed issuances
-bin/pki_keychain.py export-master | import-master     # escrow / restore the master item (stdin)
-bin/pki_keychain.py verify | kdf-check    # master item + database; KDBX4/Argon2 policy
-bin/pki_keychain.py installer-set | installer-get --name NAME   # installer passwords (stdin / stdout)
+bin/pki_keychain.py list | prune [-n] | reap          # reap: failed issuances
+bin/pki_keychain.py export-master | import-master     # escrow / restore (stdin)
+bin/pki_keychain.py verify | kdf-check | selftest     # master + database; KDF; keychain
+bin/pki_keychain.py installer-set | installer-get --name NAME   # installer passwords
 ```
 
 
@@ -295,7 +305,7 @@ CA private keys are never included.
   `cacerts`. `--extra-pki-dir DIR` (repeatable) also searches `DIR/smime`, a
   tree with the same layout (e.g. an older one with expired certificates).
 * **`.p12` passwords.** Each `.p12` must open with its keychain password (`--extra-pki-dir`: that
-  tree's `keychain/`). The script also
+  tree's `keepassxc/keychain/`). The script also
   checks that the `.p12` holds the expected certificate and matching key.
 * **Validation.** Root and privoxy CA must verify against themselves; the
   intermediate against the root. S/MIME certificates must verify through a
@@ -374,7 +384,7 @@ password fails before anything is stored. `--ca-certs-only` installers are unenc
 * **Default:** one entry whose Password is the installer password; Notes list
   the contents, no passwords. Entries go into the root group, `Password`.
 * **`--export-master`:** also (or, without `INSTALLER`, only) the PKI master
-  password from the macOS keychain, titled `PKI-Structure KeePassXC Passphrase`
+  password (`pki_keychain.py export-master`), titled `PKI-Structure KeePassXC Passphrase`
   (`--master-title`). Back up the key file and the `.kdbx` with it.
 * **`--individual-smime-passwords`:** also one protected attribute per S/MIME
   issuance (`<certname> [<issued>]`), each checked against its `.p12`.

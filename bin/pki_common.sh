@@ -16,8 +16,9 @@
 # pki_sha1_files).
 
 # PKI_KEYCHAIN_PATCH_V1
-# Key passphrases: one per key in the KeePassXC database ./keychain
-# (bin/pki_keychain.py); its master password is in the macOS keychain. Needs PKI_ROOT.
+# Key passphrases: one per key in the KeePassXC database
+# ./keepassxc/keychain (bin/pki_keychain.py); its master is a root-only file
+# or a login keychain item. Needs PKI_ROOT.
 . "${BASH_SOURCE[0]%/*}/define_python.sh"
 pki_kc() { "${PYTHON}" "${PKI_ROOT}/bin/pki_keychain.py" "$@"; }
 

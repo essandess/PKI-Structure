@@ -5,7 +5,7 @@
 # (marker .pki_test_tree) or with PKI_TEST_DESTROY_PKI=1.
 # PKI_TEST_VERIFY_FLAGS overrides the openssl-verify strictness flags
 # (default -x509_strict); PKI_TEST_SMIME_NAME selects the S/MIME identity.
-# PKI_TEST_PATCH_V1
+# PKI_TEST_PATCH_V2
 
 # Re-exec under bash >= 4.4 (the Portfile starts this with sh).
 if [ -z "${BASH_VERSION:-}" ] || [ "${BASH_VERSINFO:-0}" -lt 4 ] \
@@ -45,8 +45,8 @@ export CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1 PKI_ASSUME_YES=1 SHOW_CERT_TEXT=0 
 # ---------------------------------------------------------------- guard
 MARKER_FILE=.pki_test_tree
 if [ ! -e "${MARKER_FILE}" ]; then
-    LIVE=$(find root intermediate intermediate_smime server codesign smime privoxy keychain keyfile \
-                -maxdepth 2 \( -name '*.key.pem' -o -name index.txt -o -name '*.kdbx' -o -name '*.keyx' \) 2>/dev/null \
+    LIVE=$(find root intermediate intermediate_smime server codesign smime privoxy keepassxc \
+                -maxdepth 2 \( -name '*.key.pem' -o -name index.txt -o -name '*.kdbx' -o -name '*.keyx' -o -name '*.pass' \) 2>/dev/null \
                | sed -n 1p || true)
     if [ -n "${LIVE}" ] && [ "${PKI_TEST_DESTROY_PKI:-0}" != 1 ]; then
         die "existing PKI material (${LIVE}); this test deletes it. Use a scratch tree or PKI_TEST_DESTROY_PKI=1."
@@ -502,6 +502,23 @@ check  "verify passes again"                          KC verify
 check  "installer password: store, replace, retrieve" installer_roundtrip
 refuse "installer password: unknown name"             "no installer entry" KC installer-get --name nosuch.sh
 check  "init reaps a failed issuance" reap_test
+
+# master as a 0600 file (root's layout), with its own database and key file
+MF="${TMPD}/mf/master/pki-structure.pass"
+mf_kc() { PKI_KEYCHAIN_MASTER="${MF}" PKI_KEYCHAIN_DIR="${TMPD}/mf/keychain" \
+    PKI_KEYCHAIN_KEYFILE="${TMPD}/mf/keyfile/pki-structure.keyx" \
+    "${PYTHON}" bin/pki_keychain.py "$@"; }
+mf_init()   { mf_kc init && mode_is "${MF}" 600; }
+mf_export() { [ "$(mf_kc export-master)" = "$(sed -n 1p "${MF}")" ]; }
+mf_import() { printf 'x\n' | mf_kc import-master; }
+mf_loose()  { chmod 0644 "${MF}"; mf_kc verify; }
+check  "master file: init creates a 0600 file"       mf_init
+check  "master file: verify opens the database"      mf_kc verify
+check  "master file: export-master matches the file" mf_export
+refuse "master file: import refuses to replace"      "already exists" mf_import
+refuse "master file: loose mode refused"             "mode 0600" mf_loose
+run    "master file: restore mode"                   chmod 0600 "${MF}"
+check  "master file: verify passes again"            mf_kc verify
 
 # ================================================================ certificates
 step "chain, purpose, CRL"

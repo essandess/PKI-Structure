@@ -24,12 +24,12 @@
 # is right and gives the contents.
 #
 # PKI_KEYCHAIN_PATCH_V3
-# --export-master: also store the PKI master password (the macOS keychain item
-# bin/pki_keychain.py export-master reads: System keychain as root, else the
-# login keychain) as an entry titled --master-title (default 'PKI-Structure
+# --export-master: also store the PKI master password (what
+# bin/pki_keychain.py export-master prints: the root master file, else the
+# login keychain item) as an entry titled --master-title (default 'PKI-Structure
 # KeePassXC Passphrase') in the same database. Without INSTALLER only that
-# entry is written. The PKI database also needs keyfile/pki-structure.keyx and
-# the .kdbx itself: back all three up. The entry's time is the key file's, so
+# entry is written. The PKI database also needs keepassxc/keyfile/ and the
+# .kdbx in keepassxc/keychain/: back all three up. The entry's time is the key file's, so
 # re-runs change nothing; --force-update re-stamps it (use it after a new
 # master password).
 #
@@ -126,7 +126,7 @@ Usage: create_keepass_entry.sh --db FILE [--key-file FILE | --no-password]
          [--export-master] [INSTALLER]
 
 Stores an installer's password (and, with --export-master, the PKI master
-password from the macOS keychain) in a KeePassXC database. INSTALLER is
+password) in a KeePassXC database. INSTALLER is
 optional only with --export-master. See the top of this file for details.
 USAGE
 }
@@ -620,9 +620,9 @@ TS_OLD="2000-01-01T00:00:00Z"   # never newer than what the database has
 MASTER_PW="" MASTER_MOD=${TS_OLD}
 if [ "${EXPORT_MASTER}" -eq 1 ]; then
     MASTER_PW=$("${PYTHON}" "${SCRIPT_DIR}/pki_keychain.py" export-master) \
-        || die "cannot read the master password from the macOS keychain"
+        || die "cannot read the PKI master password"
     [ -n "${MASTER_PW}" ] || die "the master password is empty"
-    MASTER_KEYFILE=${PKI_KEYCHAIN_KEYFILE:-${PKI_ROOT}/keyfile/pki-structure.keyx}
+    MASTER_KEYFILE=${PKI_KEYCHAIN_KEYFILE:-${PKI_ROOT}/keepassxc/keyfile/pki-structure.keyx}
     if [ "${FORCE}" -eq 1 ]; then
         MASTER_MOD=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
     elif [ -f "${MASTER_KEYFILE}" ]; then
@@ -732,9 +732,10 @@ emit_entry() {
 
 build_master_notes() {
     echo "PKI-Structure KeePassXC master password. This Notes text holds no secrets."
-    echo "macOS keychain item: ${MASTER_SERVICE}"
-    echo "keychain/pki-structure.kdbx opens only with this password and the key"
-    echo "file keyfile/pki-structure.keyx: back up all three."
+    echo "Master: root file keepassxc/master/pki-structure.pass, else"
+    echo "login keychain item ${MASTER_SERVICE}."
+    echo "keepassxc/keychain/pki-structure.kdbx opens only with it and the key"
+    echo "file keepassxc/keyfile/pki-structure.keyx: back up all three."
     echo "Data as of ${MASTER_MOD}."
 }
 

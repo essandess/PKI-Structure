@@ -2,7 +2,7 @@
 
 # create_intermediate_smime.sh
 #
-# Usage: create_intermediate_smime.sh [-a EC|RSA] [--new-key] [-c|--clean|-vc|--veryclean] [-h|--help]
+# Usage: create_intermediate_smime.sh [-a EC|RSA] [--new-key] [-c|--clean] [-h|--help]
 #
 # Creates, or renews, the S/MIME intermediate CA in intermediate_smime/. It is
 # create_intermediate.sh run with CERTDIR=intermediate_smime: the same

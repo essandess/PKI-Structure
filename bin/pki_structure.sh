@@ -95,7 +95,6 @@ case ${RSA_KEYGEN_BITS} in
 	RSA_HASH_DIGEST=${RSA_HASH_DIGEST:-sha384}
 esac
 
-VERYCLEAN=0
 CLEAN=0
 HELP=0
 
@@ -114,11 +113,6 @@ while [[ $# -gt 0 ]]; do
 	    shift; shift
 	    ;;
 	-c|--clean)
-	    CLEAN=1
-	    shift
-	    ;;
-	-vc|--veryclean)
-	    VERYCLEAN=1
 	    CLEAN=1
 	    shift
 	    ;;
@@ -192,7 +186,6 @@ if [ "${CLEAN}" == "1" ]; then
 	    "${CERTDIR}"/certs/*.*.pem \
 	    "${CERTDIR}"/certs/*.cer \
 	    "${CERTDIR}"/private/*.p12 \
-	    "${CERTDIR}"/private/*.p12.pass \
 	    "${CERTDIR}"/certs/*.csr.pem \
 	    "${CERTDIR}"/index.txt* \
 	    "${CERTDIR}"/serial* \
@@ -204,24 +197,6 @@ if [ "${CLEAN}" == "1" ]; then
 	    rm "${f}"
 	fi
     done
-    if [ "${VERYCLEAN}" == "1" ]; then
-	if [ "${PKI_ASSUME_YES:-0}" == "0" ]; then
-	    echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
-	    read -p "This will delete the existing passphrase in '${CERTDIR}'. Are you sure [y/N]? " -r < /dev/tty
-	    echo    # (optional) move to a new line
-	    if [[ ! "${REPLY}" =~ ^[yY]$ ]]; then
-		echo "Aborted." >&2
-		exit 1
-	    fi
-	fi
-	for f in \
-	    "${CERTDIR}"/private/passphrase.txt \
-	; do
-	if [ -f "${f}" ]; then
-	    rm "${f}"
-	fi
-    done
-    fi
     for d in \
 	"${CERTDIR}"/certs \
 	    "${CERTDIR}"/crl \

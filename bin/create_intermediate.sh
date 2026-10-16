@@ -2,7 +2,7 @@
 
 # create_intermediate.sh
 #
-# Usage: create_intermediate.sh [-a EC|RSA] [--new-key] [-c|--clean|-vc|--veryclean] [-h|--help]
+# Usage: create_intermediate.sh [-a EC|RSA] [--new-key] [-c|--clean] [-h|--help]
 #
 # Creates the intermediate CA, or renews it. If an intermediate already
 # exists, the user is asked to confirm, the old files are archived as
@@ -74,7 +74,7 @@ POSITIONAL_ARGS_USAGE="[--new-key]"
 ARCHIVE=1
 for arg in "$@"; do
     case "${arg}" in
-	-h|--help|-c|--clean|-vc|--veryclean) ARCHIVE=0 ;;
+	-h|--help|-c|--clean) ARCHIVE=0 ;;
     esac
 done
 

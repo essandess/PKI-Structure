@@ -120,7 +120,6 @@ master, key file and database together; any one missing makes the others
 useless. To keep the master off the server, escrow it offline, keep the key
 file on removable media (`PKI_KEYCHAIN_KEYFILE`) and delete the `.pass` file;
 restore it with `import-master` before issuing or refreshing CRLs.
-Migrating: move `keychain/` and `keyfile/` into `keepassxc/`.
 
 ```sh
 bin/pki_keychain.py get --cert CERT [--field p12]     # print a secret
@@ -138,10 +137,10 @@ export CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1
 ```
 
 Order: root, intermediate, intermediate_smime, then leaf certificates; `privoxy` before
-`adblock2privoxy`. Options for every script: `-a EC|RSA`, `-c`/`--clean` and
-`-vc`/`--veryclean` (delete the directory's keys, certificates, CA
-database and their keychain entries; `-vc` also a legacy `passphrase.txt`; prompts; irreversible, and issued
-certificates can no longer be revoked), `-h`.
+`adblock2privoxy`. Options for every script: `-a EC|RSA`, `-c`/`--clean`
+(delete the directory's keys, certificates, CA database and their keychain
+entries; prompts; irreversible, and issued certificates can no longer be
+revoked), `-h`.
 
 | Script | Issuer | Default key | Validity | Output |
 |---|---|---|---|---|
@@ -203,24 +202,7 @@ and archiving behave identically. Each has its own key,
 refuses (and revokes) a certificate that does not carry its restrictions
 (`pki_assert_ca_scope`), and refuses a `SERVER_FQDN` outside `DOMAIN_NAME`.
 
-**Migrating an existing PKI.** The old intermediate certificate is
-unconstrained and must not stay valid:
-
-1. `bin/create_intermediate.sh --new-key` (a same-key renewal would leave the
-   old unconstrained certificate valid for the same key), then
-   `bin/create_intermediate_smime.sh`.
-2. Revoke the old intermediate against the root:
-   `bin/revoke_certificate.sh intermediate/certs/intermediate.<old sha1>.cert.pem root superseded`.
-3. Reissue the server and code signing certificates and all S/MIME certificates
-   (`create_organization_smime.sh`). `create_smime.sh` also revokes (as
-   superseded) the identity's still-valid certificates in the old
-   `intermediate/index.txt`.
-4. `bin/publish_crls.sh`, then rebuild installers and profiles.
-
-Certificates issued under the old intermediate no longer validate once it is
-revoked, so old S/MIME encryption certificates can not be put into new
-installers or profiles; keep their `.p12` files if the mail they decrypt is
-still needed. If `ORG_NAME` looks like a hostname (contains a dot), OpenSSL may
+If `ORG_NAME` looks like a hostname (contains a dot), OpenSSL may
 apply the DNS constraint to the code signing certificate's CommonName.
 
 ## Revocation and CRLs
@@ -442,7 +424,7 @@ required.
 * **YAML types.** Only `true`/`false` are booleans (`yes`/`no`/`on`/`off` stay
   strings); bare dates and other values a plist cannot hold are rejected.
 * **Identities.** `<name>-{signature,encryption}.p12` from `identity_dirs`
-  (default `smime/private`); password from the keychain, else (older trees) `<p12>.pass`, else line 2 of `identity_passphrase_file`. Each embedded certificate must be `V` in the
+  (default `smime/private`); password from the keychain. Each embedded certificate must be `V` in the
   issuer's `index.txt`, pass the CRL check, and have a keyUsage matching its
   role. Signing certificates must be current; an expired or `superseded`
   encryption certificate needs `allow_expired_encryption` /

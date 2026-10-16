@@ -2,7 +2,7 @@
 
 # create_adblock2privoxy.sh
 #
-# Usage: create_adblock2privoxy.sh [--decrypt-key] [-a EC|RSA] [-c|--clean|-vc|--veryclean] [-h|--help]
+# Usage: create_adblock2privoxy.sh [--decrypt-key] [-a EC|RSA] [-c|--clean] [-h|--help]
 #
 # --decrypt-key also writes private/<name>.<sha1>.key.pem.decrypted (0600): the UNENCRYPTED
 # key, for nginx, which cannot ask for a passphrase. Off by default.

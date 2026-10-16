@@ -2,7 +2,7 @@
 
 # create_smime.sh
 #
-# Usage: create_smime.sh [-a|--algorithm EC|RSA] [-c|--clean|-vc|--veryclean] EMAIL CERTNAME
+# Usage: create_smime.sh [-a|--algorithm EC|RSA] [-c|--clean] EMAIL CERTNAME
 #
 # Creates a signature and an encryption S/MIME certificate for EMAIL, issued by
 # the S/MIME intermediate (intermediate_smime/). If
@@ -30,9 +30,6 @@ CERTDIR=${CERTDIR:-smime}
 CERTNAME=${CERTNAME:-}
 ISSUERCADIR=${ISSUERCADIR:-intermediate_smime}
 ISSUERCANAME=${ISSUERCANAME:-intermediate_smime}
-# Certificates issued before the S/MIME intermediate existed are recorded in
-# this CA's database; the ones for the same CommonName are superseded too.
-LEGACY_ISSUERCADIR=${LEGACY_ISSUERCADIR:-intermediate}
 
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
 RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-3072}
@@ -105,7 +102,7 @@ cd "${PKI_ROOT}" || exit
 # pki_structure.sh has consumed the option flags; EMAIL and CERTNAME remain.
 if [ "$#" -ne 2 ]; then
     echo "Error: expected 2 arguments (EMAIL CERTNAME), got $#." >&2
-    echo "Usage: $(basename "$0") [-a|--algorithm EC|RSA] [-c|--clean|-vc|--veryclean] EMAIL CERTNAME" >&2
+    echo "Usage: $(basename "$0") [-a|--algorithm EC|RSA] [-c|--clean] EMAIL CERTNAME" >&2
     echo "To reissue all S/MIME certificates, run ./create_organization_smime.sh; existing ones are archived under their SHA1." >&2
     exit 1
 fi
@@ -144,7 +141,7 @@ for EXTENSION in signature encryption; do
     for f in "${CERTDIR}/private/${CERTNAME}-${EXTENSION}.key.pem" \
 	     "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem"; do
 	if [ -f "${f}" ]; then
-	    echo "Error: '${f}' exists but has no matching certificate to archive it under. Remove it, or clean with: $0 -vc" >&2
+	    echo "Error: '${f}' exists but has no matching certificate to archive it under. Remove it, or clean with: $0 -c" >&2
 	    exit 1
 	fi
     done
@@ -223,12 +220,6 @@ done
 # Only now, with both replacements complete, revoke what they supersede.
 for i in "${!REVOKE_CN[@]}"; do
     pki_revoke_matching_cn "${ISSUERCADIR}" "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${REVOKE_CN[i]}" "${REVOKE_SERIAL[i]}" "${ISSUERCADIR}"
-    # migration: same identity issued under the pre-split intermediate
-    if [ "${LEGACY_ISSUERCADIR}" != "${ISSUERCADIR}" ] \
-           && [ -f "${LEGACY_ISSUERCADIR}/index.txt" ] \
-           && [ -f "${LEGACY_ISSUERCADIR}/certs/${LEGACY_ISSUERCADIR}.cert.pem" ]; then
-        pki_revoke_matching_cn "${LEGACY_ISSUERCADIR}" "${LEGACY_ISSUERCADIR}/openssl_${LEGACY_ISSUERCADIR}.cnf" "${REVOKE_CN[i]}" "${REVOKE_SERIAL[i]}" "${LEGACY_ISSUERCADIR}"
-    fi
 done
 
 echo "The .p12 password of ${CERTNAME} (give it only to the recipient):" >&2

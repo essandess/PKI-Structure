@@ -512,11 +512,9 @@ for ((g = 0; g < ${#G_MEM[@]}; g++)); do
     dates=()
     for i in ${G_MEM[g]}; do dates+=("$(iso_date "${R_START[i]}")"); done
     mapfile -t dsort < <(printf '%s\n' "${dates[@]}" | sort)
-    if [[ ${G_GROUP[g]} =~ ${GROUP_RE} ]]; then
-        label="${BASH_REMATCH[1]} [${dsort[0]}]"
-    else
-        label="older .p12, shared password [${G_GROUP[g]}]"
-    fi
+    [[ ${G_GROUP[g]} =~ ${GROUP_RE} ]] \
+        || die "unexpected payload group '${G_GROUP[g]}'"
+    label="${BASH_REMATCH[1]} [${dsort[0]}]"
     case ${label} in Title|UserName|Password|URL|Notes) label+=" (pw)" ;; esac
     base=${label}; n=2
     while [ -n "${LABEL_TAKEN[${label}]+x}" ]; do

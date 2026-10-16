@@ -27,12 +27,9 @@ short_name: User A Short Name
 # identity_dirs. Fallback '<stem>.*<suffix>' also matches renamed files,
 # e.g. <name>-signature.<sha1>.p12.
 #
-# Both files share one passphrase: line 2 of identity_passphrase_file
-# (PKCS#12 export password; line 1 is the key passphrase, as in
-# bin/create_codesign.sh).
+# Each .p12 opens with its keychain password (bin/pki_keychain.py).
 # identity_dirs:                   # optional; default shown
 #   - $PKI_ROOT/smime/private
-# identity_passphrase_file: smime/private/passphrase.txt   # optional
 
 identities:
   - persona_gmail_2026

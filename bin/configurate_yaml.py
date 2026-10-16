@@ -80,17 +80,11 @@ cert):
       - $PKI_ROOT/archive-2023/smime/private
         # any number of PKI_ROOT-shaped smime/private/ trees, e.g.
         # an archived one alongside the current one
-    identity_passphrase_file: smime/private/passphrase.txt
-        # optional; default shown; line 2; shared by every entry
-        # below unless an entry sets its own
     identities:
       - persona_myorganization_2026
         # plain name: looks for <name>-signature.p12 and
-        # <name>-encryption.p12 via identity_dirs, default passphrase
+        # <name>-encryption.p12 via identity_dirs
       - name: persona_oldwork_2022
-        identity_passphrase_file: archive-2023/smime/private/passphrase.txt
-            # optional; this entry's own passphrase file, e.g. an
-            # archived tree with a different passphrase
         allow_expired_encryption: true
             # optional, default false; lets this identity's
             # ENCRYPTION certificate be expired, for decrypting old
@@ -105,9 +99,7 @@ cert):
             # Any other revocation is always refused, and so is
             # any expired or revoked signing certificate. An error
             # names the key to set.
-        # Each .p12's password is the first line of '<p12>.pass'
-        # when that exists (create_smime.sh writes one per
-        # issuance), else line 2 of identity_passphrase_file.
+        # Each .p12's password is its key's keychain entry.
   Lookup follows resolve_file (same '<stem>.*<suffix>' fallback as
   'certificates:'). Each identity's UUIDs are available to
   'accounts:' mail entries as identity_uuids[name]
@@ -663,14 +655,6 @@ def resolve_file(name: str, dirs: list[Path]) -> Path:
 # S/MIME identities ('identities:') -> com.apple.security.pkcs12
 # payloads
 # ---------------------------------------------------------------------
-def load_passphrase_line(path: Path, line_no: int) -> str:
-    lines = Path(path).read_text().splitlines()
-    if len(lines) < line_no:
-        die(f"{path} has fewer than {line_no} lines "
-            f"(need line {line_no})")
-    return lines[line_no - 1]
-
-
 def load_pkcs12(path: Path, password: str) -> x509.Certificate:
     """Open a .p12 and return its certificate. The private key and
     any extra certs in the bundle aren't needed here -- only the
@@ -689,11 +673,9 @@ def load_pkcs12(path: Path, password: str) -> x509.Certificate:
 
 
 def normalize_identity_entry(raw: Any) -> dict[str, Any]:
-    """A 'identities:' entry is either a plain name, or a mapping
-    with 'name:' plus optional 'identity_passphrase_file:' (its own
-    passphrase file, e.g. for an archived PKI_ROOT-shaped tree with
-    a different passphrase than the current one) and
-    'allow_expired_encryption:' (see build_identities)."""
+    """An 'identities:' entry is a plain name, or a mapping with 'name:'
+    and optional 'allow_expired_encryption:' and
+    'allow_superseded_encryption:' (see build_identities)."""
     if isinstance(raw, str):
         return {"name": raw}
     if isinstance(raw, dict) and isinstance(raw.get("name"), str):
@@ -702,24 +684,19 @@ def normalize_identity_entry(raw: Any) -> dict[str, Any]:
         f"or a mapping with 'name:'")
 
 
-def p12_password(path: Path, fallback: Callable[[], str]) -> str:
-    """The password of a PKCS#12 file: its key's keychain entry (the
-    certificate beside it in ../certs), else '<file>.pass', else the
-    shared fallback (line 2 of the passphrase file) of older trees."""
+def p12_password(path: Path) -> str:
+    """Keychain .p12 password of the key; its certificate is in ../certs."""
     cert = path.parent.parent / "certs" / (path.stem + ".cert.pem")
+    if not cert.is_file():
+        die(f"{path}: certificate {cert} not found")
     tree = path.parent.parent.parent
-    # the main tree's database follows PKI_KEYCHAIN_DIR; other trees keep their own
+    # the main tree follows PKI_KEYCHAIN_DIR; other trees keep their own
     kdir = (pki_keychain.kdir() if tree.resolve() == PKI_ROOT.resolve()
             else tree / "keepassxc" / "keychain")
-    if cert.is_file() and kdir.is_dir():
-        try:
-            return pki_keychain.get_secret(cert, "p12", keychain_dir=kdir)
-        except pki_keychain.KeychainError:
-            pass
-    pw_file = path.with_name(path.name + ".pass")
-    if pw_file.is_file():
-        return load_passphrase_line(pw_file, 1)
-    return fallback()
+    try:
+        return pki_keychain.get_secret(cert, "p12", keychain_dir=kdir)
+    except pki_keychain.KeychainError as e:
+        die(f"{path}: {e}")
 
 
 def build_identities(
@@ -751,10 +728,7 @@ def build_identities(
     Both are needed for one that is both. Any other revocation is
     refused. Without the opt-in the error says which key to set.
 
-    Passwords: each .p12's own '<file>.pass' (one per issuance) when
-    it exists, else line 2 of the entry's passphrase file
-    (identity_passphrase_file:, shared by every entry unless a
-    mapping entry sets its own, e.g. for an archived tree).
+    Passwords: the key's keychain entry (p12_password).
 
     Returns (payloads, identity_uuids), where identity_uuids maps
     each name to {"signing": UUID, "encryption": UUID}.
@@ -762,19 +736,6 @@ def build_identities(
     entries = [normalize_identity_entry(e) for e in cfg.get("identities", [])]
     if not entries:
         return [], {}
-
-    default_pw_file = cfg.get(
-        "identity_passphrase_file", "smime/private/passphrase.txt"
-    )
-
-    def shared_password(pw_rel: str) -> str:
-        pw_file = under_root(pw_rel)
-        if not pw_file.is_file():
-            die(f"a .p12 has no '<file>.pass' and the shared passphrase "
-                f"file was not found: {pw_file} (set "
-                f"'identity_passphrase_file:' to override)")
-        # line 1 = key passphrase, line 2 = p12 export password
-        return load_passphrase_line(pw_file, 2)
 
     # Defaults to the S/MIME intermediate (intermediate_smime); code
     # signing uses ISSUERCADIR (intermediate). Override with
@@ -800,7 +761,6 @@ def build_identities(
 
         for spec in entries:
             name = spec["name"]
-            pw_rel = spec.get("identity_passphrase_file", default_pw_file)
             allow_expired_encryption = bool(
                 spec.get("allow_expired_encryption", False)
             )
@@ -813,9 +773,7 @@ def build_identities(
                                  ("encryption", "encryption")):
                 path = resolve_file(f"{name}-{suffix}.p12", identity_dirs)
                 data = path.read_bytes()
-                password = p12_password(
-                    path, lambda pw_rel=pw_rel: shared_password(pw_rel)
-                )
+                password = p12_password(path)
                 cert = load_pkcs12(path, password)
 
                 pem_path = Path(td) / f"{path.stem}.pem"

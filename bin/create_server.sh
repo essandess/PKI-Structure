@@ -5,7 +5,7 @@
 # https://support.apple.com/en-us/HT210176
 DAYS=825
 
-# Usage: create_server.sh [--server-fqdn SERVER_FQDN] [--decrypt-key] [-a EC|RSA] [-c|--clean|-vc|--veryclean] [-h|--help]
+# Usage: create_server.sh [--server-fqdn SERVER_FQDN] [--decrypt-key] [-a EC|RSA] [-c|--clean] [-h|--help]
 #
 # --decrypt-key also writes private/<name>.<sha1>.key.pem.decrypted (0600): the UNENCRYPTED
 # key, for daemons that cannot ask for a passphrase (postfix, dovecot, nginx). Off by default.
@@ -74,7 +74,7 @@ fi
 CHECK_FQDN=1
 for arg in "$@"; do
     case "${arg}" in
-	-h|--help|-c|--clean|-vc|--veryclean) CHECK_FQDN=0 ;;
+	-h|--help|-c|--clean) CHECK_FQDN=0 ;;
     esac
 done
 if [ "${CHECK_FQDN}" = "1" ]; then

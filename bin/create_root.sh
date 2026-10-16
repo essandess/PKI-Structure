@@ -2,7 +2,7 @@
 
 # create_root.sh
 #
-# Usage: create_root.sh [-a EC|RSA] [--new-key] [-c|--clean|-vc|--veryclean] [-h|--help]
+# Usage: create_root.sh [-a EC|RSA] [--new-key] [-c|--clean] [-h|--help]
 #
 # Creates the root CA. If a root certificate already exists, a new one is
 # issued only when the existing one expires within PKI_RENEW_WINDOW_DAYS
@@ -54,7 +54,7 @@ POSITIONAL_ARGS_USAGE="[--new-key]"
 ARCHIVE=1
 for arg in "$@"; do
     case "${arg}" in
-	-h|--help|-c|--clean|-vc|--veryclean) ARCHIVE=0 ;;
+	-h|--help|-c|--clean) ARCHIVE=0 ;;
     esac
 done
 

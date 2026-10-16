@@ -81,7 +81,6 @@ ITEM = os.environ.get("PKI_KEYCHAIN_ITEM") or "com.github.essandess.pki-structur
 DB_NAME = "pki-structure.kdbx"
 KEYFILE_NAME = "pki-structure.keyx"
 SECURITY = "/usr/bin/security"
-SYSTEM_KEYCHAIN = "/Library/Keychains/System.keychain"
 ERR_NOT_FOUND = 44  # security(1) exit status for errSecItemNotFound
 KDF_MS = 250  # 1/4 s
 KDF_ROUNDS_MIN = 16  # master is 192 random bits: a slow KDF adds nothing
@@ -283,32 +282,11 @@ def mk_where() -> str:
     return str(master_file()) if use_file() else mk_target()
 
 
-def has_item(keychain: str) -> bool:
-    return sec("find-generic-password", "-s", ITEM, keychain).returncode == 0
-
-
-def other_keychains() -> list[str]:
-    """Existing keychains, other than the one in use, that could hold the item."""
-    cand = [SYSTEM_KEYCHAIN, str(Path.home() / "Library" / "Keychains" / "login.keychain-db")]
-    for dom in ("user", "system", "common"):
-        cand += [ln.strip().strip('"') for ln in sec("list-keychains", "-d", dom).stdout.splitlines()
-                 if ln.strip()]
-    me = "" if use_file() else os.path.realpath(mk_target())
-    out = []
-    for k in cand:
-        if os.path.exists(k) and os.path.realpath(k) != me and k not in out:
-            out.append(k)
-    return out
-
-
 def verify_open(db: Path, kf: Path | None) -> None:
     """The master must exist, be readable, and open the database."""
     if not mk_state():
-        where = [k for k in other_keychains() if has_item(k)]
-        fail(f"master item is not in {mk_where()}; "
-             + (f"it is in {', '.join(where)} (run as the matching user, or import-master)" if where
-                else "it is nowhere searched, so the database cannot be opened")
-             + ". Restore: pki_keychain.py import-master (password on stdin). Nothing was changed")
+        fail(f"master item is not in {mk_where()}; restore it with "
+             "import-master (password on stdin). Nothing was changed")
     mp = mk_get()
     try:
         kp(["ls", *(["-k", str(kf)] if kf else []), str(db)], [mp])
@@ -538,10 +516,6 @@ def ensure_db(d: Path | None = None) -> None:
                  "Restore it or set PKI_KEYCHAIN_KEYFILE")
         verify_open(db, kf)
         return
-    old = PKI_ROOT / "keychain" / DB_NAME
-    if old.exists() and not os.environ.get("PKI_KEYCHAIN_DIR"):
-        fail(f"{old} is the old location: move keychain/ and keyfile/ "
-             "into keepassxc/. Nothing was changed")
     ensure_master()
     new_kf = not kf.exists()
     if new_kf:

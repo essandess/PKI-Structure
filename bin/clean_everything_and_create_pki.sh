@@ -22,7 +22,7 @@
 # #  entirely new keys and will not chain to anything issued previously.    #
 # #                                                                         #
 # #  Do not run this against a live/production PKI unless you intend       #
-# #  exactly this. There is no undo once the -vc clean step completes.     #
+# #  exactly this. There is no undo once the clean step completes.         #
 # ############################################################################
 
 set -e
@@ -87,8 +87,8 @@ PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}" || exit
 
 # Clear everything
-bin/create_root.sh -vc ; bin/create_intermediate.sh -vc ; bin/create_intermediate_smime.sh -vc ; bin/create_server.sh -vc ; bin/create_codesign.sh -vc ; bin/create_smime.sh -vc
-bin/create_privoxy.sh -vc ; bin/create_adblock2privoxy.sh -vc
+bin/create_root.sh -c ; bin/create_intermediate.sh -c ; bin/create_intermediate_smime.sh -c ; bin/create_server.sh -c ; bin/create_codesign.sh -c ; bin/create_smime.sh -c
+bin/create_privoxy.sh -c ; bin/create_adblock2privoxy.sh -c
 
 # Generated installers and profiles chain to the deleted CAs; YAML is kept
 rm -f mdm-private/credentials/install_credentials_*.sh \

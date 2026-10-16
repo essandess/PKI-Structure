@@ -2,7 +2,7 @@
 
 # create_privoxy.sh
 #
-# Usage: create_privoxy.sh [-a EC|RSA] [--new-key] [-c|--clean|-vc|--veryclean] [-h|--help]
+# Usage: create_privoxy.sh [-a EC|RSA] [--new-key] [-c|--clean] [-h|--help]
 #
 # Creates the privoxy CA (self-signed). If one already exists, a new
 # certificate is issued only when the existing one expires within
@@ -60,7 +60,7 @@ POSITIONAL_ARGS_USAGE="[--new-key]"
 ARCHIVE=1
 for arg in "$@"; do
     case "${arg}" in
-	-h|--help|-c|--clean|-vc|--veryclean) ARCHIVE=0 ;;
+	-h|--help|-c|--clean) ARCHIVE=0 ;;
     esac
 done
 

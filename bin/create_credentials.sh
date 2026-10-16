@@ -1966,7 +1966,6 @@ if confirm "Create ${out}?"; then
             die "cannot store the installer password in the PKI keychain; ${out} removed."
         fi
         installer_pw=""
-        rm -f "${out}.pass"   # written by earlier versions
         echo "The installer password (SECRET) is in the PKI keychain," >&2
         echo "entry ${out##*/}:" >&2
         echo "  bin/pki_keychain.py installer-get --name NAME" >&2

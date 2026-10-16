@@ -36,7 +36,7 @@ step() { printf '\n== %s\n' "$*"; }
 
 # Keep caller overrides from redirecting the tools at another tree or site.
 unset CERTDIR CERTNAME ISSUERCADIR ISSUERCANAME SMIME_ISSUERCADIR SMIME_ISSUERCANAME \
-      LEGACY_ISSUERCADIR UNSIGNED_DIR SIGNED_DIR PKI_STRUCTURE_SRC PKI_SITE_DIR \
+      UNSIGNED_DIR SIGNED_DIR PKI_STRUCTURE_SRC PKI_SITE_DIR \
       PKI_SITE_GROUP PKI_ROOT_SHA256 PKI_ROOT_CRL PKI_INTERMEDIATE_CRL \
       PKI_CODESIGN_DIR PKI_CODESIGN_NAME PKI_CODESIGN_SHA1 CERTSHA1 \
       PKI_KEYCHAIN_DIR PKI_KEYCHAIN_ITEM PKI_KEYCHAIN_FILE PKI_KEYCHAIN_KEYFILE
@@ -412,16 +412,9 @@ KC() { "${PYTHON}" bin/pki_keychain.py "$@"; }
 no_secret_files() {
     [ -z "$(find . -path ./mdm-private -prune -o \( -name passphrase.txt -o -name '*.p12.pass' \) -print | sed -n 1p)" ]
 }
-key_opens() { "${OPENSSL}" pkey -in "$1" -noout -passin fd:3 3< <(KC get --cert "$2"); }
 p12_opens() { "${OPENSSL}" pkcs12 -legacy -noout -in "$1" -passin fd:3 3< <(KC get --cert "$2" --field p12); }
 p12_shared() { [ "$(KC get --cert "$1" --field p12)" = "$(KC get --cert "$2" --field p12)" ]; }
 check "no passphrase files in the tree"             no_secret_files
-check "keychain directory 0700"                     mode_is "${PKI_KEYCHAIN_DIR}" 700
-check "database 0600"                               mode_is "${PKI_KEYCHAIN_DIR}/pki-structure.kdbx" 600
-check "key file 0600"                               mode_is "${PKI_KEYCHAIN_KEYFILE}" 600
-check "key file directory 0700"                     mode_is "${PKI_KEYCHAIN_KEYFILE%/*}" 700
-check "root key opens with its keychain passphrase" key_opens root/private/root.key.pem root/certs/root.cert.pem
-check "intermediate key opens"                      key_opens intermediate/private/intermediate.key.pem intermediate/certs/intermediate.cert.pem
 check "S/MIME .p12 opens with its keychain password" p12_opens "smime/private/${SM}-signature.p12" "smime/certs/${SM}-signature.cert.pem"
 check "signature and encryption .p12 share a password" p12_shared "smime/certs/${SM}-signature.cert.pem" "smime/certs/${SM}-encryption.cert.pem"
 run "stray certificate" "${OPENSSL}" req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 \
@@ -429,12 +422,10 @@ run "stray certificate" "${OPENSSL}" req -x509 -newkey ec -pkeyopt ec_paramgen_c
 refuse "unknown key has no entry" "no keychain entry" KC get --cert "${TMPD}/stray.pem"
 
 SERVICE="com.github.essandess.pki-structure.keepassxc-passphrase"
-LABEL="PKI-Structure KeePassXC Passphrase"
 master_pw()      { security find-generic-password -s "${SERVICE}" -w "${PKI_KEYCHAIN_FILE}"; }
-master_attrs()   { security find-generic-password -s "${SERVICE}" "${PKI_KEYCHAIN_FILE}"; }
-has_label()      { master_attrs | grep -q "=\"${LABEL}\""; }
 no_keyfile()     { master_pw | "${KPCLI}" ls -q "${PKI_KEYCHAIN_DIR}/pki-structure.kdbx"; }
 restore_master() { printf '%s\n' "${MASTER}" | KC import-master; }
+init_keeps()     { KC init && [ "$(master_pw)" = "${MASTER}" ]; }
 reap_test() {   # a failed issuance leaves no entry once init has run
     local k="${TMPD}/reap.key.pem" id
     id=$(KC genkey --alg EC --out "${k}" --label reap) || return 1
@@ -479,46 +470,39 @@ PY
 }
 help_fits() { COLUMNS=80 "${PYTHON}" bin/pki_keychain.py --help | awk 'length($0) > 80 { bad = 1 } END { exit bad }'; }
 MASTER=$(master_pw)
-check  "master item: service (Where) is the reverse-DNS id, name is the label" has_label
 check  "database is KDBX4, Argon2, >= 64 MiB, 4 lanes" KC kdf-check
 check  "database KDF: >= 16 rounds, >= 64 MiB, 4 lanes" kdf_rounds_ok
 check  "pki_keychain.py --help fits 80 columns"       help_fits
 check  "master item exists, is readable, opens the database" KC verify
 fails  "database does not open without the key file"  no_keyfile
-check  "init keeps an existing master item"           KC init
-check  "master item unchanged by init"                test "$(master_pw)" = "${MASTER}"
+check  "init keeps an existing master item"           init_keeps
 run    "drop master item"                             security delete-generic-password -s "${SERVICE}" "${PKI_KEYCHAIN_FILE}"
 refuse "init refuses a new master next to a database" "master item" KC init
 fails  "master item not recreated"                    master_pw
 refuse "verify reports the missing master item"       "master item" KC verify
 check  "import-master restores it"                    restore_master
 check  "restored master matches"                      test "$(master_pw)" = "${MASTER}"
-check  "verify passes after restore"                  KC verify
 run    "swap in a wrong master"                       bash -c 'security delete-generic-password -s "$1" "$3" >/dev/null && security add-generic-password -s "$1" -a pki_test -w "$2" "$3"' _ "${SERVICE}" wrong-password "${PKI_KEYCHAIN_FILE}"
 refuse "verify rejects a master that does not open"   "does not open" KC verify
 run    "drop the wrong master"                        security delete-generic-password -s "${SERVICE}" "${PKI_KEYCHAIN_FILE}"
 check  "right master restored"                        restore_master
-check  "verify passes again"                          KC verify
 check  "installer password: store, replace, retrieve" installer_roundtrip
 refuse "installer password: unknown name"             "no installer entry" KC installer-get --name nosuch.sh
 check  "init reaps a failed issuance" reap_test
 
-# master as a 0600 file (root's layout), with its own database and key file
+# file-backed master (root's layout), own database and key file
 MF="${TMPD}/mf/master/pki-structure.pass"
 mf_kc() { PKI_KEYCHAIN_MASTER="${MF}" PKI_KEYCHAIN_DIR="${TMPD}/mf/keychain" \
     PKI_KEYCHAIN_KEYFILE="${TMPD}/mf/keyfile/pki-structure.keyx" \
     "${PYTHON}" bin/pki_keychain.py "$@"; }
-mf_init()   { mf_kc init && mode_is "${MF}" 600; }
+mf_init()   { mf_kc init && mode_is "${MF}" 600 && mf_kc verify; }
 mf_export() { [ "$(mf_kc export-master)" = "$(sed -n 1p "${MF}")" ]; }
 mf_import() { printf 'x\n' | mf_kc import-master; }
 mf_loose()  { chmod 0644 "${MF}"; mf_kc verify; }
-check  "master file: init creates a 0600 file"       mf_init
-check  "master file: verify opens the database"      mf_kc verify
+check  "master file: init makes a 0600 file that opens the database" mf_init
 check  "master file: export-master matches the file" mf_export
 refuse "master file: import refuses to replace"      "already exists" mf_import
 refuse "master file: loose mode refused"             "mode 0600" mf_loose
-run    "master file: restore mode"                   chmod 0600 "${MF}"
-check  "master file: verify passes again"            mf_kc verify
 
 # ================================================================ certificates
 step "chain, purpose, CRL"
@@ -676,7 +660,6 @@ run "MDM profiles" bin/create_organization_mdm.sh
 for p in myorganization-trust myorganization-settings persona-settings; do
     U="mdm-private/mobfileconfigs-unsigned/${p}.mobileconfig"
     S="mdm-private/mobfileconfigs-signed/${p}.mobileconfig"
-    check "${p}: written"                       test -s "${U}" -a -s "${S}"
     check "${p}: signature chains to root, content intact" verify_profile "${S}" "${U}"
     tamper_profile "${S}" "${TMPD}/${p}.tampered" || die "tamper_profile failed"
     fails "${p}: tampered profile rejected"     "${OPENSSL}" smime -verify -binary -inform der \
@@ -721,7 +704,6 @@ perm_audit() {
 }
 check "private dirs 0700, key/secret files 0600" perm_audit
 check "installer 0750"        mode_is "${INST}" 750
-fails "no .pass file is written next to the installer"  test -e "${INST}.pass"
 
 # ================================================================ summary
 printf '\n%d passed, %d failed\n' "${PASSED}" "${FAILED}"

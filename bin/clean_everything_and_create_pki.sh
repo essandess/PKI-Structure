@@ -57,6 +57,10 @@ USAGE
     esac
 done
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PKI_ROOT}" || exit
+
 if [ "${CREATE_PKI}" == "1" ]; then
     ACTION="DELETE and regenerate"
 else
@@ -64,7 +68,7 @@ else
 fi
 
 echo "This will PERMANENTLY ${ACTION} the ENTIRE PKI in this directory:"
-echo "  $(pwd)"
+echo "  ${PKI_ROOT}"
 echo
 echo "This includes the root CA, both intermediate CAs, server, codesign, S/MIME,"
 echo "privoxy, and adblock2privoxy keys and certificates. Anything issued by"
@@ -81,10 +85,6 @@ if [ "${REPLY}" != "yes" ]; then
     echo "Aborted. Nothing was changed." >&2
     exit 1
 fi
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-cd "${PKI_ROOT}" || exit
 
 # Clear everything
 bin/create_root.sh -c ; bin/create_intermediate.sh -c ; bin/create_intermediate_smime.sh -c ; bin/create_server.sh -c ; bin/create_codesign.sh -c ; bin/create_smime.sh -c

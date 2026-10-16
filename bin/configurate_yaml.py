@@ -96,6 +96,10 @@ cert):
             # "superseded" (what create_smime.sh sets when it
             # reissues), again only to decrypt old mail. Both keys
             # are needed for one that is expired AND superseded.
+        allow_signature_with_encryption: true
+            # optional, default false; accept an ENCRYPTION certificate
+            # whose keyUsage also allows signing, only for identities
+            # found in an identity_dirs tree other than PKI_ROOT
             # Any other revocation is always refused, and so is
             # any expired or revoked signing certificate. An error
             # names the key to set.
@@ -767,6 +771,9 @@ def build_identities(
             allow_superseded_encryption = bool(
                 spec.get("allow_superseded_encryption", False)
             )
+            allow_sig_enc = bool(
+                spec.get("allow_signature_with_encryption", False)
+            )
 
             roles: dict[str, str] = {}
             for role, suffix in (("signing", "signature"),
@@ -785,6 +792,9 @@ def build_identities(
                     cert, pem_path, suffix, trust, now,
                     allow_expired=allow_expired_encryption,
                     allow_superseded=allow_superseded_encryption,
+                    allow_sig_enc=allow_sig_enc and (
+                        path.parent.parent.parent.resolve()
+                        != PKI_ROOT.resolve()),
                 )
                 if problems:
                     die(f"identity '{name}' ({role}) {path.name}: "

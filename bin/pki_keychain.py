@@ -177,8 +177,8 @@ def mf_state() -> bool:
     return p.exists()
 
 
-def mf_get() -> str:
-    p = master_file()
+def mf_get(p: Path | None = None) -> str:
+    p = p or master_file()
     try:
         st = p.stat()
         if st.st_uid != os.geteuid() or st.st_mode & 0o077:
@@ -536,7 +536,10 @@ class Db:
             fail(f"no database {self.file}; run: pki_keychain.py init")
         if not Path(self.keyfile).is_file():
             fail(f"key file {self.keyfile} missing (PKI_KEYCHAIN_KEYFILE)")
-        self.mp = mk_get()
+        # a tree's own master file (extra tree) unless env forces one
+        mf = d.parent / "master" / MASTER_NAME
+        own = mf.is_file() and not os.environ.get("PKI_KEYCHAIN_MASTER")
+        self.mp = mf_get(mf) if own else mk_get()
 
     def kp(self, args: list[str], extra: list[str] | None = None, check: bool = True):
         return kp([args[0], "-k", self.keyfile, *args[1:]], [self.mp, *(extra or [])], check)

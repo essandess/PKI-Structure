@@ -136,6 +136,7 @@ NAME_GLOB_RE='^[][A-Za-z0-9_.,*?{}!^-]+$'
 CA_CERTS_ONLY=0
 ALLOW_EXPIRED_ENC=0
 ALLOW_SUPERSEDED_ENC=0
+ALLOW_SIG_ENC=0
 USER_KEYCHAIN=0
 WITH_PRIVOXY=0     # the privoxy CA is trusted by devices that use the proxy only
 CA_DOMAIN=system   # payload directory and keychain of the CA certificates
@@ -187,6 +188,10 @@ while [[ $# -gt 0 ]]; do
             ALLOW_SUPERSEDED_ENC=1
             shift
             ;;
+        --allow-signature-with-encryption)
+            ALLOW_SIG_ENC=1
+            shift
+            ;;
         --extra-pki-dir)
             [ $# -ge 2 ] || die "--extra-pki-dir needs a DIR argument."
             add_extra_dir "$2"
@@ -217,7 +222,8 @@ if [ "${HELP}" != "0" ]; then
 Useage:
 
 $(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--allow-expired-encryption]
-    [--allow-superseded-encryption] ['NAME_GLOB' ...]
+    [--allow-superseded-encryption] [--allow-signature-with-encryption]
+    ['NAME_GLOB' ...]
 $(basename "$0") --ca-certs-only [--user-keychain]
 
 Creates ONE installer, ./${OUTDIR}/install_credentials_<stem>.sh, with the
@@ -254,6 +260,9 @@ required). An S/MIME ENCRYPTION certificate that is expired, or revoked as
 unless you opt in, to decrypt old mail:
   --allow-expired-encryption      include expired encryption certificates
   --allow-superseded-encryption   include those revoked as superseded
+  --allow-signature-with-encryption
+                                  accept encryption certificates whose keyUsage
+                                  also allows signing (--extra-pki-dir only)
 Expired or revoked signature certificates are always rejected.
 
   --user-keychain         install the CA certificates into the user's login
@@ -573,11 +582,14 @@ verify_chain() {
 # validate_smime_cert CERT ROLE: 0 accepted, 1 rejected; sets CERT_STATE.
 # ROLE is the file-name role (signature|encryption); policy: bin/pki_validate.py.
 validate_smime_cert() {
-    local f="$1" role="$2" args=()
+    local f="$1" role="$2" extra="${3:-0}" args=()
 
     if [ "${role}" = encryption ]; then
         if [ "${ALLOW_EXPIRED_ENC}" = 1 ]; then args+=(--allow-expired); fi
         if [ "${ALLOW_SUPERSEDED_ENC}" = 1 ]; then args+=(--allow-superseded); fi
+        if [ "${ALLOW_SIG_ENC}" = 1 ] && [ "${extra}" = 1 ]; then
+            args+=(--allow-signature-with-encryption)   # extra trees only
+        fi
     fi
     if CERT_STATE=$("${PYTHON}" "${SCRIPT_DIR}/pki_validate.py" "${role}" "${f}" \
             --ca-bundle "${CA_BUNDLE}" --crl-bundle "${CRL_ALL}" \
@@ -1024,7 +1036,7 @@ build_payload_dir() {
             role="${ext}"
 
             # must verify against the root through a valid intermediate, CRLs checked
-            if ! validate_smime_cert "${f}" "${role}"; then
+            if ! validate_smime_cert "${f}" "${role}" "$((i > 0))"; then
                 rejected=$((rejected + 1))
                 continue
             fi

@@ -4,6 +4,7 @@
 Library for configurate_yaml.py; CLI for create_credentials.sh:
   pki_validate.py ROLE CERT --ca-bundle PEM --crl-bundle PEM --index FILE...
                   [--allow-expired] [--allow-superseded]
+                  [--allow-signature-with-encryption]
 Accepted: prints the state, exit 0. Rejected: reasons on stderr, exit 1.
 """
 from __future__ import annotations
@@ -164,7 +165,8 @@ def ca_chain_problems(trust: Trust) -> list[str]:
     return problems
 
 
-def _usage_problem(cert: x509.Certificate, name: str, role: Role) -> str | None:
+def _usage_problem(cert: x509.Certificate, name: str, role: Role,
+                   relax: bool = False) -> str | None:
     try:
         eku = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
     except x509.ExtensionNotFound:
@@ -175,10 +177,11 @@ def _usage_problem(cert: x509.Certificate, name: str, role: Role) -> str | None:
         ku = cert.extensions.get_extension_for_class(x509.KeyUsage).value
     except x509.ExtensionNotFound:
         # No keyUsage is unrestricted: fine for signing, not for encryption.
-        return f"no keyUsage; cannot be limited to {name}" if role.ku_none else None
+        return (f"no keyUsage; cannot be limited to {name}"
+                if role.ku_none else None)
     if role.ku_any and not any(getattr(ku, a) for a in role.ku_any):
         return f"keyUsage does not allow {name}"
-    if any(getattr(ku, a) for a in role.ku_none):
+    if not relax and any(getattr(ku, a) for a in role.ku_none):
         return f"keyUsage also allows signing; not a {name} certificate"
     return None
 
@@ -207,13 +210,15 @@ def issuer_eku_problem(cert: x509.Certificate, trust: Trust,
 
 def validate(cert: x509.Certificate, cert_file: Path, role_name: str,
              trust: Trust, now: datetime, allow_expired: bool = False,
-             allow_superseded: bool = False) -> tuple[list[str], str]:
+             allow_superseded: bool = False,
+             allow_sig_enc: bool = False) -> tuple[list[str], str]:
     """Return (problems, state); problems is empty if accepted."""
     role = POLICY[role_name]
     nb, na = validity(cert)
     if now < nb:
         return [f"not valid until {nb:%Y-%m-%d %H:%M}Z"], ""
-    problem = _usage_problem(cert, role_name, role)
+    allow_sig_enc = allow_sig_enc and role_name == "encryption"
+    problem = _usage_problem(cert, role_name, role, allow_sig_enc)
     if problem:
         return [problem], ""
     problem = issuer_eku_problem(cert, trust, role.eku, role.eku_name)
@@ -275,6 +280,8 @@ def main() -> None:
     ap.add_argument("--index", action="append", required=True)
     ap.add_argument("--allow-expired", action="store_true")
     ap.add_argument("--allow-superseded", action="store_true")
+    ap.add_argument("--allow-signature-with-encryption", action="store_true",
+                    help="encryption certs with signing keyUsage")
     a = ap.parse_args()
 
     index: dict[int, tuple[str, str]] = {}
@@ -284,7 +291,8 @@ def main() -> None:
     cert = load_cert(Path(a.cert))
     problems, state = validate(cert, Path(a.cert), a.role, trust,
                                datetime.now(timezone.utc),
-                               a.allow_expired, a.allow_superseded)
+                               a.allow_expired, a.allow_superseded,
+                               a.allow_signature_with_encryption)
     if problems:
         print("; ".join(problems), file=sys.stderr)
         sys.exit(1)

@@ -5,7 +5,7 @@ configurate_yaml.py -- YAML -> .mobileconfig (unsigned) -> signed
 
 Usage (from PKI_ROOT):
     bin/configurate_yaml.py \
-        mdm-private/yaml/myorganization-trust.yaml [--no-sign]
+        mdm/yaml/myorganization-trust.yaml [--no-sign]
 
 PKI_ROOT is the directory above this script's directory, and the
 script chdir()s into it, exactly as bin/pki_structure.sh does:
@@ -15,14 +15,16 @@ script chdir()s into it, exactly as bin/pki_structure.sh does:
 All relative paths are therefore relative to PKI_ROOT, wherever you
 run it from.
 
-SECURITY: YAML files and generated profiles can contain secrets (e.g.
-a Wi-Fi password in a settings payload). Signing a profile does NOT
-encrypt it: any plaintext secret in the YAML is readable in the
-signed .mobileconfig by anyone who has it. This script does not check or change permissions (that is
-left to create_credentials.sh and the umask); it sets
-umask 077, so what it creates is private. The YAML must
-live under mdm-private/, and the output directories must
-be inside it.
+SECRETS: no YAML holds a secret. 'password: !secret LABEL' is prompted
+for twice at build time. A profile with a !secret, or with S/MIME
+identities (their .p12 passwords are embedded), is signed in a private
+temporary directory and stored only in the PKI keychain
+(bin/pki_keychain.py profile-get extracts it). Signing does NOT
+encrypt: the extracted file holds those passwords in plain text; use
+it at once, then delete it. A literal value under a password-like key
+is an error. Other profiles are written under mdm/. This script sets
+umask 077. The YAML must live under mdm/, and the output directories
+must be inside it.
 
 If the YAML has no 'identifier:', it is generated as
 <reverse-DNS of $DOMAIN_VAR>.mdm.<yaml file name>
@@ -84,7 +86,7 @@ cert):
       - persona_myorganization_2026
         # plain name: looks for <name>-signature.p12 and
         # <name>-encryption.p12 via identity_dirs
-      - name: persona_oldwork_2022
+      - old: persona_oldwork_2022   # prior identity: mapping form
         allow_expired_encryption: true
             # optional, default false; lets this identity's
             # ENCRYPTION certificate be expired, for decrypting old
@@ -128,7 +130,7 @@ TYPE_ALIASES (e.g. 'airprint') instead of the full Apple PayloadType
 string; either always works, and this table is the only place to add
 another one. This covers every Configurator payload with no
 special-cased Apple-key knowledge -- see TYPE_ALIASES and the example
-fragment file mdm-private/yaml/ios-configurator-extras.yaml.sample
+fragment file mdm/yaml/ios-configurator-extras.yaml.sample
 for the keys reference/support-level believed to be right for
 AirPrint, Notifications, Web Clips and Fonts, and Content Filter's
 simplest (BuiltIn) form; that file also flags AirPlay and Subscribed
@@ -165,7 +167,7 @@ carddav (com.apple.carddav.account).
             # required; also the default PayloadDisplayName
         email: jane@example.org       # required
         username: jane                # required
-        password: "CHANGE-ME"         # required, secret
+        password: !secret mail-jane   # required
         host: example.org
             # required; used for both incoming/outgoing
         imap_port: 993                # optional, default shown
@@ -184,7 +186,7 @@ carddav (com.apple.carddav.account).
         description: MyOrganization
         host: example.org
         username: jane
-        password: "CHANGE-ME"
+        password: !secret caldav-jane
         port: 8443
             # optional; default 8443 (caldav) / 8843 (carddav)
         principal_url: ""             # optional, default ""
@@ -211,8 +213,8 @@ Environment overrides (same names/defaults as create_codesign.sh):
     SMIME_ISSUERCANAME  default $SMIME_ISSUERCADIR
                   vetting 'identities:' certificates; override only
                   if S/MIME certs come from a different intermediate)
-    UNSIGNED_DIR  default "mdm-private/mobfileconfigs-unsigned"
-    SIGNED_DIR    default "mdm-private/mobfileconfigs-signed"
+    UNSIGNED_DIR  default "mdm/mobfileconfigs-unsigned"
+    SIGNED_DIR    default "mdm/mobfileconfigs-signed"
     IDENTITY_DOMAIN_VAR  see DOMAIN_VAR below
     PKI_ASSUME_YES  not 0: overwrite existing profiles (same name or
                   same PayloadIdentifier, unsigned and signed)
@@ -222,8 +224,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import getpass
 import glob
 import hashlib
+import hmac
 import os
 import plistlib
 import re
@@ -290,8 +294,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PKI_ROOT = SCRIPT_DIR.parent
 os.chdir(PKI_ROOT)
 os.environ["PKI_ROOT"] = str(PKI_ROOT)  # so $PKI_ROOT works in YAML
-MDM_PRIVATE = PKI_ROOT / "mdm-private"
-# ^ holds secrets
+MDM_DIR = PKI_ROOT / "mdm"
+# ^ YAML sources, non-secret profiles, installers
 os.umask(0o077)  # anything created here is private from the 1st byte
 
 
@@ -331,6 +335,22 @@ _StrictBoolLoader.yaml_implicit_resolvers = {
     for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
 }
 
+
+class Secret:
+    """A value typed at build time (YAML tag '!secret LABEL')."""
+
+    def __init__(self, label: str):
+        self.label = label
+
+
+def _construct_secret(loader: yaml.Loader, node: yaml.Node) -> Secret:
+    label = loader.construct_scalar(node)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", label):
+        die(f"invalid '!secret' label {label!r} (letters, digits, _ . -)")
+    return Secret(label)
+
+
+_StrictBoolLoader.add_constructor("!secret", _construct_secret)
 
 _PLIST_SCALAR_TYPES = (str, bytes, bytearray, bool, int, float, datetime)
 
@@ -680,15 +700,14 @@ def load_pkcs12(path: Path, password: str) -> x509.Certificate:
 
 
 def normalize_identity_entry(raw: Any) -> dict[str, Any]:
-    """An 'identities:' entry is a plain name, or a mapping with 'name:'
-    and optional 'allow_expired_encryption:' and
-    'allow_superseded_encryption:' (see build_identities)."""
+    """An 'identities:' entry is a plain name, or a mapping with 'old:'
+    (a prior identity) and optional flags (see build_identities)."""
     if isinstance(raw, str):
         return {"name": raw}
-    if isinstance(raw, dict) and isinstance(raw.get("name"), str):
-        return raw
+    if isinstance(raw, dict) and isinstance(raw.get("old"), str):
+        return {**raw, "name": raw["old"]}
     die(f"invalid 'identities:' entry: {raw!r} -- expected a name, "
-        f"or a mapping with 'name:'")
+        f"or a mapping with 'old:'")
 
 
 def p12_password(path: Path) -> str:
@@ -1248,10 +1267,10 @@ def validate_profile(profile: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------
 def output_dirs() -> tuple[Path, Path]:
     unsigned = under_root(
-        os.environ.get("UNSIGNED_DIR", "mdm-private/mobfileconfigs-unsigned")
+        os.environ.get("UNSIGNED_DIR", "mdm/mobfileconfigs-unsigned")
     )
     signed = under_root(
-        os.environ.get("SIGNED_DIR", "mdm-private/mobfileconfigs-signed")
+        os.environ.get("SIGNED_DIR", "mdm/mobfileconfigs-signed")
     )
     return unsigned, signed
 
@@ -1473,6 +1492,86 @@ def confirm(question: str) -> bool:
     return reply.strip().lower() in ("y", "yes")
 
 
+def map_secrets(obj: Any, fn: Callable[[str], str]) -> Any:
+    """Copy of obj with each Secret replaced by fn(label)."""
+    if isinstance(obj, Secret):
+        return fn(obj.label)
+    if isinstance(obj, dict):
+        return {k: map_secrets(v, fn) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [map_secrets(v, fn) for v in obj]
+    return obj
+
+
+def secret_labels(obj: Any) -> list[str]:
+    found: list[str] = []
+    map_secrets(obj, lambda label: found.append(label) or "")
+    return found
+
+
+_SECRET_KEY = re.compile(r"password|passphrase|psk|secret", re.I)
+
+
+def reject_literal_secrets(obj: Any, where: str = "payloads") -> None:
+    """A string under a password-like key must be a '!secret'."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, str) and v and _SECRET_KEY.search(str(k)):
+                die(f"{where}.{k}: literal secret; write '!secret LABEL'")
+            reject_literal_secrets(v, f"{where}.{k}")
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            reject_literal_secrets(v, f"{where}[{i}]")
+
+
+def prompt_secret(label: str) -> str:
+    """Read a secret twice on the terminal (never argv, env or stdin)."""
+    try:
+        os.close(os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY))
+    except OSError:
+        die(f"secret '{label}' must be typed on a terminal")
+    for _ in range(3):
+        a = getpass.getpass(f"Secret {label}: ")
+        b = getpass.getpass(f"Secret {label} (again): ")
+        if not a or any(ord(c) < 32 or ord(c) == 127 for c in a):
+            print("Empty or control characters; try again.",
+                  file=sys.stderr)
+        elif not hmac.compare_digest(a.encode(), b.encode()):
+            print("Entries differ; try again.", file=sys.stderr)
+        else:
+            return a
+    die(f"secret '{label}': no matching entries")
+
+
+def confirm_replace(stem: str, ident: str) -> bool:
+    """False if the user declines to replace the stored profile."""
+    try:
+        exists = pki_keychain.profile_check(stem, ident)
+    except pki_keychain.KeychainError as e:
+        die(str(e))
+    return not exists or confirm(f"Replace the stored profile '{stem}'?")
+
+
+def store_sensitive(profile: dict[str, Any], stem: str,
+                    labels: list[str]) -> None:
+    """Sign in a private temporary directory; keep only the keychain copy."""
+    with tempfile.TemporaryDirectory(prefix="pki-profile.") as td:
+        unsigned = Path(td) / "unsigned" / f"{stem}.mobileconfig"
+        signed = Path(td) / "signed" / f"{stem}.mobileconfig"
+        unsigned.parent.mkdir()
+        unsigned.write_bytes(plistlib.dumps(profile, fmt=plistlib.FMT_XML))
+        sign(unsigned, signed)
+        try:
+            pki_keychain.profile_set(stem, signed,
+                                     profile["PayloadIdentifier"], labels)
+        except pki_keychain.KeychainError as e:
+            die(str(e))
+    print(f"  stored in the PKI keychain: mobileconfig :: {stem}")
+    print(f"  extract: bin/pki_keychain.py profile-get --name {stem} "
+          f"--out FILE")
+    print("  the extracted file holds passwords in plain text")
+
+
 def build(args: argparse.Namespace) -> None:
     ypath = under_root(args.yaml_file)
     if not ypath.is_file() and (ORIG_CWD / args.yaml_file).is_file():
@@ -1480,9 +1579,9 @@ def build(args: argparse.Namespace) -> None:
         ypath = (ORIG_CWD / args.yaml_file).resolve()
     if not ypath.is_file():
         die(f"YAML file not found: {args.yaml_file}")
-    if not ypath.resolve().is_relative_to(MDM_PRIVATE.resolve()):
-        die(f"{ypath} is outside {MDM_PRIVATE}. YAML files can "
-            f"contain secrets and must live under {MDM_PRIVATE.name}/")
+    if not ypath.resolve().is_relative_to(MDM_DIR.resolve()):
+        die(f"{ypath} is outside {MDM_DIR}; YAML files must live "
+            f"under {MDM_DIR.name}/")
 
     cfg = load_yaml_file(ypath)
     for key in ("identifier", "name", "description", "organization",
@@ -1519,6 +1618,7 @@ def build(args: argparse.Namespace) -> None:
     )
     # {"file": ...} / {"base64": ...} -> bytes
     cfg["payloads"] = embed_data_deep(cfg["payloads"])
+    reject_literal_secrets(cfg["payloads"])
 
     cert_dirs = [under_root(d) for d in cfg.get("cert_dirs", [])]
     if cfg.get("certificates") and not cert_dirs:
@@ -1526,14 +1626,27 @@ def build(args: argparse.Namespace) -> None:
 
     print(f"PKI_ROOT = {PKI_ROOT}\nBuilding {ypath.name}:")
     profile = build_profile(cfg, cert_dirs, identity_payloads)
+    labels = list(dict.fromkeys(secret_labels(profile)))
+    # secrets, or S/MIME identities (their .p12 passwords are embedded)
+    sensitive = bool(labels) or bool(identity_payloads)
+    if sensitive and args.no_sign:
+        die("a profile with secrets is stored signed; drop --no-sign")
+    if sensitive and not confirm_replace(ypath.stem,
+                                         profile["PayloadIdentifier"]):
+        die("not replacing; nothing was changed.")
+    values = {label: prompt_secret(label) for label in labels}
+    profile = map_secrets(profile, values.__getitem__)
+    values.clear()
     check_plistable(profile)
     validate_profile(profile)
+    if sensitive:
+        store_sensitive(profile, ypath.stem, labels)
+        return
 
     unsigned_dir, signed_dir = output_dirs()
     for d in (unsigned_dir, signed_dir):
-        if not d.resolve().is_relative_to(MDM_PRIVATE.resolve()):
-            die(f"output directory {d} must be inside {MDM_PRIVATE} "
-                f"(profiles can contain secrets)")
+        if not d.resolve().is_relative_to(MDM_DIR.resolve()):
+            die(f"output directory {d} must be inside {MDM_DIR}")
     unsigned_dir.mkdir(parents=True, exist_ok=True)
     unsigned = unsigned_dir / (ypath.stem + ".mobileconfig")
     signed = signed_dir / unsigned.name

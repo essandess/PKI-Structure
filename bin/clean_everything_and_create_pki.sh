@@ -73,7 +73,7 @@ echo
 echo "This includes the root CA, both intermediate CAs, server, codesign, S/MIME,"
 echo "privoxy, and adblock2privoxy keys and certificates. Anything issued by"
 echo "the current root/intermediate will no longer be valid once this completes."
-echo "The generated installers and MDM profiles in mdm-private/ are deleted too"
+echo "The generated installers and MDM profiles in mdm/ are deleted too"
 echo "(the YAML sources are kept)."
 if [ "${CREATE_PKI}" != "1" ]; then
     echo "The PKI will NOT be recreated (pass --create-pki to do so)."
@@ -91,10 +91,10 @@ bin/create_root.sh -c ; bin/create_intermediate.sh -c ; bin/create_intermediate_
 bin/create_privoxy.sh -c ; bin/create_adblock2privoxy.sh -c
 
 # Generated installers and profiles chain to the deleted CAs; YAML is kept
-rm -f mdm-private/credentials/install_credentials_*.sh \
-      mdm-private/credentials/install_credentials_*.sh.pass \
-      mdm-private/mobfileconfigs-unsigned/*.mobileconfig \
-      mdm-private/mobfileconfigs-signed/*.mobileconfig
+rm -f mdm/credentials/install_credentials_*.sh \
+      mdm/credentials/install_credentials_*.sh.pass \
+      mdm/mobfileconfigs-unsigned/*.mobileconfig \
+      mdm/mobfileconfigs-signed/*.mobileconfig
 
 if [ "${CREATE_PKI}" == "1" ]; then
     # Create PKI chain of trust all at once

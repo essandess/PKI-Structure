@@ -3,8 +3,9 @@
 # Converter fills in: PayloadType, PayloadVersion, PayloadUUIDs,
 # payload identifiers (<profile identifier>.<id>), PayloadEnabled.
 #
-# CONTAINS SECRETS (Wi-Fi password). Keep under mdm-private/, mode
-# 0600. Signing does not encrypt the password in the .mobileconfig.
+# No secrets in this file: '!secret LABEL' is prompted for at build time.
+# The profile holds them in plain text and is stored only in the PKI
+# keychain (bin/pki_keychain.py profile-get extracts it).
 
 # ---- Profile ----------------------------------------------------
 # identifier: org.myorganization.mdm.myorganization-settings
@@ -54,7 +55,7 @@ payloads:
     name: WiFi (My SSID WiFi Name)
     settings:
       SSID_STR: My SSID WiFi Name
-      Password: "CHANGE-ME"   # secret
+      Password: !secret wifi-myssid
       EncryptionType: WPA
       AutoJoin: true
       HIDDEN_NETWORK: false

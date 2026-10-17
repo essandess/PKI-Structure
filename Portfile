@@ -46,7 +46,7 @@ depends_run-append  port:KeePassXC \
 depends_test-append port:KeePassXC
 
 proc is_private_path {path} {
-    return [regexp {^keepassxc$|private|key|master} [file tail $path]]
+    return [regexp {^keepassxc$|^mdm$|private|key|master} [file tail $path]]
 }
 
 proc pki_lockdown {path {is_private 0}} {
@@ -138,8 +138,8 @@ set pki_test_dir    ${workpath}/tmp/${name}
 set keepass_keychain_dir    keepassxc/keychain
 set keepass_keyfile_dir     keepassxc/keyfile
 set keepass_master_dir      keepassxc/master
-set mdm_credentials_dir     mdm-private/credentials
-set mdm_yaml_dir            mdm-private/yaml
+set mdm_credentials_dir     mdm/credentials
+set mdm_yaml_dir            mdm/yaml
 
 destroot {
     # reference in share, live deployment in etc

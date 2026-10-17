@@ -8,9 +8,9 @@
 #   accounts/payloads  <profile identifier>.<id>
 #   identities         <profile identifier>.pkcs12.<UUID>
 #
-# SECRETS: account passwords, PKCS#12 export passphrase. Keep this file
-# under mdm-private/, mode 0600. The generated .mobileconfig stores them
-# as plaintext; signing does not encrypt.
+# No secrets in this file: '!secret LABEL' is prompted for at build time.
+# The profile holds them in plain text and is stored only in the PKI
+# keychain (bin/pki_keychain.py profile-get extracts it).
 
 name: Settings for User A Long Name
 description: Network accounts and S/MIME identities for User A Long Name.
@@ -36,6 +36,12 @@ identities:
   - persona_icloud_2026
   - persona_school_2026
   - persona_myorganization_2026
+  # A prior identity, kept to decrypt old mail:
+  # - old: persona_gmail_2022
+  #   encryption_only: true
+  #   allow_expired_encryption: true
+  #   allow_superseded_encryption: true
+  #   allow_signature_with_encryption: true   # extra identity_dirs tree only
 
 # ---- Network accounts -----------------------------------------------------
 # type         Required: mail, caldav or carddav.
@@ -55,7 +61,7 @@ accounts:
     description: MyOrganization
     email: persona@myorganization.org
     username: persona
-    password: "CHANGE-ME"            # secret
+    password: !secret mail-persona
     # Used for incoming and outgoing unless incoming_host/outgoing_host set.
     host: server.myorganization.org
     imap_port: 993                   # optional; default shown
@@ -63,7 +69,7 @@ accounts:
     # account_name: username         # default: short_name, then description
     # use_ssl: true                  # optional; both directions
     # outgoing_username: persona     # default: username
-    # outgoing_password: "..."       # secret; default: incoming password
+    # outgoing_password: !secret LABEL   # default: incoming password
     smime:
       identity: persona_myorganization_2026   # must be in 'identities:'
       encrypt_by_default: false      # also sets SMIMEEncryptionEnabled
@@ -77,7 +83,7 @@ accounts:
     host: server.myorganization.org
     port: 8443                       # optional; default shown
     username: persona
-    password: "CHANGE-ME"            # secret
+    password: !secret caldav-persona
     # principal_url: ""              # optional; default shown
     # use_ssl: true                  # optional; default shown
 
@@ -87,5 +93,5 @@ accounts:
     port: 8843                       # optional; default shown
     principal_url: /addressbooks/__uids__/15309EE6-0DA4-4768-8FAE-B20C274C49C7
     username: persona
-    password: "CHANGE-ME"            # secret
+    password: !secret carddav-persona
     # use_ssl: true                  # optional; default shown

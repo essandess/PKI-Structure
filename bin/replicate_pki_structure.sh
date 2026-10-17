@@ -3,7 +3,7 @@
 #
 # Copies PKI-Structure's scripts and openssl configs to a new deployment
 # directory. Never overwrites an existing pki_identity.env,
-# create_organization_smime.sh or mdm-private/yaml/myorganization-trust.yaml;
+# create_organization_smime.sh or mdm/yaml/myorganization-trust.yaml;
 # seeds them from the baseline template.
 #
 # By default, nothing already present in DEST is ever overwritten by the
@@ -18,15 +18,15 @@
 #   - *.sh / *.py files: 0750
 #   - other files: 0600 under a private directory, 0640 elsewhere
 # Files and directories this script creates or replaces are set to these modes.
-# Anything already in DEST/mdm-private/ is only audited: deviations produce a
+# Anything already in DEST/mdm/ is only audited: deviations produce a
 # warning and a prompt to fix. The source tree's permissions are not examined.
 #
 # Usage: replicate_pki_structure.sh [-ow|--overwrite] [-h|--help] [DEST]
 
 set -euo pipefail
 
-MDM_PRIVATE="mdm-private"
-MDM_PRIVATE_YAML="${MDM_PRIVATE}/yaml"
+MDM_DIR="mdm"
+MDM_DIR_YAML="${MDM_DIR}/yaml"
 
 # Print the octal mode pki_lockdown would give $1 (a path relative to DEST).
 # The path must exist (it is tested to see whether it is a directory).
@@ -41,7 +41,8 @@ pki_mode() {
     fi
     IFS=/ read -r -a parts <<< "${dirpart}"
     for c in "${parts[@]}"; do
-        [[ "${c}" == *private* || "${c}" == keepassxc ]] && private=1
+        [[ "${c}" == *private* || "${c}" == keepassxc || "${c}" == mdm ]] \
+            && private=1
     done
 
     if [ -d "${DEST}/${rel}" ]; then
@@ -160,7 +161,7 @@ RSYNC_EXCLUDE_INCLUDE=(
     --include='*.cnf'
     --include='*.md'
     --include="etc/*.sample"
-    --include="${MDM_PRIVATE_YAML}/*.sample"
+    --include="${MDM_DIR_YAML}/*.sample"
     --include='LICENSE'
     --exclude='*'
 )
@@ -209,8 +210,8 @@ while IFS= read -r REL; do
 done <<< "${TRANSFERRED}"
 
 # A new private directory is created closed (0700) before anything goes in it.
-if [ ! -e "${DEST}/${MDM_PRIVATE}" ]; then
-    ( umask 077; mkdir -p "${DEST}/${MDM_PRIVATE}" )
+if [ ! -e "${DEST}/${MDM_DIR}" ]; then
+    ( umask 077; mkdir -p "${DEST}/${MDM_DIR}" )
 fi
 
 # Seed personalized files only if DEST doesn't already have them.
@@ -221,7 +222,7 @@ for PERSONALIZED in \
     bin/create_organization_smime.sh \
     bin/create_organization_credentials.sh \
     bin/create_organization_mdm.sh \
-    "${MDM_PRIVATE_YAML}/ios-restrictions-baseline.yaml" \
+    "${MDM_DIR_YAML}/ios-restrictions-baseline.yaml" \
     ; do
     BASELINE="${SRC}${PERSONALIZED}.sample"
     [ -f "${BASELINE}" ] || BASELINE="${SRC}${PERSONALIZED}"
@@ -229,7 +230,7 @@ for PERSONALIZED in \
     if [ -f "${DEST}/${PERSONALIZED}" ]; then
         echo "Existing ${DEST}/${PERSONALIZED} left untouched."
     elif [ -f "${BASELINE}" ]; then
-        if [[ "${PERSONALIZED}" == "${MDM_PRIVATE}/"* ]]; then
+        if [[ "${PERSONALIZED}" == "${MDM_DIR}/"* ]]; then
             # private subdirectory: created closed (0700)
             PRIVATE_SUBDIR="$(dirname "${DEST}/${PERSONALIZED}")"
             [ -d "${PRIVATE_SUBDIR}" ] || ( umask 077; mkdir -p "${PRIVATE_SUBDIR}" )
@@ -245,8 +246,8 @@ for PERSONALIZED in \
     fi
 done
 
-# Audit everything under the destination's mdm-private/ (new and pre-existing),
+# Audit everything under the destination's mdm/ (new and pre-existing),
 # unless DEST is the source itself (whose permissions are not our business).
 if [ "$(cd "${SRC}" && pwd -P)" != "${DEST}" ] && [ "$(cd "${SRC}" && pwd -P)" != "$(cd "${DEST}" && pwd -P)" ]; then
-    audit_private "${DEST}/${MDM_PRIVATE}"
+    audit_private "${DEST}/${MDM_DIR}"
 fi

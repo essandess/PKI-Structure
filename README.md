@@ -27,7 +27,8 @@ file (login keychain item for other users) and separable keyfile.
   `security`.
 * Python 3.9+ with `cryptography` 44+ (certificate validation, KDBX4 database
   creation) and `PyYAML` (MDM profiles).
-* `keepassxc-cli` (key passphrases, KeePassXC integration; `KEEPASSXC_CLI` overrides lookup) and macOS `security`.
+* `keepassxc-cli` 2.7+ (key passphrases, profile attachments; `KEEPASSXC_CLI`
+  overrides lookup) and macOS `security`.
 * `rsync` (deployment).
 
 ## Deploying to a new directory
@@ -37,17 +38,17 @@ bin/replicate_pki_structure.sh [-ow|--overwrite] [DEST]      # DEST defaults to 
 ```
 
 * Copies `.sh`, `.py`, `.cnf`, `.md`, `LICENSE`, `etc/*.sample`, and
-  `mdm-private/yaml/*.sample`; never `.git/`, `*.env`, `*.conf`, `*.yaml`,
+  `mdm/yaml/*.sample`; never `.git/`, `*.env`, `*.conf`, `*.yaml`,
   `create_organization_smime.sh`, or `create_organization_mdm.sh`.
   `PKI_STRUCTURE_SRC` (trailing `/`) overrides the source.
 * Existing files are kept. `-ow` lists what it would replace and asks `[y/N]`
   (`PKI_ASSUME_YES=1` skips the prompt).
 * Seeds when absent, from `<file>.sample` (else the source file):
   `pki_identity.env`, `bin/create_organization_{smime,mdm,credentials}.sh`,
-  `mdm-private/yaml/ios-restrictions-baseline.yaml`.
-* Modes on `DEST`: directories 0755, or 0700 for `*private*`, `keepassxc` and below; scripts
+  `mdm/yaml/ios-restrictions-baseline.yaml`.
+* Modes on `DEST`: directories 0755, or 0700 for `*private*`, `keepassxc`, `mdm` and below; scripts
   0750; other files 0640, or 0600 under a private directory. An existing
-  `DEST/mdm-private/` is audited, with a `[y/N]` prompt before any change.
+  `DEST/mdm/` is audited, with a `[y/N]` prompt before any change.
 
 Edit `pki_identity.env` before running any `create_*.sh`.
 
@@ -60,7 +61,7 @@ root/  intermediate/  intermediate_smime/  server/  codesign/  smime/
 privoxy/            separate trust anchor
 privoxy/adblock2privoxy/
 keepassxc/          secrets; keychain/ keyfile/ master/
-mdm-private/        secrets; keep out of version control
+mdm/                installers and profiles; keep out of version control
     yaml/  mobfileconfigs-unsigned/  mobfileconfigs-signed/  credentials/
 ```
 
@@ -127,6 +128,8 @@ bin/pki_keychain.py list | prune [-n] | reap          # reap: failed issuances
 bin/pki_keychain.py export-master | import-master     # escrow / restore (stdin)
 bin/pki_keychain.py verify | kdf-check | selftest     # master + database; KDF; keychain
 bin/pki_keychain.py installer-set | installer-get --name NAME   # installer passwords
+bin/pki_keychain.py profile-get --name NAME --out FILE          # stored MDM profile
+bin/pki_keychain.py profile-list | profile-rm --name NAME
 ```
 
 
@@ -270,7 +273,7 @@ bin/create_credentials.sh [--user-keychain] [--extra-pki-dir DIR]...
 bin/create_credentials.sh --ca-certs-only [--user-keychain]
 ```
 
-Writes `mdm-private/credentials/install_credentials_<stem>.sh` (0750) after
+Writes `mdm/credentials/install_credentials_<stem>.sh` (0750) after
 listing the payload and confirming. `-h` lists all options.
 
 | Mode | Payload | Encrypted |
@@ -384,17 +387,18 @@ Copy values with `keepassxc-cli clip DB 'TITLE'` (installer password) or
 ## MDM profiles
 
 ```sh
-bin/configurate_yaml.py mdm-private/yaml/myorganization-trust.yaml [--no-sign]
+bin/configurate_yaml.py mdm/yaml/myorganization-trust.yaml [--no-sign]
 ```
 
 Builds an unsigned `.mobileconfig`, then signs it (DER CMS, signer per
 [Signer selection](#signer-selection); signature and payload round-trip
-verified). YAML and output directories must be under `mdm-private/`; relative
+verified). YAML and output directories must be under `mdm/`; relative
 paths resolve against the PKI root. `create_organization_mdm.sh` runs this
 deployment's list of profiles and takes no arguments. Never edit a profile
 after signing; regenerate.
 
-Output: `mdm-private/mobfileconfigs-{unsigned,signed}/<yaml name>.mobileconfig`.
+Output, for a profile without secrets:
+`mdm/mobfileconfigs-{unsigned,signed}/<yaml name>.mobileconfig`.
 At least one of `certificates`, `payloads`, `identities`, `accounts` is
 required.
 
@@ -434,7 +438,7 @@ required.
 * **Accounts.** Translated to payloads and merged like hand-written ones (a
   payload with the same `id` overrides field by field); `smime.identity` must
   be in `identities`. A `settings:` mapping on an entry takes Apple keys.
-  Passwords are plaintext in the YAML and the profile.
+  Passwords are `!secret LABEL` (see Secrets).
 * **Overwrite.** If the output exists, or another profile in
   `mobfileconfigs-unsigned/` has the same `PayloadIdentifier`, the unsigned and
   signed files to be replaced are listed and `[y/N]` is asked; `PKI_ASSUME_YES=1`
@@ -447,11 +451,21 @@ Environment: `CERTDIR`, `CERTNAME` (default `codesign`), `ISSUERCADIR`,
 (`DOMAIN_NAME`), `PKI_ASSUME_YES`. CRLs are read from `*/crl/*.crl.pem`, else
 `*/crl/*.crl`.
 
-**Permissions.** Signing does not encrypt: `mdm-private/` holds secrets
-(account passwords, installers). `configurate_yaml.py` sets
-`umask 077` and does not check or change modes; `create_credentials.sh` sets
-`mdm-private/` and `credentials/` to 0700, installers 0750;
-`replicate_pki_structure.sh` audits `mdm-private/` at the destination.
+**Secrets.** No YAML holds a secret. Write `!secret LABEL` for a password: it
+is prompted for twice at build time. A profile with any `!secret`, or with
+`identities` (the `.p12` passwords are embedded), is signed in a private
+temporary directory and stored only as the attachment of the KeePassXC entry
+`mobileconfig :: <yaml name>`; nothing is written to `mobfileconfigs-*`.
+A literal under a password-like key is an error. Extract a stored profile:
+
+```sh
+bin/pki_keychain.py profile-get --name NAME --out FILE
+```
+
+Signing does not encrypt: the extracted file holds those passwords in plain
+text. Use it at once, then delete it. `configurate_yaml.py` sets `umask 077`;
+`create_credentials.sh` sets `mdm/` and `credentials/` to 0700, installers
+0750; `replicate_pki_structure.sh` audits `mdm/` at the destination.
 
 **iOS trust.** A root installed by manually opening a profile is not trusted
 for TLS until enabled under Settings > General > About > Certificate Trust

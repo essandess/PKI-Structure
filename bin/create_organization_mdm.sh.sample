@@ -16,11 +16,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PKI_ROOT}" || exit
 
-# MDM creation
+# MDM creation (prompts for each !secret)
 
 # MyOrganization Trust and Settings
-bin/configurate_yaml.py mdm-private/yaml/myorganization-trust.yaml
-bin/configurate_yaml.py mdm-private/yaml/myorganization-settings.yaml
+bin/configurate_yaml.py mdm/yaml/myorganization-trust.yaml
+bin/configurate_yaml.py mdm/yaml/myorganization-settings.yaml
 
 # Person A
-bin/configurate_yaml.py mdm-private/yaml/persona-settings.yaml
+bin/configurate_yaml.py mdm/yaml/persona-settings.yaml

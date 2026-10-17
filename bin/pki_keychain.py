@@ -42,6 +42,9 @@ Entries   one per private key, found by SHA-256 of its public key, so every
   kdf-check                 database is KDBX4, Argon2 >= 64 MiB, 4 lanes
   installer-set --name NAME store an installer password (stdin) as entry NAME
   installer-get --name NAME print it
+  profile-get --name NAME --out FILE
+                            extract a stored MDM profile (PLAIN TEXT secrets)
+  profile-list | profile-rm --name NAME
   export-master             print the master password (escrow)
   import-master             restore the master from stdin; refuses if present
   prune [-n]   reap   list
@@ -65,6 +68,8 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
+import textwrap
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -807,6 +812,123 @@ def cmd_installer_get(a) -> None:
     print(db.show(a.name))
 
 
+PROFILE_PREFIX = "mobileconfig :: "
+EXPOSED = ("WARNING: {} holds account passwords in PLAIN TEXT (signing does "
+           "not encrypt). Deploy it now, then delete it and empty the Trash.")
+
+
+def need_attachments() -> None:
+    r = subprocess.run([kpcli(), "--version"], capture_output=True, text=True)
+    m = re.match(r"(\d+)\.(\d+)", r.stdout.strip())
+    if not m or (int(m[1]), int(m[2])) < (2, 7):
+        fail("keepassxc-cli >= 2.7 is required for profile attachments")
+
+
+def profile_title(name: str) -> str:
+    if not NAME_RE.match(name):
+        fail("NAME must be a profile file stem (letters, digits, _ . -)")
+    return PROFILE_PREFIX + name
+
+
+def profile_titles(db: Db) -> list[str]:
+    out = db.kp(["ls", "-R", "-f", db.file]).stdout.splitlines()
+    return [t for t in out if t.startswith(PROFILE_PREFIX)]
+
+
+def profile_ident(db: Db, title: str) -> str:
+    return db.kp(["show", "-a", "UserName", db.file, title]).stdout.strip()
+
+
+def profile_check(name: str, ident: str) -> bool:
+    """True if profile NAME is stored; fail if another has PayloadIdentifier."""
+    mine = profile_title(name)
+    if not dbfile().exists():
+        return False
+    db = Db()
+    titles = profile_titles(db)
+    for t in titles:
+        if t != mine and profile_ident(db, t) == ident:
+            fail(f"'{t}' has the same PayloadIdentifier '{ident}'")
+    return mine in titles
+
+
+def profile_set(name: str, path, ident: str, labels: list[str]) -> None:
+    """Store a signed profile as the attachment of its own entry."""
+    need_attachments()
+    title = profile_title(name)
+    path = Path(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    notes = "\n".join([
+        "Signed MDM profile. The attachment holds account passwords in",
+        "PLAIN TEXT (signing does not encrypt).",
+        f"SHA-256 {digest}",
+        f"Stored {datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%SZ}",
+        "Secrets prompted: " + (", ".join(labels) or "none"),
+        f"Extract: bin/pki_keychain.py profile-get --name {name} --out FILE",
+    ])
+    with lock():
+        ensure_db()
+        profile_check(name, ident)
+        db = Db()
+        if db.has(title):
+            db.rm(title)
+        db.kp(["add", db.file, title, "-u", ident, "--notes", notes])
+        try:
+            db.kp(["attachment-import", db.file, title,
+                   f"{name}.mobileconfig", str(path)])
+        except KeychainError:
+            db.rm(title)
+            raise
+
+
+def profile_get(name: str, out) -> None:
+    need_attachments()
+    title = profile_title(name)
+    out = Path(out)
+    if out.exists() or out.is_symlink():
+        fail(f"{out} exists; not replaced")
+    db = Db()
+    if not db.has(title):
+        fail(f"no stored profile '{name}' (see profile-list)")
+    notes = db.kp(["show", "-a", "Notes", db.file, title]).stdout
+    m = re.search(r"^SHA-256 ([0-9a-f]{64})$", notes, re.M)
+    if not m:
+        fail(f"entry '{title}' has no recorded SHA-256")
+    with tempfile.TemporaryDirectory(prefix="pki-profile.") as td:
+        tmp = Path(td) / f"{name}.mobileconfig"
+        db.kp(["attachment-export", db.file, title,
+               f"{name}.mobileconfig", str(tmp)])
+        data = tmp.read_bytes()
+    if hashlib.sha256(data).hexdigest() != m.group(1):
+        fail("stored profile does not match its recorded SHA-256")
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    if out.resolve().is_relative_to(PKI_ROOT.resolve()):
+        print(textwrap.fill(f"Warning: {out} is inside the PKI tree.", 79),
+              file=sys.stderr)
+    print(textwrap.fill(EXPOSED.format(out), 79), file=sys.stderr)
+
+
+def cmd_profile_get(a) -> None:
+    profile_get(a.name, a.out)
+
+
+def cmd_profile_list(a) -> None:
+    for t in profile_titles(Db()):
+        print(t[len(PROFILE_PREFIX):])
+
+
+def cmd_profile_rm(a) -> None:
+    title = profile_title(a.name)
+    if not dbfile().exists():
+        return
+    with lock():
+        db = Db()
+        if db.has(title):
+            db.rm(title)
+
+
 def cmd_kdf_check(a) -> None:
     p = kdbx_params(dbfile())
     print(fmt_params(p))
@@ -871,6 +993,14 @@ def main() -> None:
         p = sub.add_parser(name)
         p.add_argument("--name", required=True)
         p.set_defaults(func=fn)
+    p = sub.add_parser("profile-get")
+    p.add_argument("--name", required=True)
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_profile_get)
+    sub.add_parser("profile-list").set_defaults(func=cmd_profile_list)
+    p = sub.add_parser("profile-rm")
+    p.add_argument("--name", required=True)
+    p.set_defaults(func=cmd_profile_rm)
 
     ap.epilog = "commands: " + ", ".join(sub.choices)
     a = ap.parse_args()

@@ -13,7 +13,7 @@
 #
 # Example:
 #   bin/create_keepass_entry.sh --db MYDBFILE.keypass \
-#       mdm-private/credentials/install_credentials_persona_S.sh
+#       mdm/credentials/install_credentials_persona_S.sh
 #
 # INSTALLER is an encrypted installer made by create_credentials.sh, e.g.
 # install_credentials_persona_S.sh. Its password is read from the PKI keychain

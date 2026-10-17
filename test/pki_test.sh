@@ -97,17 +97,17 @@ VERIFY_FLAGS="${PKI_TEST_VERIFY_FLAGS--x509_strict}"
 SM="${PKI_TEST_SMIME_NAME:-persona_gmail_2026}"
 
 # ---------------------------------------------------------------- seed deployment files
-mkdir -p mdm-private/yaml
+mkdir -p mdm/yaml
 for f in smime mdm credentials; do
     [ -f "bin/create_organization_${f}.sh" ] \
         || cp -p "bin/create_organization_${f}.sh.sample" "bin/create_organization_${f}.sh"
     chmod 0750 "bin/create_organization_${f}.sh"
 done
 for yml in myorganization-trust myorganization-settings persona-settings ios-restrictions-baseline; do
-    if [ ! -e "mdm-private/yaml/${yml}.yaml" ]; then
-        cp "mdm-private/yaml/${yml}.yaml.sample" "mdm-private/yaml/${yml}.yaml"
+    if [ ! -e "mdm/yaml/${yml}.yaml" ]; then
+        cp "mdm/yaml/${yml}.yaml.sample" "mdm/yaml/${yml}.yaml"
     fi
-    chmod 0600 "mdm-private/yaml/${yml}.yaml"
+    chmod 0600 "mdm/yaml/${yml}.yaml"
 done
 
 # ---------------------------------------------------------------- test helpers
@@ -237,17 +237,24 @@ verify_profile() {  # CMS signature chains to the root and carries the unsigned 
         -purpose any -out "${TMPD}/profile.out" || return 1
     cmp -s "${TMPD}/profile.out" "$2"
 }
+verify_signed() {   # CMS signature chains to the root; content to $2
+    "${OPENSSL}" smime -verify -binary -inform der -in "$1" -CAfile root/certs/root.cert.pem \
+        -purpose any -out "$2"
+}
 
 # ---------------------------------------------------------------- embedded helpers
 cat > "${TMPD}/ptyrun.py" <<'PY'
 import os
 import pty
+import re
 import select
 import sys
 
 pwfile, *cmd = sys.argv[1:]
 with open(pwfile) as fh:
     pw = fh.readline().rstrip("\n")
+s1 = os.environ.get("PTY_SECRET", "")
+s2 = os.environ.get("PTY_SECRET_AGAIN", s1)
 pid, fd = pty.fork()
 if pid == 0:
     os.execvp(cmd[0], cmd)
@@ -269,6 +276,13 @@ while True:
     while b"Installer password" in buf:
         buf = buf.split(b"Installer password", 1)[1]
         os.write(fd, (pw + "\n").encode())
+    while True:
+        m = re.search(rb"Secret [^\n]*?: ", buf)
+        if not m:
+            break
+        buf = buf[m.end():]
+        ans = s2 if b"(again)" in m.group(0) else s1
+        os.write(fd, (ans + "\n").encode())
 _, status = os.waitpid(pid, 0)
 sys.stdout.write(log.decode(errors="replace"))
 sys.exit(os.waitstatus_to_exitcode(status))
@@ -410,7 +424,7 @@ ENC_OLD=$(archived_cert "${SM}" encryption) || die "no superseded ${SM} encrypti
 step "key passphrases"
 KC() { "${PYTHON}" bin/pki_keychain.py "$@"; }
 no_secret_files() {
-    [ -z "$(find . -path ./mdm-private -prune -o \( -name passphrase.txt -o -name '*.p12.pass' \) -print | sed -n 1p)" ]
+    [ -z "$(find . -path ./mdm -prune -o \( -name passphrase.txt -o -name '*.p12.pass' \) -print | sed -n 1p)" ]
 }
 p12_opens() { "${OPENSSL}" pkcs12 -legacy -noout -in "$1" -passin fd:3 3< <(KC get --cert "$2" --field p12); }
 p12_shared() { [ "$(KC get --cert "$1" --field p12)" = "$(KC get --cert "$2" --field p12)" ]; }
@@ -587,8 +601,8 @@ step "credential installers"
 run "CA/S-MIME installers" bin/create_organization_credentials.sh
 run "installer with old encryption certs" bin/create_credentials.sh 'persona_{gmail,comcast}_*' 'personb_*_2026' \
     --allow-expired-encryption --allow-superseded-encryption
-INST_CA=mdm-private/credentials/install_credentials_cacerts.sh
-INST=mdm-private/credentials/install_credentials_persona_LBgmailCcomcastRB_S_personb_S_2026.sh
+INST_CA=mdm/credentials/install_credentials_cacerts.sh
+INST=mdm/credentials/install_credentials_persona_LBgmailCcomcastRB_S_personb_S_2026.sh
 [ -f "${INST_CA}" ] && [ -f "${INST}" ] || die "installer outputs missing"
 INST_PW_FILE="${TMPD}/installer.pw"
 KC installer-get --name "${INST##*/}" > "${INST_PW_FILE}" || die "no installer password in the PKI keychain"
@@ -656,17 +670,42 @@ check "keepass: --export-master re-run is idempotent"   kpmaster
 
 # ================================================================ MDM profiles
 step "MDM profiles"
-run "MDM profiles" bin/create_organization_mdm.sh
-for p in myorganization-trust myorganization-settings persona-settings; do
-    U="mdm-private/mobfileconfigs-unsigned/${p}.mobileconfig"
-    S="mdm-private/mobfileconfigs-signed/${p}.mobileconfig"
-    check "${p}: signature chains to root, content intact" verify_profile "${S}" "${U}"
+export PTY_SECRET="pki-test-secret-0042"
+run "MDM profiles" ptyrun "${INST_PW_FILE}" bin/create_organization_mdm.sh
+no_profile_on_disk() { [ -z "$(find mdm -name "$1.mobileconfig" | sed -n 1p)" ]; }
+no_secret_in_tree() {
+    [ -z "$(grep -rlaF --exclude-dir=.git --exclude=pki_test.sh -- "${PTY_SECRET}" . 2>/dev/null | sed -n 1p)" ]
+}
+p=myorganization-trust
+U="mdm/mobfileconfigs-unsigned/${p}.mobileconfig"
+S="mdm/mobfileconfigs-signed/${p}.mobileconfig"
+check "${p}: signature chains to root, content intact" verify_profile "${S}" "${U}"
+tamper_profile "${S}" "${TMPD}/${p}.tampered" || die "tamper_profile failed"
+fails "${p}: tampered profile rejected"     "${OPENSSL}" smime -verify -binary -inform der \
+    -in "${TMPD}/${p}.tampered" -CAfile root/certs/root.cert.pem -purpose any -out /dev/null
+for p in myorganization-settings persona-settings; do
+    S="${TMPD}/${p}.mobileconfig"
+    run "${p}: extract from the keychain" KC profile-get --name "${p}" --out "${S}"
+    check "${p}: signature chains to root" verify_signed "${S}" "${TMPD}/${p}.content"
+    check "${p}: holds the prompted secret" grep -aqF -- "${PTY_SECRET}" "${TMPD}/${p}.content"
+    check "${p}: not written to mdm/" no_profile_on_disk "${p}"
     tamper_profile "${S}" "${TMPD}/${p}.tampered" || die "tamper_profile failed"
     fails "${p}: tampered profile rejected"     "${OPENSSL}" smime -verify -binary -inform der \
         -in "${TMPD}/${p}.tampered" -CAfile root/certs/root.cert.pem -purpose any -out /dev/null
 done
+check "no prompted secret on disk in the tree" no_secret_in_tree
+refuse "profile-get refuses an existing file" "exists" KC profile-get --name persona-settings \
+    --out "${TMPD}/persona-settings.mobileconfig"
+refuse "mismatched secret entries rejected" "no matching entries" \
+    env PTY_SECRET=one PTY_SECRET_AGAIN=two "${PYTHON}" "${TMPD}/ptyrun.py" "${INST_PW_FILE}" \
+    "${PYTHON}" bin/configurate_yaml.py mdm/yaml/persona-settings.yaml
+printf 'name: t\ndescription: t\npayloads:\n  - id: w\n    type: wifi\n    settings:\n      Password: literal\n' \
+    > mdm/yaml/literal-test.yaml
+refuse "literal secret in YAML rejected" "literal secret" \
+    "${PYTHON}" bin/configurate_yaml.py mdm/yaml/literal-test.yaml
+rm -f mdm/yaml/literal-test.yaml
 trust_profile_ok() {
-    "${PYTHON}" - mdm-private/mobfileconfigs-unsigned/myorganization-trust.mobileconfig root/certs/root.cert.pem <<'PY'
+    "${PYTHON}" - mdm/mobfileconfigs-unsigned/myorganization-trust.mobileconfig root/certs/root.cert.pem <<'PY'
 import hashlib
 import plistlib
 import sys
@@ -697,8 +736,8 @@ perm_audit() {
         find "${PKI_KEYCHAIN_DIR}" -type f ! -perm 600
         find "${PKI_KEYCHAIN_KEYFILE%/*}" -type d ! -perm 700
         find "${PKI_KEYCHAIN_KEYFILE%/*}" -type f ! -perm 600
-        find mdm-private -type d ! -perm 700
-        find mdm-private -type f ! -perm 600 ! -name 'install_credentials_*.sh' ! -name '*.sample'
+        find mdm -type d ! -perm 700
+        find mdm -type f ! -perm 600 ! -name 'install_credentials_*.sh' ! -name '*.sample'
     } 2>/dev/null ) || true
     if [ -n "${out}" ]; then printf '%s\n' "${out}"; return 1; fi
 }

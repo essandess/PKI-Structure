@@ -7,7 +7,7 @@
 #                              [--allow-superseded-encryption] ['NAME_GLOB' ...]
 #        create_credentials.sh --ca-certs-only [--user-keychain]
 #
-# Writes ONE installer, mdm-private/credentials/install_credentials_<stem>.sh,
+# Writes ONE installer, mdm/credentials/install_credentials_<stem>.sh,
 # after listing its payload and asking for confirmation (PKI_ASSUME_YES=1
 # skips the prompt). The payload is a tar.xz, base64-encoded with openssl,
 # appended to the script. <stem> is the globs with glob characters spelled
@@ -50,7 +50,7 @@
 # the installer asks for it on the terminal, never in argv or the environment.
 # Retrieve it with: bin/pki_keychain.py installer-get --name NAME. Send the
 # installer and its password by different channels.
-# mdm-private/ holds secrets; keep it out of version control. CA secret keys
+# mdm/ holds the installers; keep it out of version control. CA secret keys
 # and their passwords are never included.
 #
 # --ca-certs-only: the payload holds only the public CA certificates (root,
@@ -121,7 +121,7 @@ for fn in cert_sha1 cert_is_ca pki_random_password; do
         || { echo "Error: ${fn} is not defined by bin/pki_common.sh." >&2; exit 1; }
 done
 
-OUTDIR=mdm-private/credentials
+OUTDIR=mdm/credentials
 ENC_CIPHER=aes-256-cbc   # payload encryption (openssl enc)
 ENC_ITER=600000          # PBKDF2 iterations (needs OpenSSL 1.1.1+/LibreSSL 3.1+)
 ROOT_CERT=root/certs/root.cert.pem
@@ -1902,7 +1902,7 @@ INSTALLER
 # ---------------------------------------------------------------------
 
 mkdir -p "${OUTDIR}"
-chmod 0700 "${OUTDIR%/*}" "${OUTDIR}"   # mdm-private holds secrets
+chmod 0700 "${OUTDIR%/*}" "${OUTDIR}"   # the installers are private
 
 SEL_CERTNAMES=()
 

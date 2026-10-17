@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# create_organization_credentials.sh
+# create_organization_pki.sh
 
 set -e
 set -E
@@ -25,6 +25,8 @@ bin/create_root.sh \
     && bin/create_intermediate_smime.sh \
     && bin/create_server.sh --decrypt-key \
     && bin/create_codesign.sh \
-    && bin/create_organization_smime.sh \
-    && bin/create_organization_credentials.sh \
-    && bin/create_organization_mdm.sh
+    && bin/create_organization_smime.sh
+
+# Do these after PKI created
+# bin/create_organization_credentials.sh
+# bin/create_organization_mdm.sh

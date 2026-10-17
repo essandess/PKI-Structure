@@ -6,8 +6,7 @@
 identifier: org.myorganization.mdm.myorganization-trust
 name: Trust Profile for MyOrganization
 description: >-
-  Configures your device to trust the Profile Manager server
-  MyOrganization.
+  Configures your device to trust the MyOrganization PKI.
 scope: System   # System (default) or User
 
 # Directories searched, in order, for each certificate below.

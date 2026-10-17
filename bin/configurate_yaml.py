@@ -96,13 +96,16 @@ cert):
             # "superseded" (what create_smime.sh sets when it
             # reissues), again only to decrypt old mail. Both keys
             # are needed for one that is expired AND superseded.
+            # Any other revocation is always refused, and so is
+            # any expired or revoked signing certificate. An error
+            # names the key to set.
         allow_signature_with_encryption: true
             # optional, default false; accept an ENCRYPTION certificate
             # whose keyUsage also allows signing, only for identities
             # found in an identity_dirs tree other than PKI_ROOT
-            # Any other revocation is always refused, and so is
-            # any expired or revoked signing certificate. An error
-            # names the key to set.
+        encryption_only: true
+            # optional, default false; embed only the encryption
+            # certificate (no -signature.p12 needed), to decrypt old mail
         # Each .p12's password is its key's keychain entry.
   Lookup follows resolve_file (same '<stem>.*<suffix>' fallback as
   'certificates:'). Each identity's UUIDs are available to
@@ -703,6 +706,26 @@ def p12_password(path: Path) -> str:
         die(f"{path}: {e}")
 
 
+def extra_tree_trust(tree: Path, td: Path) -> Trust:
+    """Trust for a converted tree: its root, intermediate_smime
+    certificates, index.txt and CRLs (see convert_legacy_pki.py)."""
+    root = tree / "root" / "certs" / "root.cert.pem"
+    isd = tree / "intermediate_smime"
+    ints = sorted((isd / "certs").glob("*.cert.pem"))
+    crls = [tree / "root" / "crl" / "root.crl.pem",
+            *sorted((isd / "crl").glob("*.crl.pem"))]
+    for f in (root, isd / "index.txt", *crls):
+        if not f.is_file():
+            die(f"{f} not found; {tree} is not a converted PKI tree")
+    if not ints:
+        die(f"no certificates in {isd / 'certs'}")
+    tag = hashlib.sha256(str(tree).encode()).hexdigest()[:8]
+    ca, crl = td / f"ca.{tag}.pem", td / f"crl.{tag}.pem"
+    ca.write_text("".join(f.read_text() for f in [root, *ints]))
+    crl.write_text("".join(f.read_text() for f in crls))
+    return Trust(ca, crl, load_ca_index(isd / "index.txt"))
+
+
 def build_identities(
     cfg: dict[str, Any], ident: str, identity_dirs: list[Path]
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, str]]]:
@@ -762,6 +785,7 @@ def build_identities(
         )
 
         trust = Trust(ca_bundle, crl_bundle, ca_db)
+        tree_trust: dict[Path, Trust] = {}
 
         for spec in entries:
             name = spec["name"]
@@ -774,10 +798,13 @@ def build_identities(
             allow_sig_enc = bool(
                 spec.get("allow_signature_with_encryption", False)
             )
+            encryption_only = bool(spec.get("encryption_only", False))
 
             roles: dict[str, str] = {}
             for role, suffix in (("signing", "signature"),
                                  ("encryption", "encryption")):
+                if role == "signing" and encryption_only:
+                    continue
                 path = resolve_file(f"{name}-{suffix}.p12", identity_dirs)
                 data = path.read_bytes()
                 password = p12_password(path)
@@ -788,8 +815,15 @@ def build_identities(
                     cert.public_bytes(serialization.Encoding.PEM)
                 )
                 # The suffix names the role; pki_validate.py enforces it.
+                tree = path.parent.parent.parent.resolve()
+                if tree == PKI_ROOT.resolve():
+                    t = trust
+                else:   # an extra tree is vetted against its own CAs
+                    if tree not in tree_trust:
+                        tree_trust[tree] = extra_tree_trust(tree, Path(td))
+                    t = tree_trust[tree]
                 problems, state = validate(
-                    cert, pem_path, suffix, trust, now,
+                    cert, pem_path, suffix, t, now,
                     allow_expired=allow_expired_encryption,
                     allow_superseded=allow_superseded_encryption,
                     allow_sig_enc=allow_sig_enc and (
@@ -828,7 +862,7 @@ def build_identities(
                 })
             identity_uuids[name] = roles
             print(f"  + pkcs12 {name}  "
-                  f"(signing + encryption, from {identity_dirs})")
+                  f"({' + '.join(roles)}, from {identity_dirs})")
     return payloads, identity_uuids
 
 
@@ -958,6 +992,9 @@ class MailAccountType(AccountType):
                 die(f"account '{entry['description']}': "
                     f"smime.identity '{name}' is not listed in "
                     f"'identities:' ({sorted(identity_uuids)})")
+            if "signing" not in identity_uuids[name]:
+                die(f"account '{entry['description']}': smime.identity "
+                    f"'{name}' is encryption_only (no signing certificate)")
             per_message = smime.get("allow_per_message_toggle", True)
             sign_overrideable = smime.get("signing_overrideable", True)
             encrypt_overrideable = smime.get("encrypt_overrideable", True)

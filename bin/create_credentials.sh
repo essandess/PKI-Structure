@@ -4,7 +4,8 @@
 #
 # Usage: create_credentials.sh [--user-keychain] [--with-privoxy] [--extra-pki-dir DIR]...
 #                              [--allow-expired-encryption]
-#                              [--allow-superseded-encryption] ['NAME_GLOB' ...]
+#                              [--allow-superseded-encryption]
+#                              [--allow-signature-with-encryption] ['NAME_GLOB' ...]
 #        create_credentials.sh --ca-certs-only [--user-keychain]
 #
 # Writes ONE installer, mdm/credentials/install_credentials_<stem>.sh,
@@ -54,7 +55,8 @@
 # and their passwords are never included.
 #
 # --ca-certs-only: the payload holds only the public CA certificates (root,
-# valid intermediate, privoxy CA): no .p12 files, no passwords, not
+# valid intermediate, S/MIME intermediate; privoxy CA only with
+# --with-privoxy): no .p12 files, no passwords, not
 # encrypted. They are imported as above and the root is trusted. Takes no
 # 'NAME_GLOB' and no --extra-pki-dir.
 #
@@ -88,6 +90,9 @@
 # this on reissue), is left out unless you opt in:
 #   --allow-expired-encryption      include expired encryption certificates
 #   --allow-superseded-encryption   include those revoked as superseded
+#   --allow-signature-with-encryption
+#                                   accept encryption certificates whose keyUsage
+#                                   also allows signing (--extra-pki-dir only)
 # (one that is both needs both). Policy table: bin/pki_validate.py.
 #
 # Environment: PKI_ASSUME_YES, PKI_ROOT_CRL, PKI_INTERMEDIATE_CRL,
@@ -218,10 +223,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "${HELP}" != "0" ]; then
-    cat <<USEAGE
-Useage:
+    cat <<USAGE
+Usage:
 
-$(basename "$0") [--user-keychain] [--extra-pki-dir DIR]... [--allow-expired-encryption]
+$(basename "$0") [--user-keychain] [--with-privoxy] [--extra-pki-dir DIR]...
+    [--allow-expired-encryption]
     [--allow-superseded-encryption] [--allow-signature-with-encryption]
     ['NAME_GLOB' ...]
 $(basename "$0") --ca-certs-only [--user-keychain]
@@ -275,15 +281,16 @@ Expired or revoked signature certificates are always rejected.
                           one with expired certificates); repeatable. Its
                           root, intermediate and CRLs also serve validation.
   --ca-certs-only         create an installer with only the public CA
-                          certificates (root, valid intermediate, privoxy
-                          CA): no .p12 files, no passwords; the root is
+                          certificates (root, valid intermediate,
+                          S/MIME intermediate; privoxy CA with --with-privoxy):
+                          no .p12 files, no passwords; the root is
                           trusted. Not encrypted.
                           Takes no 'NAME_GLOB' or --extra-pki-dir.
 
 Server certificates are not included. The installer's --tar-only flag writes
 its payload (still encrypted, if it is) to credentials_<stem>.txz, or
 credentials_<stem>.txz.enc when encrypted, in the current directory.
-USEAGE
+USAGE
     exit 0
 fi
 
@@ -1140,7 +1147,8 @@ Run it as yourself (not with sudo); sudo is requested only for the System keycha
                  only check the signature of this script against the root
                  and intermediates in its signature block and exit: 0 if
                  valid, non-zero if not. No password, nothing decrypted or
-                 unpacked, root not anchored. Needs only openssl
+                 unpacked, root not anchored. Needs only openssl.
+                 For an untrusted copy use bin/verify_installer.sh
 
 Before anything is installed, the signature of this script is checked: it
 must come from a code signing certificate that chains to the root CA in its

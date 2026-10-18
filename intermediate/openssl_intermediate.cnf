@@ -8,7 +8,7 @@
 #   bin/create_server.sh, bin/create_codesign.sh  ca -revoke, through
 #                               pki_revoke_matching_cn
 # The intermediate's own certificate is issued by the ROOT, with the
-# intermediate_ca section of ../openssl.cnf. Certificates this CA issues use
+# [ intermediate_ca ] below (-extfile). Certificates this CA issues use
 # the configuration of what they are (server/, codesign/, smime/), which
 # point at this CA's database.
 
@@ -63,7 +63,7 @@ organizationName_default        = $ENV::ORG_NAME
 organizationalUnitName_default  = $ENV::ORG_NAME Intermediate Certification Authority
 commonName_default              = $ENV::ORG_NAME Intermediate CA
 
-# replicates ../openssl.cnf intermediate_ca extension
+# Extensions of this CA's own certificate; the root signs with them (-extfile).
 [ intermediate_ca ]
 # The TLS server / code signing intermediate, issued by the root.
 # Scoped, so that a compromise of its key cannot be used to impersonate

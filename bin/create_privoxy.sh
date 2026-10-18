@@ -4,23 +4,13 @@
 #
 # Usage: create_privoxy.sh [-a EC|RSA] [--new-key] [-c|--clean] [-h|--help]
 #
-# Creates the privoxy CA (self-signed). If one already exists, a new
-# certificate is issued only when the existing one expires within
-# PKI_RENEW_WINDOW_DAYS (default 30) or has expired; earlier than that is an
-# error. The old files are archived as privoxy.${CERTSHA1}.* and the new
-# certificate is self-signed with the SAME key and subject, so certificates
-# it issued (adblock2privoxy-nginx, ...) still chain to it. --new-key
-# generates a new key instead; then those must be reissued.
+# Creates or renews the self-signed privoxy CA: renewal rules, archiving and
+# --new-key are those of create_root.sh. With a new key, reissue the
+# certificates it signed (create_adblock2privoxy.sh). After a renewal,
+# redeploy the certificate to privoxy and trust it on the proxy's clients.
 #
-# After a renewal, redeploy the certificate where privoxy uses it (see
-# privoxy/README.md) and trust the new certificate on the devices that use
-# the proxy.
-
-# replicate the relative short expiration of a private server cert
-# because the server cert must be reissued anyway and longer Root CA lifetime
-# doesn't offer any real advantage
-# https://support.apple.com/en-us/HT210176
-# DAYS = 825 + (PKI_RENEW_WINDOW_DAYS - 1), set below (needs pki_common.sh).
+# DAYS = 825 + (PKI_RENEW_WINDOW_DAYS - 1): the CA outlives one server
+# certificate (Apple's 825-day limit) by the renewal window.
 
 CATRUE=${CATRUE:-1}
 CERTDIR=${CERTDIR:-privoxy}
@@ -102,7 +92,7 @@ if [ -n "${PKI_ARCHIVED_SHA1}" ]; then
     echo "The previous ${CERTNAME} CA is archived (not revoked) as" >&2
     echo "  ${CERTNAME}.${PKI_ARCHIVED_SHA1}.*" >&2
     echo "Redeploy the new certificate where privoxy uses it" >&2
-    echo "(privoxy/README.md) and trust it on the devices that use the proxy." >&2
+    echo "and trust it on the devices that use the proxy." >&2
     if [ "${PKI_RENEW}" != "1" ]; then
 	echo "This CA has a NEW KEY: reissue the certificates it signed" >&2
 	echo "(bin/create_adblock2privoxy.sh)." >&2

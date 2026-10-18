@@ -64,13 +64,6 @@ table <bruteforce> persist
 table <httpflood> persist
 
 
-# VPN *server* network -- all #vpn# lines are rules for a VPN server, not a VPN client
-# $vpn_net == utun0/24 when Tunnelblick creates utun0
-#vpnserver# vpn_net = "10.8.0/24"	# utun0 interface doesn't exist at boot time
-#vpnserver# vpn_net6 = "fd00:3550:faeb::/64"
-#vpnserver# tun_if = "utun4"
-
-
 # Options
 set block-policy return
 set fingerprints "/etc/pf.os"
@@ -83,9 +76,6 @@ set skip on lo0
 # Disable: slows down large packets
 #scrub in all no-df
 
-# consistent with config.ovpn
-#vpnserver# scrub on $tun_if all fragment reassemble max-mss 1400
- 
 #
 # com.apple anchor point
 #
@@ -96,17 +86,6 @@ scrub-anchor "com.apple/*"
  
 
 # Translation
-
-# OpenVPN Server NAT
-# 
-# The Book of PF, p. 21
-# Allow VPN connections to the VPN host:
-# http://serverfault.com/questions/555594/troubleshoot-broken-tcp-from-openvpn-client-to-server-but-ping-traceroute-work
-# $ sudo vi /etc/sysctl.conf
-# net.inet.ip.forwarding=1
-# # net.inet6.ip6.forwarding=1
-#vpnserver# no nat on $int_if inet from $vpn_net to ($int_if)
-#vpnserver# nat on $int_if inet from $vpn_net to ! ($int_if:network) -> ($int_if)
 
 nat-anchor "com.apple/*"
 rdr-anchor "com.apple/*"
@@ -137,32 +116,15 @@ block all
 # Antispoof
 antispoof log quick for $int_if
 
-# spoofing check for illegitimate traffic
-#vpnserver# block drop in log quick on $tun_if inet from { $int_if:network, ($int_if) } to any
-#vpnserver# block drop in log quick on $tun_if inet6 from { <lan_inet6>, ($int_if) } to any
-
 # Block to/from illegal destinations or sources
 block drop in log quick from no-route to any
 block drop in log quick from urpf-failed to any
-#vpnserver# block drop in log quick on $int_if from urpf-failed to any
 # This is observed on macOS
 #block drop in log quick on $int_if from any to 255.255.255.255
 
 # LAN services: block access, except from localnet
 block in proto tcp from any to $int_if port $lan_tcp_services
 block in proto udp from any to $int_if port $lan_udp_services
-
-# Allow VPN connections to the VPN host:
-# http://serverfault.com/questions/555594/troubleshoot-broken-tcp-from-openvpn-client-to-server-but-ping-traceroute-work
-# This rule must be included below BEFORE these packets are passed by other rules:
-#vpnserver# pass in quick on $tun_if reply-to $tun_if inet from $vpn_net to $int_if
-#vpnserver# pass in quick on $tun_if reply-to $tun_if inet from $vpn_net to ($tun_if)
-#vpnserver# pass quick on $tun_if inet from $int_if:network to $vpn_net
-#vpnserver# pass out quick on $tun_if inet from ($tun_if) to $vpn_net keep state
-
-# VPN clients: fully trusted, both directions required for forwarding to work
-#vpnserver# pass quick on $tun_if inet from $vpn_net to any keep state
-#vpnserver# pass quick on $tun_if inet6 from $vpn_net6 to any keep state
 
 # VPN client connections
 # redirect-gateway def1 (in the server's push config) means nearly all client traffic
@@ -213,10 +175,6 @@ pass in quick inet proto udp from port bootps to port bootpc
 pass out quick inet proto udp from port bootpc to port bootps
 
 # LAN services
-#vpnserver# pass in quick inet proto tcp from { $vpn_net, $int_if:network } to $int_if port $lan_tcp_services
-#vpnserver# pass in quick inet proto udp from { $vpn_net, $int_if:network } to $int_if port $lan_udp_services
-#vpnserver# pass out quick proto tcp from $int_if port $lan_tcp_services to { $vpn_net, $int_if:network }
-#vpnserver# pass out quick proto udp from $int_if port $lan_udp_services to { $vpn_net, $int_if:network }
 pass in quick inet proto tcp from $int_if:network to $int_if port $lan_tcp_services
 pass in quick inet proto udp from $int_if:network to $int_if port $lan_udp_services
 pass out quick proto tcp from $int_if port $lan_tcp_services to $int_if:network

@@ -66,8 +66,8 @@ done
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 
 if [ "${HELP}" != "0" ]; then
-    cat <<USEAGE
-Useage:
+    cat <<USAGE
+Usage:
 
 $(basename "$0") [-h|--help] [--min-days-left DAYS] [--force] ${POSITIONAL_ARGS_USAGE}
 
@@ -75,7 +75,7 @@ Regenerates the CRL only if it is missing, expires in fewer than DAYS days
 (default 15; environment variable CRL_MIN_DAYS_LEFT), is not signed by the
 CA's current certificate, or no longer matches the revocations in index.txt.
 --force regenerates it regardless.
-USEAGE
+USAGE
     exit 0
 fi
 
@@ -95,10 +95,7 @@ case "${CANAME}" in
     root)
 	CONFIG="${PKI_ROOT}/openssl.cnf"
 	;;
-    intermediate|intermediate_smime)
-	CONFIG="${PKI_ROOT}/${CERTDIR}/openssl_${CERTDIR}.cnf"
-	;;
-    privoxy)
+    intermediate|intermediate_smime|privoxy)
 	CONFIG="${PKI_ROOT}/${CERTDIR}/openssl_${CERTDIR}.cnf"
 	;;
     *)

@@ -2,8 +2,8 @@
 
 Shell tooling for a private PKI: root, intermediate, and privoxy CAs;
 server, code signing, S/MIME, and adblock2privoxy certificates; 
-CRL publication and revocation; signed macOS install scripts and MDM
-profiles; KeePassXC password keychain with a root-only master password
+CRL publication and revocation; signed macOS install scripts and configuration
+profiles (.mobileconfig); KeePassXC password keychain with a root-only master password
 file (login keychain item for other users) and separable keyfile.
 
 | Tool | Purpose |
@@ -11,6 +11,7 @@ file (login keychain item for other users) and separable keyfile.
 | `create_{root,intermediate,intermediate_smime,server,codesign,smime,privoxy,adblock2privoxy}.sh` | CAs and leaf certificates; reissue supersedes the predecessor |
 | `revoke_certificate.sh`, `create_crl.sh`, `publish_crls.sh` | Revocation, CRL generation and publication |
 | `create_credentials.sh` | Signed macOS install scripts for CA certificates and S/MIME identities |
+| `verify_installer.sh` | Signature check of an installer without running it |
 | `create_keepass_entry.sh` | Install-script and master passwords, and stored MDM profiles, into KeePassXC |
 | `configurate_yaml.py` | Signed `.mobileconfig` profiles from YAML |
 | `create_organization_{smime,mdm,credentials}.sh` | Per-deployment driver scripts, seeded from `.sample` |
@@ -39,12 +40,12 @@ bin/replicate_pki_structure.sh [-ow|--overwrite] [DEST]      # DEST defaults to 
 
 * Copies `.sh`, `.py`, `.cnf`, `.md`, `LICENSE`, `etc/*.sample`, and
   `mdm/yaml/*.sample`; never `.git/`, `*.env`, `*.conf`, `*.yaml`,
-  `create_organization_smime.sh`, or `create_organization_mdm.sh`.
+  or `create_organization_*.sh`.
   `PKI_STRUCTURE_SRC` (trailing `/`) overrides the source.
 * Existing files are kept. `-ow` lists what it would replace and asks `[y/N]`
   (`PKI_ASSUME_YES=1` skips the prompt).
 * Seeds when absent, from `<file>.sample` (else the source file):
-  `pki_identity.env`, `bin/create_organization_{smime,mdm,credentials}.sh`,
+  `pki_identity.env`, `bin/create_organization_{pki,smime,credentials,mdm}.sh`,
   `mdm/yaml/ios-restrictions-baseline.yaml`.
 * Modes on `DEST`: directories 0755, or 0700 for `*private*`, `keepassxc`, `mdm` and below; scripts
   0750; other files 0640, or 0600 under a private directory. An existing
@@ -57,6 +58,8 @@ Edit `pki_identity.env` before running any `create_*.sh`.
 ```
 pki_identity.env, openssl.cnf, common_policy.cnf
 bin/                scripts
+etc/                nginx and pf samples
+test/               pki_test.sh (destructive; see Testing)
 root/  intermediate/  intermediate_smime/  server/  codesign/  smime/
 privoxy/            separate trust anchor
 privoxy/adblock2privoxy/
@@ -95,6 +98,19 @@ Environment (tool-specific variables are listed with each tool):
 | `EC_PARAMGEN_CURVE`, `RSA_KEYGEN_BITS`, `HASH_DIGEST` | per script | Key and digest overrides |
 | `SHOW_CERT_TEXT` | `1` | `0` suppresses certificate text |
 | `PKI_RENEW_WINDOW_DAYS` | `30` | How close to expiry a self-signed CA may be renewed |
+| `PYTHON` | first `python3` in `PATH` | Python binary |
+| `KEEPASSXC_CLI` | `keepassxc-cli` in `PATH` | KeePassXC CLI binary |
+| `PKI_KEYCHAIN_DIR`, `PKI_KEYCHAIN_KEYFILE` | `keepassxc/keychain`, `keepassxc/keyfile/pki-structure.keyx` | Database directory and key file |
+| `PKI_KEYCHAIN_MASTER` | `keepassxc/master/pki-structure.pass` | Master password file; setting it selects the file backend |
+| `PKI_KEYCHAIN_FILE`, `PKI_KEYCHAIN_ITEM` | login keychain, service name | Keychain file and item of the master (tests) |
+| `PKI_KEYCHAIN_KDF_ROUNDS` | `16` | Minimum Argon2 rounds of a new database |
+| `PKI_SITE_DIR`, `PKI_SITE_GROUP` | `<prefix>/var/www/PKI_FQDN`, `_www` else `nobody` | CRL web directory and its group |
+| `CRL_MIN_DAYS_LEFT` | `15` | Regenerate a CRL that expires sooner |
+| `PKI_VERIFY_STRICT` | `1` | `0` drops `-x509_strict`; honored only in a test tree (`.pki_test_tree`) |
+
+`CERTDIR`, `CERTNAME`, `ISSUERCADIR`, `ISSUERCANAME` and `CATRUE` are read from
+the environment by the create scripts and `configurate_yaml.py`; do not export
+them in the shell. `test/pki_test.sh` unsets them.
 
 ## Key passphrases
 
@@ -191,10 +207,10 @@ The root is trusted for every purpose, so one intermediate that could sign
 anything would make its key a way to impersonate any site on every device that
 trusts the root. There are two intermediates, each restricted:
 
-| CA | Directory | Issues | Restriction |
-|---|---|---|---|
-| TLS / code signing | `intermediate/` | server, code signing | `extendedKeyUsage` serverAuth, codeSigning; **critical `nameConstraints`**: DNS only under `DOMAIN_NAME`, no IP addresses |
-| S/MIME | `intermediate_smime/` | S/MIME | `extendedKeyUsage` emailProtection only |
+| CA | Directory | Issues | `pathlen` | Restriction |
+|---|---|---|---|---|
+| TLS / code signing | `intermediate/` | server, code signing | 0 | `extendedKeyUsage` serverAuth, codeSigning; **critical `nameConstraints`**: DNS only under `DOMAIN_NAME`, no IP addresses |
+| S/MIME | `intermediate_smime/` | S/MIME | 0 | `extendedKeyUsage` emailProtection only |
 
 S/MIME cannot carry `nameConstraints` (addresses include gmail.com and
 icloud.com), so its limit is the EKU. `create_intermediate_smime.sh` is
@@ -205,8 +221,9 @@ and archiving behave identically. Each has its own key,
 refuses (and revokes) a certificate that does not carry its restrictions
 (`pki_assert_ca_scope`), and refuses a `SERVER_FQDN` outside `DOMAIN_NAME`.
 
-If `ORG_NAME` looks like a hostname (contains a dot), OpenSSL may
-apply the DNS constraint to the code signing certificate's CommonName.
+OpenSSL checks a leaf's CommonName against DNS nameConstraints when the leaf
+has no DNS SAN and the CN parses as a hostname, e.g. an `ORG_NAME` containing
+a dot. The code signing certificate has no SAN.
 
 ## Revocation and CRLs
 
@@ -219,8 +236,8 @@ bin/publish_crls.sh [--if-configured] [--no-regenerate] [root|intermediate|inter
 * **Revoke.** `CA` is the certificate's issuer: intermediate, intermediate_smime → `root`; server, codesign → `intermediate`; S/MIME → `intermediate_smime`; adblock2privoxy → `privoxy`. Revoke both
   S/MIME certificates of an identity. Requires a typed `yes`. `REASON` (default
   `unspecified`): `keyCompromise`, `CACompromise`, `affiliationChanged`,
-  `superseded`, `cessationOfOperation`, `certificateHold` (`openssl ca` cannot undo a revocation).
-  Then it regenerates the CRL and, for root and intermediate, publishes it.
+  `superseded`, `cessationOfOperation`, `certificateHold` (a revocation cannot be undone without editing `index.txt`).
+  Then it regenerates the CRL and, for every CA except privoxy, publishes it.
 * **CRL.** Regenerated only if missing, expiring in fewer than 15 days
   (`--min-days-left`, `CRL_MIN_DAYS_LEFT`), not signed by the CA's current
   certificate, or out of step with the revocations in `index.txt`; `--force`
@@ -320,6 +337,9 @@ CA private keys are never included.
   signature block (checked before the payload is decrypted or unpacked), and that the signer is a non-CA code signing certificate whose issuing CA
   allows code signing. A recipient
   has no CRL for the signer, so a signer revoked after signing is not detected.
+  The installer's own check runs inside the file: it detects damage, not
+  an editor who removes it. Verify first, from a trusted tree, with
+  `bin/verify_installer.sh INSTALLER (--root FILE | --root-sha256 HEX)`.
 * **Root anchor.** A chain inside the file cannot show who built it. Before
   installing, the installer requires that the payload's root is already
   installed on the machine, or matches `PKI_ROOT_SHA256`, or that the user
@@ -353,6 +373,7 @@ login keychain.
 Installer environment: `PKI_ASSUME_YES`, `PKI_ROOT_SHA256`, and
 `PKI_P12_PASSWORD_<GROUP>` (for a `.p12` whose password the payload lacks;
 `GROUP` is the name shown in the prompt, upper-cased, other characters `_`).
+It is the one secret passed through the environment; prefer the prompt.
 
 ## KeePassXC
 
@@ -390,7 +411,7 @@ password fails before anything is stored. `--ca-certs-only` installers are unenc
 Copy values with `keepassxc-cli clip DB 'TITLE'` (installer password) or
 `clip -a 'ATTRIBUTE' DB 'TITLE'`. Relative paths resolve against the PKI root.
 
-## MDM profiles
+## Configuration profiles
 
 ```sh
 bin/configurate_yaml.py mdm/yaml/myorganization-trust.yaml [--no-sign]
@@ -452,7 +473,7 @@ required.
 
 Environment: `CERTDIR`, `CERTNAME` (default `codesign`), `ISSUERCADIR`,
 `ISSUERCANAME` (default `intermediate`), `SMIME_ISSUERCADIR`,
-`SMIME_ISSUERCANAME` (default to the signing issuer), `HASH_DIGEST`
+`SMIME_ISSUERCANAME` (default `intermediate_smime`), `HASH_DIGEST`
 (`sha256`), `CERTSHA1`, `UNSIGNED_DIR`, `SIGNED_DIR`, `IDENTITY_DOMAIN_VAR`
 (`DOMAIN_NAME`), `PKI_ASSUME_YES`. CRLs are read from `*/crl/*.crl.pem`, else
 `*/crl/*.crl`.
@@ -479,6 +500,31 @@ Settings; Apple Configurator, MDM, and enrollment profiles trust it
 automatically. The profile format has no key to change this. To leave a root
 (e.g. the `privoxy` root) under manual trust, deliver it in a separate profile.
 Signed profiles show as verified only if the signer's chain is already trusted.
+
+## Limitations
+
+* Revocation is by CRL only (no OCSP). CRL lifetimes: root 365 days, others
+  30; publish a CRL before it expires.
+* No HSM or PKCS#11: keys are passphrase-encrypted files. Keep the root key
+  offline; it is as exposed as the host that holds it.
+* S/MIME encryption certificates are RSA: Apple Mail does not support ECDH
+  encryption certificates.
+* The signature check inside an installer cannot detect an editor who removes
+  it; verify first with `bin/verify_installer.sh`.
+* The KeePassXC database opens only with its master password and key file;
+  losing either loses every key passphrase and `.p12` password.
+* Installers, profiles and the login-keychain master are macOS only.
+
+## Testing
+
+`test/pki_test.sh` rebuilds the PKI in its own tree, then runs positive and
+negative tests: chain, purpose, nameConstraints, revocation, supersession,
+keychain, installers, profiles, permissions. It is destructive: it stops if
+the tree holds keys, CA databases or KeePassXC files, unless `.pki_test_tree`
+exists or `PKI_TEST_DESTROY_PKI=1`. Run it in a scratch tree made by
+`replicate_pki_structure.sh`. It needs `keepassxc-cli` and macOS `security`;
+the master goes into a throwaway keychain. `PKI_TEST_VERIFY_FLAGS` overrides
+the `openssl verify` flags, `PKI_TEST_SMIME_NAME` selects the S/MIME identity.
 
 ## Maintenance
 

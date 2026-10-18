@@ -31,14 +31,14 @@ DAYS=$(pki_cap_days "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem" "${DAYS}")
 KEY_ID=$(pki_kc genkey --alg "${ALGORITHM}" --curve "${EC_PARAMGEN_CURVE}" --bits "${RSA_KEYGEN_BITS}" \
 	--out "${CERTDIR}/private/${CERTNAME}.key.pem" --label "${CERTNAME}")
 
-# Server CSR
+# CSR
 "${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 	-new -"${HASH_DIGEST}" \
 	-key "${CERTDIR}"/private/"${CERTNAME}".key.pem \
 	-passin fd:3 3< <(pki_kc get --id "${KEY_ID}") \
 	-out "${CERTDIR}"/certs/"${CERTNAME}".csr.pem -batch
 
-# Server certificate
+# Certificate
 if "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 	-extensions "${CERTDIR}" \
 	-days ${DAYS} -notext -md "${HASH_DIGEST}" \

@@ -3,7 +3,7 @@
 # Usage: revoke_certificate.sh certfile root|intermediate|intermediate_smime|privoxy [crlReason]
 #
 # Revokes a certificate for the named CA and stated reason,
-# overwrites the CRL file, and (root, intermediate) publishes the new CRL
+# overwrites the CRL file, and (every CA but privoxy) publishes the new CRL
 # with bin/publish_crls.sh when a web directory is configured there.
 
 set -e
@@ -34,11 +34,11 @@ done
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 
 if [ "${HELP}" != "0" ]; then
-    cat <<USEAGE
-Useage:
+    cat <<USAGE
+Usage:
 
 $(basename "$0") [-h|--help] ${POSITIONAL_ARGS_USAGE}
-USEAGE
+USAGE
     exit 0
 fi
 
@@ -64,7 +64,7 @@ case " ${VALID_CRL_REASONS} " in
     *)
 	echo "Unknown crlReason '${CRLREASON}'." >&2
 	echo "Valid values: ${VALID_CRL_REASONS}" >&2
-	echo "See man opensll-ca, -crl_reason." >&2
+	echo "See man openssl-ca, -crl_reason." >&2
 	exit 1
 	;;
 esac
@@ -85,10 +85,7 @@ case "${CANAME}" in
     root)
 	CONFIG="${PKI_ROOT}/openssl.cnf"
 	;;
-    intermediate|intermediate_smime)
-	CONFIG="${PKI_ROOT}/${ISSUERCANAME}/openssl_${ISSUERCANAME}.cnf"
-	;;
-    privoxy)
+    intermediate|intermediate_smime|privoxy)
 	CONFIG="${PKI_ROOT}/${ISSUERCANAME}/openssl_${ISSUERCANAME}.cnf"
 	;;
     *)
@@ -113,13 +110,6 @@ if [ ! -f "${ISSUERCANAME}/index.txt" ]; then
     echo "Index file '${ISSUERCANAME}/index.txt' doesn't exist; is '${ISSUERCANAME}' an initialized CA?" >&2
     exit 1
 fi
-
-# crlnumber isn't created by pki_structure.sh, so seed it on first run
-# the same way pki_structure.sh seeds serial.
-if [ ! -f "${ISSUERCANAME}/crlnumber" ]; then
-    echo '01' > "${ISSUERCANAME}/crlnumber"
-fi
-mkdir -p "${ISSUERCANAME}/crl"
 
 
 "${OPENSSL}" ca \

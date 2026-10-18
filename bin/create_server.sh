@@ -113,7 +113,6 @@ ISSUERCANAME=${ISSUERCANAME:-intermediate}
 EC_PARAMGEN_CURVE=${EC_PARAMGEN_CURVE:-P-256}
 RSA_KEYGEN_BITS=${RSA_KEYGEN_BITS:-2048}
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${SCRIPT_DIR}/pki_structure.sh"
 # pki_structure.sh sources pki_identity.env again; keep the name chosen above
 SERVER_FQDN="${SERVER_FQDN_CHOSEN}"

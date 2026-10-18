@@ -51,13 +51,6 @@ CERTNAME=${CERTNAME:-root}
 ISSUERCADIR=${ISSUERCADIR:-root}
 ISSUERCANAME=${ISSUERCANAME:-root}
 
-# # run creata_root.sh if no Root CA exists
-# if [ $(basename $0) != "create_${ISSUERCANAME}.sh" ] \
-# 	&& [ "${CERTDIR}" != "${ISSUERCADIR}" ] \
-#        && ! [ -f "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem ]; then
-#     ./"create_${ISSUERCANAME}.sh"
-# fi
-
 # 20 years (plus leap days)
 DAYS=${DAYS:-7305}
 
@@ -145,8 +138,8 @@ case "${ALGORITHM}" in
 esac
 
 if [ "${HELP}" != "0" ]; then
-    cat <<USEAGE
-Useage:
+    cat <<USAGE
+Usage:
 
 $(basename "$0") [-a|--algorithm [EC (default)|RSA]] [-h|--help] [-c|--clean] ${POSITIONAL_ARGS_USAGE}
 
@@ -154,7 +147,7 @@ Key passphrases are random, one per key, in the KeePassXC database
 ./keepassxc/keychain/pki-structure.kdbx. Its master password is a
 root-only file or a login keychain item; its key file is in
 ./keepassxc/keyfile (bin/pki_keychain.py).
-USEAGE
+USAGE
     exit 0
 fi
 
@@ -168,7 +161,7 @@ fi
 # clean everything if `--clean` set
 if [ "${CLEAN}" == "1" ]; then
     if [ "${PKI_ASSUME_YES:-0}" == "0" ]; then
-	echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
+	echo "(PKI_ASSUME_YES=1 skips prompts.)" >&2
 	read -p "This will delete the keys and certificates in '${CERTDIR}'."$'\n'"Are you sure [y/N]? " -r < /dev/tty
 	echo    # (optional) move to a new line
 	if [[ ! "${REPLY}" =~ ^[yY]$ ]]; then
@@ -244,12 +237,5 @@ if ! [ "${CATRUE}" == "0" ]; then
 	    touch "${f}"
 	fi
     done
-# superceded by rand_serial
-#     for f in "${CERTDIR}"/serial; do
-#	if ! [ -f "${f}" ]; then
-#	    # serial must have an *even* number of characters
-#	    echo '01' > "${f}"
-#	fi
-#     done
 fi
 

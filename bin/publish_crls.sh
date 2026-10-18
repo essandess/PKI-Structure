@@ -61,11 +61,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [ "${HELP}" != "0" ]; then
-    cat <<USEAGE
-Useage:
+    cat <<USAGE
+Usage:
 
 $(basename "$0") [--if-configured] [--no-regenerate] [-h|--help] [root|intermediate|intermediate_smime ...]
-USEAGE
+USAGE
     exit 0
 fi
 

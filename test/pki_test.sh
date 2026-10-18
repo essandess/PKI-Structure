@@ -5,7 +5,6 @@
 # (marker .pki_test_tree) or with PKI_TEST_DESTROY_PKI=1.
 # PKI_TEST_VERIFY_FLAGS overrides the openssl-verify strictness flags
 # (default -x509_strict); PKI_TEST_SMIME_NAME selects the S/MIME identity.
-# PKI_TEST_PATCH_V2
 
 # Re-exec under bash >= 4.4 (the Portfile starts this with sh).
 if [ -z "${BASH_VERSION:-}" ] || [ "${BASH_VERSINFO:-0}" -lt 4 ] \
@@ -626,6 +625,9 @@ fails  "CA installer: tampered payload rejected"  "${TMPD}/p_ca.sh" --check-sign
 refuse "S/MIME installer: tampered header rejected" "SIGNATURE CHECK FAILED" ptyrun "${INST_PW_FILE}" "${TMPD}/t_in.sh" --check-signature-integrity
 check  "S/MIME installer: signature check needs no password" "${INST}" --check-signature-integrity
 
+check  "verify_installer.sh: root file" bin/verify_installer.sh "${INST_CA}" --root root/certs/root.cert.pem
+check  "verify_installer.sh: root pin"  bin/verify_installer.sh "${INST}" --root-sha256 "$(cert_fp root/certs/root.cert.pem)"
+refuse "verify_installer.sh: tampered header" "SIGNATURE CHECK FAILED" bin/verify_installer.sh "${TMPD}/t_ca.sh" --root root/certs/root.cert.pem
 payload_has_no_secrets() {
     local listing
     ( cd "${TMPD}" && rm -f credentials_cacerts.txz && "${PKI_ROOT}/${INST_CA}" --tar-only ) || return 1

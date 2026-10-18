@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-# PKI_KEYCHAIN_PATCH_V7
 """pki_keychain.py -- key passphrases in a KeePassXC database.
 
 Layout    keepassxc/ (0700) holds keychain/, keyfile/ and master/.
 Database  $PKI_KEYCHAIN_DIR (default keepassxc/keychain)/pki-structure.kdbx;
           dir 0700, file 0600. KDBX4, Argon2id, 64 MiB, 4 lanes,
-          ~$PKI_KEYCHAIN_KDF_ROUNDS (16); written here because
+          at least $PKI_KEYCHAIN_KDF_ROUNDS (16) rounds; written here because
           keepassxc-cli db-create makes KDBX3.
 Key file  $PKI_KEYCHAIN_KEYFILE (default keepassxc/keyfile/pki-structure.keyx),
           KeePassXC XML v2, 0600. Required to open the database; keep a copy

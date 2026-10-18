@@ -1,224 +1,28 @@
 #!/usr/bin/env python3
 """
 configurate_yaml.py -- YAML -> .mobileconfig (unsigned) -> signed
-.mobileconfig
 
-Usage (from PKI_ROOT):
-    bin/configurate_yaml.py \
-        mdm/yaml/myorganization-trust.yaml [--no-sign]
+Usage (any directory):
+    bin/configurate_yaml.py mdm/yaml/NAME.yaml [--no-sign]
 
-PKI_ROOT is the directory above this script's directory, and the
-script chdir()s into it, exactly as bin/pki_structure.sh does:
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-    cd "${PKI_ROOT}"
-All relative paths are therefore relative to PKI_ROOT, wherever you
-run it from.
+Paths are relative to PKI_ROOT (the parent of bin/), which the script enters.
+The YAML and the output directories must be under mdm/. Keys and examples:
+README.md, "Configuration profiles", and mdm/yaml/*.sample.
 
-SECRETS: no YAML holds a secret. 'password: !secret LABEL' is prompted
-for twice at build time. A profile with a !secret, or with S/MIME
-identities (their .p12 passwords are embedded), is signed in a private
-temporary directory and stored only in the PKI keychain
-(bin/pki_keychain.py profile-get extracts it). Signing does NOT
-encrypt: the extracted file holds those passwords in plain text; use
-it at once, then delete it. A literal value under a password-like key
-is an error. Other profiles are written under mdm/. This script sets
-umask 077. The YAML must live under mdm/, and the output directories
-must be inside it.
+Secrets: no YAML holds one. '!secret LABEL' is prompted for twice. A profile
+with a !secret or with identities is signed in a private temporary directory
+and stored only in the PKI keychain (pki_keychain.py profile-get); the
+extracted file holds those passwords in plain text. A literal value under a
+password-like key is an error. umask is 077.
 
-If the YAML has no 'identifier:', it is generated as
-<reverse-DNS of $DOMAIN_VAR>.mdm.<yaml file name>
-(e.g. org.myorganization.mdm.myorganization-trust), where DOMAIN_VAR
-is the pki_identity.env variable named below. An explicit
-'identifier:' in the YAML still wins.
+Placeholders: ${VAR} and ${VAR|rdns|lower|upper} in text fields come from
+pki_identity.env. A missing 'identifier:' defaults to
+<reversed DOMAIN_NAME>.mdm.<yaml file name>.
 
-${VAR} / ${VAR|rdns} placeholders in the YAML fields identifier,
-name, description, organization, short_name, and in payloads[].name
-/ .description / .settings and accounts[]'s string fields (all
-recursively), are filled in from ./pki_identity.env (see
-load_identity below).
-
-A profile needs at least one of 'certificates:', 'payloads:',
-'identities:' or 'accounts:'.
-
-'certificates:' (with 'cert_dirs:') embeds X.509 certificates as
-com.apple.security.root or com.apple.security.pkcs1 payloads; see
-resolve_file.
-
-'payloads:' is a list of arbitrary Apple payload dicts:
-    payloads:
-      - id: passcode          # required, stable, unique in the
-                               # profile; do not rename after
-                               # deployment (see 'include:' below)
-        type: com.apple.mobiledevice.passwordpolicy   # required
-        name: Passcode         # optional; PayloadDisplayName
-                               # (default: id)
-        description: ...       # optional; PayloadDescription
-        settings:               # Apple's own key names/types,
-          forcePIN: true         # passed through as-is. Keys
-                                  # starting with "Payload" are
-                                  # reserved.
-  'include:' merges other YAML files' 'payloads:' underneath this
-  file's own, in the listed order, keyed by 'id' (this file's own
-  payloads are applied last and win):
-    include:
-      - ios-restrictions-baseline.yaml
-  Each include path is relative to the file that lists it (recursive:
-  an included file's own 'include:' resolves relative to itself). An
-  included file may contain only 'payloads:' and 'include:'. A later
-  'settings:' for the same id is deep-merged key by key into the
-  earlier one; 'name'/'description'/'type' are replaced outright when
-  given. Redefining an existing id with a different 'type' is an
-  error -- use a different id instead. 'accounts:' (below) are
-  converted into 'payloads:' entries before 'include:' is resolved,
-  so a hand-written payload with the same id overrides the
-  account-generated one, field by field.
-
-'identities:' embeds S/MIME identities as pairs of
-com.apple.security.pkcs12 payloads (one signing cert, one encryption
-cert):
-    identity_dirs:                # optional; default shown
-      - $PKI_ROOT/smime/private
-      - $PKI_ROOT/archive-2023/smime/private
-        # any number of PKI_ROOT-shaped smime/private/ trees, e.g.
-        # an archived one alongside the current one
-    identities:
-      - persona_myorganization_2026
-        # plain name: looks for <name>-signature.p12 and
-        # <name>-encryption.p12 via identity_dirs
-      - old: persona_oldwork_2022   # prior identity: mapping form
-        allow_expired_encryption: true
-            # optional, default false; lets this identity's
-            # ENCRYPTION certificate be expired, for decrypting old
-            # mail only -- never applies to the signing certificate,
-            # which must never be expired
-        allow_superseded_encryption: true
-            # optional, default false; lets this identity's
-            # ENCRYPTION certificate be revoked with reason
-            # "superseded" (what create_smime.sh sets when it
-            # reissues), again only to decrypt old mail. Both keys
-            # are needed for one that is expired AND superseded.
-            # Any other revocation is always refused, and so is
-            # any expired or revoked signing certificate. An error
-            # names the key to set.
-        allow_signature_with_encryption: true
-            # optional, default false; accept an ENCRYPTION certificate
-            # whose keyUsage also allows signing, only for identities
-            # found in an identity_dirs tree other than PKI_ROOT
-        encryption_only: true
-            # optional, default false; embed only the encryption
-            # certificate (no -signature.p12 needed), to decrypt old mail
-        # Each .p12's password is its key's keychain entry.
-  Lookup follows resolve_file (same '<stem>.*<suffix>' fallback as
-  'certificates:'). Each identity's UUIDs are available to
-  'accounts:' mail entries as identity_uuids[name]
-  {"signing": UUID, "encryption": UUID}; see AccountType.settings.
-  Every identity certificate -- the one actually embedded in the
-  .p12, opened with the configured passphrase, not a same-named file
-  elsewhere -- is checked exactly like the code-signing signer below:
-  'V' in the issuer's index.txt, and verifies against every CRL in
-  PKI_ROOT/*/crl/, even when allow_expired_encryption lets an
-  expired encryption certificate through. See build_identities /
-  SMIME_ISSUERCADIR below. The "-signature"/"-encryption" suffix
-  only says where to look; each certificate's own KeyUsage extension
-  is checked against the role implied by that suffix, so a
-  mislabeled or swapped file is rejected rather than silently
-  embedded under the wrong role. See keyusage_roles.
-
-A 'type:' in 'payloads:' or 'accounts:' may be a short name from
-TYPE_ALIASES (e.g. 'airprint') instead of the full Apple PayloadType
-string; either always works, and this table is the only place to add
-another one. This covers every Configurator payload with no
-special-cased Apple-key knowledge -- see TYPE_ALIASES and the example
-fragment file mdm/yaml/ios-configurator-extras.yaml.sample
-for the keys reference/support-level believed to be right for
-AirPrint, Notifications, Web Clips and Fonts, and Content Filter's
-simplest (BuiltIn) form; that file also flags AirPlay and Subscribed
-Calendars as unverified against a real device -- their Apple key
-names are not confidently known here, so check Apple's Device
-Management documentation or an Apple Configurator export before using
-either.
-
-Any 'settings:' value of the exact shape {"file": path} or
-{"base64": text} is replaced with the raw bytes of that file
-(relative to PKI_ROOT, $VAR expanded) or that base64 text, letting
-any payload embed binary data (a font under 'Font', an icon under
-'Icon', etc.) with no dedicated YAML section or Python needed; see
-embed_data_deep.
-
-YAML footguns this script guards against, so a plain admin-facing
-value stays what it looks like: plain 'true'/'false' (only) parse as
-booleans -- 'yes'/'no'/'on'/'off' do not, since Apple payload values
-are frequently exactly these words as enum strings (see
-_StrictBoolLoader); an un-quoted bare date (2026-01-01) is rejected
-with a clear message rather than silently becoming a wrong type (see
-check_plistable), which also flags any other value plistlib could not
-otherwise write.
-
-'accounts:' is a list of network account entries, translated into the
-matching Apple payload by an AccountType class (see ACCOUNT_TYPES):
-mail (com.apple.mail.managed), caldav (com.apple.caldav.account),
-carddav (com.apple.carddav.account).
-    short_name: Jane Short Name
-        # optional; default sender name for mail accounts
-    accounts:
-      - type: mail
-        description: MyOrganization
-            # required; also the default PayloadDisplayName
-        email: jane@example.org       # required
-        username: jane                # required
-        password: !secret mail-jane   # required
-        host: example.org
-            # required; used for both incoming/outgoing
-        imap_port: 993                # optional, default shown
-        smtp_port: 587                # optional, default shown
-        account_name: Jane Doe
-            # optional; else short_name, else description
-        smime:                        # optional
-          identity: persona_myorganization_2026
-              # must appear in 'identities:'
-          encrypt_by_default: false   # optional, default false
-        settings:
-              # optional escape hatch, applied last, Apple's
-              # own keys
-          PreventMove: true
-      - type: caldav   # or carddav
-        description: MyOrganization
-        host: example.org
-        username: jane
-        password: !secret caldav-jane
-        port: 8443
-            # optional; default 8443 (caldav) / 8843 (carddav)
-        principal_url: ""             # optional, default ""
-  Each account needs an 'id:' only to be referenced by an include or
-  overridden by a hand-written payload; otherwise one is derived from
-  type + description and must be unique among accounts. See
-  AccountType subclasses for the full field list and defaults.
-
-Environment overrides (same names/defaults as create_codesign.sh):
-    CERTDIR       default "codesign"
-                  (signing identity directory)
-    CERTNAME      default $CERTDIR
-    HASH_DIGEST   default "sha256"
-    ISSUERCADIR   default "intermediate"
-                  (its certs/<ISSUERCANAME>.chain.pem and index.txt
-    ISSUERCANAME  default $ISSUERCADIR
-                  are used to vet signing certs: revoked/expired are
-                  skipped; every CRL in */crl/ is also checked, see
-                  collect_crls)
-    CERTSHA1      optional: pick a specific signer when several
-                  usable ones exist
-    SMIME_ISSUERCADIR   default "intermediate_smime"
-                  (same role as ISSUERCADIR/ISSUERCANAME, but for
-    SMIME_ISSUERCANAME  default $SMIME_ISSUERCADIR
-                  vetting 'identities:' certificates; override only
-                  if S/MIME certs come from a different intermediate)
-    UNSIGNED_DIR  default "mdm/mobfileconfigs-unsigned"
-    SIGNED_DIR    default "mdm/mobfileconfigs-signed"
-    IDENTITY_DOMAIN_VAR  see DOMAIN_VAR below
-    PKI_ASSUME_YES  not 0: overwrite existing profiles (same name or
-                  same PayloadIdentifier, unsigned and signed)
-                  without asking
+Environment: CERTDIR, CERTNAME (codesign), ISSUERCADIR, ISSUERCANAME
+(intermediate), SMIME_ISSUERCADIR, SMIME_ISSUERCANAME (intermediate_smime),
+HASH_DIGEST (sha256), CERTSHA1, UNSIGNED_DIR, SIGNED_DIR, IDENTITY_DOMAIN_VAR
+(DOMAIN_NAME), PKI_ASSUME_YES.
 """
 from __future__ import annotations
 
@@ -1480,8 +1284,7 @@ def confirm(question: str) -> bool:
     if os.environ.get("PKI_ASSUME_YES", "0") != "0":
         print(f"{question} [y/N] y (PKI_ASSUME_YES)")
         return True
-    print("(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted "
-          "runs.)", file=sys.stderr)
+    print("(PKI_ASSUME_YES=1 skips prompts.)", file=sys.stderr)
     try:
         with open("/dev/tty", "r+") as tty:
             tty.write(f"{question} [y/N] ")

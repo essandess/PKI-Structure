@@ -53,11 +53,11 @@ fi
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 
 if [ "${HELP}" != "0" ]; then
-    cat <<USEAGE
-Useage:
+    cat <<USAGE
+Usage:
 
 $(basename "$0") [-h|--help] ${POSITIONAL_ARGS_USAGE}
-USEAGE
+USAGE
     exit 0
 fi
 

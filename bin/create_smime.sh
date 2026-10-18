@@ -174,14 +174,14 @@ for EXTENSION in signature encryption; do
 	HASH_DIGEST=${RSA_HASH_DIGEST}
     fi
 
-    # Server CSR
+    # CSR
     "${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 	-new -"${HASH_DIGEST}" \
 	-key "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \
 	-passin fd:3 3< <(pki_kc get --id "${KEY_ID}") \
 	-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem -batch
 
-    # Server certificate
+    # Certificate
     if "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
 	-extensions "${CERTDIR}_${EXTENSION}" \
 	-days ${DAYS} -notext -md "${HASH_DIGEST}" \

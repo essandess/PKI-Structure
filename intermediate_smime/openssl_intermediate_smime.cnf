@@ -72,7 +72,7 @@ organizationName_default        = $ENV::ORG_NAME
 organizationalUnitName_default  = $ENV::ORG_NAME Intermediate S/MIME Certification Authority
 commonName_default              = $ENV::ORG_NAME Intermediate S/MIME CA
 
-# replicates ../openssl.cnf intermediate_smime_ca extension
+# Extensions of this CA's own certificate; the root signs with them (-extfile).
 [ intermediate_smime_ca ]
 # The S/MIME intermediate certificate, issued by the root.
 subjectKeyIdentifier            = hash

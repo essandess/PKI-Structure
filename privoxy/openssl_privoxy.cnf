@@ -8,7 +8,7 @@
 # privoxy/adblock2privoxy/openssl_adblock2privoxy.cnf, which points at this
 # CA's database.
 # pathlen:0 (it signs only leaf certificates) and extendedKeyUsage serverAuth
-# restrict it; devices should also trust it for TLS only (privoxy/README.md).
+# restrict it; devices should also trust it for TLS only (create_credentials.sh --with-privoxy does).
 # Validity: 825 + (PKI_RENEW_WINDOW_DAYS - 1) = 854 days, set by
 # create_privoxy.sh (DAYS), so the CA can be renewed before its leaf expires.
 

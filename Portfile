@@ -14,13 +14,13 @@ maintainers         {ieee.org:s.t.smith @essandess}
 supported_archs     noarch
 platforms-append    any
 
-description         Private, configurable PKI toolkit with signed MDM, \
+description         Private, configurable PKI toolkit with signed profiles, \
                     install scripts.
 long_description    {*}${description}. Shell tooling for a private PKI: \
                     root, intermediate, and privoxy CAs\; server, code \
                     signing, S/MIME, and adblock2privoxy certificates\; \
                     CRL publication and revocation\; signed macOS install \
-                    scripts and MDM profiles\; KeePassXC password keychain \
+                    scripts and configuration profiles\; KeePassXC password keychain \
                     with a root-only master password file and separable keyfile.
 
 checksums           rmd160  5a0be3b814185770594c563f27a4df7a96f62f93 \

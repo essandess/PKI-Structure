@@ -2,9 +2,9 @@
 # replicate_pki_structure.sh
 #
 # Copies PKI-Structure's scripts and openssl configs to a new deployment
-# directory. Never overwrites an existing pki_identity.env,
-# create_organization_smime.sh or mdm/yaml/myorganization-trust.yaml;
-# seeds them from the baseline template.
+# directory. Seeds, only if absent, from the .sample files: pki_identity.env,
+# bin/create_organization_{pki,smime,credentials,mdm}.sh and
+# mdm/yaml/ios-restrictions-baseline.yaml.
 #
 # By default, nothing already present in DEST is ever overwritten by the
 # generic .sh/.py/.cnf/.md copy step (rsync --ignore-existing), so re-running
@@ -131,8 +131,8 @@ done
 set -- "${POSITIONAL_ARGS[@]}" # restore positional parameters
 
 if [ "${HELP}" != "0" ]; then
-    cat <<USEAGE
-Useage:
+    cat <<USAGE
+Usage:
 
 $(basename "$0") [-ow|--overwrite] [-h|--help] [DEST]
 
@@ -140,7 +140,7 @@ DEST defaults to the current directory. Without -ow/--overwrite, files
 already present in DEST are never replaced (rsync --ignore-existing).
 With -ow/--overwrite, you will be asked to confirm before anything is
 replaced; set PKI_ASSUME_YES=1 to skip that prompt.
-USEAGE
+USAGE
     exit 0
 fi
 
@@ -183,7 +183,7 @@ if [ "${OVERWRITE}" == "1" ]; then
     fi
 
     if [ "${PKI_ASSUME_YES:-0}" == "0" ]; then
-        echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
+        echo "(PKI_ASSUME_YES=1 skips prompts.)" >&2
         read -p "Overwrite existing files in '${DEST}' with the source's versions? [y/N] " -r < /dev/tty
         echo    # (optional) move to a new line
         if [[ ! "${REPLY}" =~ ^[Yy]$ ]]; then

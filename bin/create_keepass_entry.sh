@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# create_keepass_entry.sh -- store a credentials installer's passwords in KeePassXC.
+# create_keepass_entry.sh -- put installer, master, profile secrets in KeePassXC.
 #
 # Usage: create_keepass_entry.sh --db FILE [--key-file FILE | --no-password]
 #            [--title TITLE] [--group PATH] [--individual-smime-passwords]
@@ -11,81 +11,15 @@
 #            [--group PATH] [--individual-smime-passwords] [--root-cert FILE]
 #            [--export-master] [INSTALLER]
 #
-# Example:
-#   bin/create_keepass_entry.sh --db MYDBFILE.keypass \
-#       mdm/credentials/install_credentials_persona_S.sh
+# INSTALLER: an encrypted installer from create_credentials.sh. Its signature
+# is checked, then its keychain password opens the payload; it is never run.
+# PROFILE: a name from `pki_keychain.py profile-list`; its .mobileconfig
+# (PLAIN TEXT secrets) is attached to the entry 'MDM profile: NAME'.
+# --export-master stores the PKI master password. Entries are merged into
+# --db (backed up first); UUIDs derive from the title, so re-runs update in
+# place. Secrets never appear in argv or the environment. See README.md.
 #
-# INSTALLER is an encrypted installer made by create_credentials.sh, e.g.
-# install_credentials_persona_S.sh. Its password is read from the PKI keychain
-# (bin/pki_keychain.py installer-get; entry = the installer's file name).
-# Nothing else is searched for in the PKI tree. The installer password
-# is used to decrypt the payload (the same openssl steps the installer
-# runs; the installer itself is never executed), which proves the password
-# is right and gives the contents.
-#
-# PROFILE: an argument that is not a file names a profile in
-# bin/pki_keychain.py profile-list. Its signed .mobileconfig is attached to
-# the entry 'MDM profile: NAME' in the group Profile of --db (created if
-# absent; --group PATH overrides). The attachment holds account passwords in
-# PLAIN TEXT. Not with --export-master or --xml-out; needs keepassxc-cli 2.7+.
-#
-# PKI_KEYCHAIN_PATCH_V3
-# --export-master: also store the PKI master password (what
-# bin/pki_keychain.py export-master prints: the root master file, else the
-# login keychain item) as an entry titled --master-title (default 'PKI-Structure
-# KeePassXC Passphrase') in the same database. Without INSTALLER only that
-# entry is written. The PKI database also needs keepassxc/keyfile/ and the
-# .kdbx in keepassxc/keychain/: back all three up. The entry's time is the key file's, so
-# re-runs change nothing; --force-update re-stamps it (use it after a new
-# master password).
-#
-# Entries go into the database's root group, Password (--group PATH below it).
-#
-# Signature: before anything is decrypted, the signature of INSTALLER
-# (detached PKCS#7 between __SIGNATURE_BELOW__ and __PAYLOAD_BELOW__) is
-# checked: the file must be unchanged since it was signed, by a code signing,
-# non-CA certificate that chains to this PKI tree's root (root/certs/root*.cert.pem,
-# or --root-cert FILE); a root inside the installer is never trusted. There is
-# no way to skip it. Revocation of the signer is not checked.
-#
-# Default: ONE entry in an existing KeePassXC database whose Password is the
-# installer password (from the PKI keychain). Nothing else secret is stored. Its
-# Notes list what the installer contains, never a password.
-#
-# --individual-smime-passwords: also store the password of each S/MIME .p12
-# in the payload, as one protected custom attribute per issuance, labeled
-# '<certname> [<issued>]'. Both come from the decrypted payload (the
-# <name>.p12 and <name>.p12.pass files and the manifest); each password is
-# checked against its .p12 before it is stored. The .p12 files of one
-# issuance share one password and so one attribute.
-#
-# Title: --title, default 'S/MIME installer: <installer file name>'. Copy:
-#   keepassxc-cli clip DB 'TITLE'                  (installer password)
-#   keepassxc-cli clip -a 'ATTRIBUTE' DB 'TITLE'   (one issuance's .p12)
-#
-# How it gets there: keepassxc-cli can only import XML into a NEW database,
-# so the entry is written as KeePass 2 XML, imported into a staging database
-# with the same credentials, and merged into --db. The merge is shown with
-# --dry-run first, and --db is copied to DB.bak-<time> unless --no-backup.
-# Entry and group UUIDs are derived from title and group path, and the
-# entry's modification time from the installer and its .pass file, so a
-# re-run updates the entry in place and changes nothing when they did not
-# change. --force-update stamps it with the current time instead.
-#
-# Relative paths are relative to the PKI root (the parent of bin/).
-#
-# Secrets: never in argv or the environment; the master password is read
-# once from the terminal and piped to keepassxc-cli (--kp-prompt lets
-# keepassxc-cli ask itself). The decrypted payload and the plain-text XML
-# exist only in a private temporary directory, removed on exit. --xml-out
-# FILE writes that XML to FILE (mode 0600) and stops: delete it after use.
-# An existing FILE is replaced only after a y/N prompt (PKI_ASSUME_YES=1
-# answers yes).
-#
-# -n lists what would be stored and stops. PKI_ASSUME_YES=1 skips the
-# prompts and makes any .p12 that cannot be opened an error.
-# Needs bash 4.4+, openssl (bin/define_openssl.sh), tar with xz,
-# keepassxc-cli.
+# Needs bash 4.4+, openssl, tar with xz, keepassxc-cli 2.7+.
 
 set -Eeuo pipefail
 shopt -s nullglob
@@ -637,7 +571,7 @@ confirm() {
     [[ ${ans} =~ ^[yY]([eE][sS])?$ ]]
 }
 if [ "${PKI_ASSUME_YES:-0}" = "0" ]; then
-    echo "(Set PKI_ASSUME_YES=1 to skip the prompts.)" >&2
+    echo "(PKI_ASSUME_YES=1 skips prompts.)" >&2
 fi
 
 # -------------------------------------------------------------------- XML

@@ -2,20 +2,12 @@
 
 # pki_common.sh
 #
-# Shared functions for reissuing a cert without colliding with the
-# previous run's files (pki_archive_existing_cert /
-# pki_restore_archived_cert), and for correctly revoking any other
-# still-valid certificate the issuing CA has on record under the same
-# CommonName (pki_revoke_matching_cn) - looked up authoritatively in
-# the issuer's own index.txt, not guessed from a filename.
-#
-# Also: renewal of a CA certificate with its existing key (pki_ca_prepare),
-# validity capped at the issuer's remaining life (pki_cap_days), random
-# per-identity .p12 passwords (pki_random_password), cert_is_ca, and the
-# shared finishing steps of every certificate (pki_finish_cert,
-# pki_sha1_files).
+# Shared functions: key passphrases (pki_kc), archive and restore of a
+# certificate's files, revocation of superseded certificates by CommonName
+# (pki_revoke_matching_cn), CA renewal, validity capping, random passwords,
+# scope assertions for CA and leaf certificates, and the finishing steps of
+# every certificate (pki_finish_cert, pki_sha1_files).
 
-# PKI_KEYCHAIN_PATCH_V1
 # Key passphrases: one per key in the KeePassXC database
 # ./keepassxc/keychain (bin/pki_keychain.py); its master is a root-only file
 # or a login keychain item. Needs PKI_ROOT.
@@ -34,7 +26,7 @@ pki_confirm() {
 	return 0
     fi
     echo "${msg}" >&2
-    echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
+    echo "(PKI_ASSUME_YES=1 skips prompts.)" >&2
     read -p "Proceed? [y/N] " -r < /dev/tty
     echo
     if [[ ! "${REPLY}" =~ ^[Yy]$ ]]; then

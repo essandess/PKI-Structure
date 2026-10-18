@@ -595,14 +595,6 @@ def get_secret(cert=None, field: str = "key", kid: str | None = None,
                keychain_dir: Path | None = None) -> str:
     kid = kid or cert_id(cert)
     db = Db(keychain_dir)
-    rows = db.entries()
-    if rows is not None:
-        pre = kid[:16] + " :: "
-        for r in rows:
-            t = r["Title"]
-            if t.startswith(pre) and t.endswith(" :: p12") == (field == "p12"):
-                return r["Password"]
-        fail(f"no keychain entry for key {kid[:16]} ({field})")
     t = db.find(kid, field == "p12")
     if t is None:
         fail(f"no keychain entry for key {kid[:16]} ({field})")
@@ -800,13 +792,6 @@ def cmd_installer_set(a) -> None:
 
 def cmd_installer_get(a) -> None:
     db = Db()
-    rows = db.entries()
-    if rows is not None:
-        hit = [r["Password"] for r in rows if r["Title"] == a.name]
-        if not hit:
-            fail(f"no installer entry '{a.name}' in {db.file}")
-        print(hit[0])
-        return
     if not db.has(a.name):
         fail(f"no installer entry '{a.name}' in {db.file}")
     print(db.show(a.name))

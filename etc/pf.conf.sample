@@ -36,9 +36,9 @@ tun_if = "{ utun0, utun1, utun2, utun3, utun4, utun5, utun6, utun7, utun8, utun9
 
 # Macros and Tables
 
-# Hardcoded IPs
-myorganization_org = "<my ip address>"
-my_other_organization_org = "<my org ip address>"
+# Hardcoded IPs (RFC 5737 documentation addresses: replace)
+myorganization_org = "192.0.2.10"
+my_other_organization_org = "198.51.100.10"
 
 lan_tcp_services = "{ domain, kerberos, microsoft-ds, eyetv, 3128, \
         net-assistant, 5001, 5900:5909, privoxy, 8119, 8123, 8180 }"

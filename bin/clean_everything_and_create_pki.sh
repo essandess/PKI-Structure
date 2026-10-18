@@ -92,14 +92,19 @@ bin/create_privoxy.sh -c ; bin/create_adblock2privoxy.sh -c
 
 # Generated installers and profiles chain to the deleted CAs; YAML is kept
 rm -f mdm/credentials/install_credentials_*.sh \
-      mdm/credentials/install_credentials_*.sh.pass \
       mdm/mobfileconfigs-unsigned/*.mobileconfig \
       mdm/mobfileconfigs-signed/*.mobileconfig
 
 if [ "${CREATE_PKI}" == "1" ]; then
-    # Create PKI chain of trust all at once
-    bin/create_privoxy.sh && bin/create_adblock2privoxy.sh
-    bin/create_root.sh && bin/create_intermediate.sh && bin/create_intermediate_smime.sh && bin/create_server.sh && bin/create_codesign.sh && bin/create_organization_smime.sh
+    # the deployment's own chain, else the defaults
+    if [ -x bin/create_organization_pki.sh ]; then
+        bin/create_organization_pki.sh
+    else
+        bin/create_privoxy.sh && bin/create_adblock2privoxy.sh
+        bin/create_root.sh && bin/create_intermediate.sh \
+            && bin/create_intermediate_smime.sh && bin/create_server.sh \
+            && bin/create_codesign.sh && bin/create_organization_smime.sh
+    fi
 else
     echo "Clean complete. PKI not recreated (use --create-pki to regenerate)."
 fi

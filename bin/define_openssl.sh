@@ -21,5 +21,9 @@ case "${OPENSSL_VERSION}" in
         echo "       or set OPENSSL=/path/to/openssl. Current PATH: ${PATH}" >&2
         exit 1
         ;;
+    "OpenSSL "[012].*)
+        echo "Error: ${OPENSSL} is ${OPENSSL_VERSION}; OpenSSL 3 is required." >&2
+        exit 1
+        ;;
 esac
 export OPENSSL

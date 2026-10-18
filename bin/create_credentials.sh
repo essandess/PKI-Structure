@@ -1241,24 +1241,36 @@ login_keychain() {
 }
 
 
+# sec_quote WORD: WORD quoted for `security -i`, which reads commands from
+# stdin, so a password never appears in argv.
+sec_quote() {
+    local s=${1//\\/\\\\}
+
+    printf '"%s"' "${s//\"/\\\"}"
+}
+
+
 # import_into_keychain USE_SUDO(0|1) KEYCHAIN FILE PASSWORD [extra security args]
 # An item that is already present counts as success.
 import_into_keychain() {
     local use_sudo="$1" keychain="$2" file="$3" password="$4" out rc=0 nl=$'\n'
+    local words=(import "${file}" -k "${keychain}") w line="" cmd=(security -i)
 
     shift 4
-    local cmd=(security import "${file}" -k "${keychain}")
-
     if [ -n "${password}" ]; then
-        cmd+=(-P "${password}")
+        words+=(-P "${password}")
     fi
-    cmd+=("$@")
+    words+=("$@")
+    for w in "${words[@]}"; do
+        line+="$(sec_quote "${w}") "
+    done
     if [ "${use_sudo}" = 1 ]; then
         cmd=(sudo "${cmd[@]}")
     fi
 
-    out=$("${cmd[@]}" 2>&1) || rc=$?
-    if [ "${rc}" -ne 0 ]; then
+    # `security -i` reports errors on stderr and may still exit 0
+    out=$(printf '%s\n' "${line}" | "${cmd[@]}" 2>&1) || rc=$?
+    if [ "${rc}" -ne 0 ] || [[ "${out}" == *"security:"* ]]; then
         case "${out}" in
             *"already exists"*)
                 echo "    already present"

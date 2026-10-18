@@ -726,8 +726,8 @@ def p12_password(path: Path) -> str:
 
 
 def extra_tree_trust(tree: Path, td: Path) -> Trust:
-    """Trust for a converted tree: its root, intermediate_smime
-    certificates, index.txt and CRLs (see convert_legacy_pki.py)."""
+    """Trust for an extra tree: its root, intermediate_smime certificates,
+    index.txt and CRLs."""
     root = tree / "root" / "certs" / "root.cert.pem"
     isd = tree / "intermediate_smime"
     ints = sorted((isd / "certs").glob("*.cert.pem"))
@@ -735,7 +735,7 @@ def extra_tree_trust(tree: Path, td: Path) -> Trust:
             *sorted((isd / "crl").glob("*.crl.pem"))]
     for f in (root, isd / "index.txt", *crls):
         if not f.is_file():
-            die(f"{f} not found; {tree} is not a converted PKI tree")
+            die(f"{f} not found; {tree} is not a PKI tree")
     if not ints:
         die(f"no certificates in {isd / 'certs'}")
     tag = hashlib.sha256(str(tree).encode()).hexdigest()[:8]

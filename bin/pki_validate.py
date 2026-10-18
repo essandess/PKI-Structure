@@ -102,12 +102,21 @@ def load_ca_index(index_file: Path) -> dict[int, tuple[str, str]]:
     return db
 
 
+def strict_verify() -> bool:
+    """-x509_strict always; PKI_VERIFY_STRICT=0 only inside a test tree."""
+    if os.environ.get("PKI_VERIFY_STRICT", "1") != "0":
+        return True
+    if (Path(__file__).resolve().parent.parent / ".pki_test_tree").exists():
+        return False
+    raise SystemExit("PKI_VERIFY_STRICT=0 is allowed only in a test tree.")
+
+
 def _openssl_verify(cert_file: Path, trust: Trust, *, crl: str | None = None,
                     no_time: bool = False, purpose: str | None = None) -> str | None:
     """None if `openssl verify` passes, else its error line.
     crl: None, "leaf" (-crl_check) or "all" (-crl_check_all)."""
     cmd = [os.environ.get("OPENSSL", "openssl"), "verify", "-CAfile", str(trust.ca_bundle)]
-    if os.environ.get("PKI_VERIFY_STRICT", "1") != "0":
+    if strict_verify():
         cmd.append("-x509_strict")
     if purpose:
         cmd += ["-purpose", purpose]

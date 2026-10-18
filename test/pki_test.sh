@@ -98,6 +98,8 @@ SM="${PKI_TEST_SMIME_NAME:-persona_gmail_2026}"
 
 # ---------------------------------------------------------------- seed deployment files
 mkdir -p mdm/yaml
+# build with the default chain, not this deployment's
+rm -f bin/create_organization_pki.sh
 for f in smime mdm credentials; do
     [ -f "bin/create_organization_${f}.sh" ] \
         || cp -p "bin/create_organization_${f}.sh.sample" "bin/create_organization_${f}.sh"
@@ -561,6 +563,10 @@ step "issuance guards"
 refuse "create_server: FQDN outside DOMAIN_NAME" "not within DOMAIN_NAME" bin/create_server.sh --server-fqdn evil.example.net
 refuse "create_smime: overlong EMAIL"            "too long" bin/create_smime.sh "$(printf 'a%.0s' $(seq 1 60))@example.org" toolong
 refuse "create_root: early renewal refused"      "more than [0-9]+ days away" bin/create_root.sh
+
+run "plus-addressed S/MIME" bin/create_smime.sh "a+b@${DOMAIN_NAME}" plustest
+check "plus-addressed S/MIME: signature" vfy smimesign smime/certs/plustest-signature.cert.pem
+check "plus-addressed S/MIME: encryption" vfy smimeencrypt smime/certs/plustest-encryption.cert.pem
 
 step "revocation"
 RV="revoketest.${DOMAIN_NAME}"

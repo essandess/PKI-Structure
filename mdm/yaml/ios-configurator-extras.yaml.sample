@@ -8,19 +8,12 @@
 # embedded with {file: path} where a payload needs binary data. No new Python is needed to
 # add another payload like these -- see the module docstring in bin/configurate_yaml.py.
 #
-# CONFIDENCE: I do not have a reference .mobileconfig for any of these six payload types
-# (unlike Passcode/Wi-Fi/Restrictions/accounts, which were reverse-engineered from an
-# actual Apple Configurator export). The keys below are my best understanding from
-# Apple's public Device Management documentation:
-#   - AirPrint, Fonts, Web Clip, Notifications, Content Filter (BuiltIn only): reasonably
-#     confident, but UNVERIFIED against a real device or Configurator export.
-#   - AirPlay, Subscribed Calendars: NOT confident of the exact key names -- Apple's
-#     documentation for these was less clear in my training, so only the payload type and
-#     a placeholder are given. Check Apple's Device Management documentation, or export
-#     a real profile from Apple Configurator / Profile Manager with these payloads
-#     configured and compare, before using either of these two in production.
-# For all six: build with --no-sign, install on ONE test device, and confirm the setting
-# actually takes effect before deploying broadly.
+# Unverified: no reference .mobileconfig exists for these six payload types
+# (Passcode, Wi-Fi, Restrictions and accounts came from a Configurator export).
+#   AirPrint, Fonts, Web Clip: keys from Apple's Device Management docs.
+#   Notifications, Content Filter (BuiltIn): supervised devices only (verify).
+#   AirPlay, Subscribed Calendars: key names unknown; placeholders only.
+# Build with --no-sign, install on ONE test device, confirm the effect first.
 
 name: iOS Configurator Extras (example)
 description: Example fragment -- verify before use, see header.
@@ -56,7 +49,7 @@ payloads:
       FullScreen: false
       Precomposed: false
 
-  # ---- Notifications: per-app notification policy -----------------------------------
+  # ---- Notifications: supervised only (verify) ----
   - id: notifications
     type: notifications                  # -> com.apple.notificationsettings
     name: Notifications
@@ -70,7 +63,7 @@ payloads:
           SoundsEnabled: true
           AlertType: 2                   # 0 = None, 1 = Banner, 2 = Alerts (unverified numbering)
 
-  # ---- Content Filter: simplest (BuiltIn) form ---------------------------------------
+  # ---- Content Filter, BuiltIn: supervised only (verify) ----
   # The Plugin/vendor-specific variant has many more keys (ServerAddress, credentials,
   # PluginBundleID, ...) not attempted here.
   - id: content-filter

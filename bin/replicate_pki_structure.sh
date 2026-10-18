@@ -186,7 +186,7 @@ if [ "${OVERWRITE}" == "1" ]; then
         echo "(Set PKI_ASSUME_YES=1 to skip this prompt in future/scripted runs.)" >&2
         read -p "Overwrite existing files in '${DEST}' with the source's versions? [y/N] " -r < /dev/tty
         echo    # (optional) move to a new line
-        if [[ ! "${REPLY}" =~ ^[y]$ ]]; then
+        if [[ ! "${REPLY}" =~ ^[Yy]$ ]]; then
             echo "Aborted." >&2
             exit 1
         fi

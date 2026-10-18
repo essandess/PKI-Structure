@@ -91,7 +91,7 @@ accounts:
     description: Contacts
     host: server.myorganization.org
     port: 8843                       # optional; default shown
-    principal_url: /addressbooks/__uids__/15309EE6-0DA4-4768-8FAE-B20C274C49C7
+    principal_url: /addressbooks/__uids__/A1B2C3D4-E5F6-4789-8ABC-0123456789AB
     username: persona
     password: !secret carddav-persona
     # use_ssl: true                  # optional; default shown

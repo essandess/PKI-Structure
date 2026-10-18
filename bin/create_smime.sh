@@ -72,9 +72,14 @@ archive_existing_smime() {
 # If issuing the new certificates fails part way, put the previous pair back
 # so the signature and encryption certificates stay consistent.
 restore_archived_smime() {
-    if [ -z "${ARCHIVED}" ] || [ -n "${REISSUED}" ]; then
-	return 0
-    fi
+    [ -z "${REISSUED}" ] || return 0
+    # certificates issued before the failure were never delivered: revoke
+    local s
+    for s in ${REVOKE_SERIAL[@]+"${REVOKE_SERIAL[@]}"}; do
+	pki_revoke_unscoped "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" \
+	    "${ISSUERCADIR}" "${ISSUERCADIR}/newcerts/${s}.pem" "${ISSUERCADIR}"
+    done
+    [ -n "${ARCHIVED}" ] || return 0
     echo "Reissuing the ${CERTNAME} S/MIME certificates failed;" >&2
     echo "restoring the previous ones." >&2
     local pair ext sha1 item dir suffix
@@ -108,6 +113,7 @@ if [ "$#" -ne 2 ]; then
 fi
 EMAIL="$1"
 CERTNAME="$2"
+EMAIL_SUBJ=${EMAIL//+/\\+}   # '+' separates RDN values in -subj
 
 # EMAIL goes into -subj, CERTNAME into file names: no '/', '\' or '..'.
 if ! [[ "${EMAIL}" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]] \
@@ -182,7 +188,7 @@ for EXTENSION in signature encryption; do
 	-in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem \
 	-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
 	-passin fd:3 3< <(pki_kc get --cert "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem") \
-	-subj "/CN=${EMAIL} - ${EXTENSION}/emailAddress=${EMAIL}/O=${ORG_NAME}/OU=${ORG_NAME} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
+	-subj "/CN=${EMAIL_SUBJ} - ${EXTENSION}/emailAddress=${EMAIL_SUBJ}/O=${ORG_NAME}/OU=${ORG_NAME} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
 	-batch
     then
 	if ! pki_assert_leaf_scope "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem" smime_${EXTENSION}; then

@@ -81,7 +81,11 @@ delete_expired_certs() {
         return 0
     fi
     if ! "${OPENSSL}" x509 -checkend "0" -noout -in "${PEM}" 1> /dev/null 2>&1
-    then \
+    then
+        # drop the expired key's keychain entries with its files
+        if [ "${DRY_RUN}" = "0" ]; then
+            pki_kc forget --cert "${PEM}" || true
+        fi
         for p in "${PEMDIR}/${PEMBASE}"{.cert.pem,.chain.pem,.cer} \
             "${PEMDIR}/../private/${PEMBASE}"{.key.pem,.key.pem.decrypted,.p12}
         do
@@ -97,8 +101,8 @@ delete_expired_certs() {
     fi
 }
 
-export -f delete_expired_certs
-export DRY_RUN
+export -f delete_expired_certs pki_kc
+export DRY_RUN PKI_ROOT
 
 
 # update databases

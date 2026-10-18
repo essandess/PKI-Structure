@@ -5,7 +5,7 @@ PortGroup           github 1.0
 PortGroup           openssl 1.0
 
 # github.setup        essandess PKI-Structure 1.0.0 v
-github.setup        essandess pki-structure c204ee2a90b73998f82c9198f6dc3efe3786eb48
+github.setup        essandess pki-structure 0ebb42fbe9c35ba934a79143045cd8e0bdb29036
 version             1.0.0
 revision            0
 categories          security
@@ -23,9 +23,9 @@ long_description    {*}${description}. Shell tooling for a private PKI: \
                     scripts and MDM profiles\; KeePassXC password keychain \
                     with a root-only master password file and separable keyfile.
 
-checksums           rmd160  29859f599179aae007304f50ca242a718d2a704f \
-                    sha256  1a03c1619d67b068706d39d9f9869437cf06c5d32681433b2288446878478fdc \
-                    size    132637
+checksums           rmd160  5a0be3b814185770594c563f27a4df7a96f62f93 \
+                    sha256  f7a68e9afdac189438e7ece2d6ec56b76dd668594154b96bf77a506f212fc3fc \
+                    size    138461
 
 # ${prefix}/var/macports/sources/rsync.macports.org/macports/release/tarballs/ports/_resources/port1.0/group/python-1.0.tcl
 set python_version  314
@@ -46,7 +46,7 @@ depends_run-append  port:KeePassXC \
 depends_test-append port:KeePassXC
 
 proc is_private_path {path} {
-    return [regexp {^keepassxc$|^mdm$|private|key|master} [file tail $path]]
+    return [regexp {^(?:keepassxc|mdm)$|private|key|master} [file tail $path]]
 }
 
 proc pki_lockdown {path {is_private 0}} {

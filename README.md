@@ -11,7 +11,7 @@ file (login keychain item for other users) and separable keyfile.
 | `create_{root,intermediate,intermediate_smime,server,codesign,smime,privoxy,adblock2privoxy}.sh` | CAs and leaf certificates; reissue supersedes the predecessor |
 | `revoke_certificate.sh`, `create_crl.sh`, `publish_crls.sh` | Revocation, CRL generation and publication |
 | `create_credentials.sh` | Signed macOS install scripts for CA certificates and S/MIME identities |
-| `create_keepass_entry.sh` | Install-script and master passwords into KeePassXC |
+| `create_keepass_entry.sh` | Install-script and master passwords, and stored MDM profiles, into KeePassXC |
 | `configurate_yaml.py` | Signed `.mobileconfig` profiles from YAML |
 | `create_organization_{smime,mdm,credentials}.sh` | Per-deployment driver scripts, seeded from `.sample` |
 | `certs_that_expire_soon.sh`, `updatedb_and_delete_expired_certs.sh` | Expiry reports and cleanup |
@@ -358,7 +358,7 @@ Installer environment: `PKI_ASSUME_YES`, `PKI_ROOT_SHA256`, and
 
 ```sh
 bin/create_keepass_entry.sh --db FILE [--key-file FILE | --no-password] [--title T] [--group PATH]
-    [--individual-smime-passwords] [--force-update] [--no-backup] [--kp-prompt] [-n] INSTALLER
+    [--individual-smime-passwords] [--force-update] [--no-backup] [--kp-prompt] [-n] INSTALLER|PROFILE
 bin/create_keepass_entry.sh --xml-out FILE [--individual-smime-passwords] INSTALLER
 ```
 
@@ -373,6 +373,12 @@ password fails before anything is stored. `--ca-certs-only` installers are unenc
   (`--master-title`). Back up the key file and the `.kdbx` with it.
 * **`--individual-smime-passwords`:** also one protected attribute per S/MIME
   issuance (`<certname> [<issued>]`), each checked against its `.p12`.
+* **`PROFILE`:** an argument that is not a file names a profile in
+  `pki_keychain.py profile-list`. Its `.mobileconfig` is attached to the entry
+  `MDM profile: NAME` in the group `Profile` (created if absent); the
+  attachment holds account passwords in plain text. Not with `--xml-out` or
+  `--export-master`; needs `keepassxc-cli` 2.7+. A re-run with unchanged
+  content is skipped; `--force-update` replaces the entry.
 * Entry UUIDs derive from title and group, so re-runs update in place.
   The entry is imported into a staging database, previewed with `merge
   --dry-run`, and merged; `--db` is first copied to `DB.bak-<time>` unless

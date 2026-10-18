@@ -6,7 +6,7 @@
 #            [--title TITLE] [--group PATH] [--individual-smime-passwords]
 #            [--force-update] [--no-backup] [--kp-prompt] [-n|--dry-run]
 #            [--root-cert FILE] [--export-master] [--master-title TITLE]
-#            [INSTALLER]
+#            [INSTALLER|PROFILE]
 #        create_keepass_entry.sh --xml-out FILE [--title TITLE]
 #            [--group PATH] [--individual-smime-passwords] [--root-cert FILE]
 #            [--export-master] [INSTALLER]
@@ -22,6 +22,12 @@
 # is used to decrypt the payload (the same openssl steps the installer
 # runs; the installer itself is never executed), which proves the password
 # is right and gives the contents.
+#
+# PROFILE: an argument that is not a file names a profile in
+# bin/pki_keychain.py profile-list. Its signed .mobileconfig is attached to
+# the entry 'MDM profile: NAME' in the group Profile of --db (created if
+# absent; --group PATH overrides). The attachment holds account passwords in
+# PLAIN TEXT. Not with --export-master or --xml-out; needs keepassxc-cli 2.7+.
 #
 # PKI_KEYCHAIN_PATCH_V3
 # --export-master: also store the PKI master password (what
@@ -120,14 +126,15 @@ Usage: create_keepass_entry.sh --db FILE [--key-file FILE | --no-password]
          [--title TITLE] [--group PATH] [--individual-smime-passwords]
          [--force-update] [--no-backup] [--kp-prompt] [-n|--dry-run]
          [--root-cert FILE] [--export-master] [--master-title TITLE]
-         [INSTALLER]
+         [INSTALLER|PROFILE]
        create_keepass_entry.sh --xml-out FILE [--group PATH]
          [--individual-smime-passwords] [--root-cert FILE]
          [--export-master] [INSTALLER]
 
 Stores an installer's password (and, with --export-master, the PKI master
-password) in a KeePassXC database. INSTALLER is
-optional only with --export-master. See the top of this file for details.
+password), or a stored MDM profile as an attachment, in a KeePassXC
+database. INSTALLER|PROFILE is optional only with --export-master. See the
+top of this file for details.
 USAGE
 }
 
@@ -183,6 +190,20 @@ if [ "${#ARGS[@]}" -eq 0 ] && [ "${EXPORT_MASTER}" -eq 0 ]; then
 fi
 if [ "${#ARGS[@]}" -gt 1 ]; then die "give at most one INSTALLER"; fi
 INSTALLER=${ARGS[0]:-}
+# an argument that is not a file names a stored MDM profile
+PROFILE=""
+if [ -n "${INSTALLER}" ] && [ ! -e "${INSTALLER}" ]; then
+    LISTED=$("${PYTHON}" "${SCRIPT_DIR}/pki_keychain.py" profile-list 2>/dev/null) \
+        || LISTED=""
+    grep -qxF -- "${INSTALLER}" <<<"${LISTED}" \
+        || die "'${INSTALLER}' is neither an installer file nor a name in" \
+               "'bin/pki_keychain.py profile-list'"
+    PROFILE=${INSTALLER}
+    INSTALLER=""
+    if [ "${EXPORT_MASTER}" -eq 1 ] || [ -n "${XML_OUT}" ]; then
+        die "a profile does not combine with --export-master or --xml-out"
+    fi
+fi
 if [ -n "${XML_OUT}" ] && [ -n "${DB}" ]; then
     die "--xml-out and --db are alternatives"
 fi
@@ -205,6 +226,9 @@ if [ -n "${INSTALLER}" ]; then
     fi
     INST_BASE=${INSTALLER##*/}
     if [ -z "${TITLE}" ]; then TITLE="S/MIME installer: ${INST_BASE}"; fi
+elif [ -n "${PROFILE}" ]; then
+    TITLE=${TITLE:-"MDM profile: ${PROFILE}"}
+    GROUP=${GROUP:-Profile}
 else
     TITLE=${TITLE:-${MASTER_TITLE}}
 fi
@@ -549,6 +573,12 @@ print_plan() {
         echo "Master password: entry '${MASTER_TITLE}'"
         echo "  (PKI keychain item ${MASTER_SERVICE})"
     fi
+    if [ -n "${PROFILE}" ]; then
+        echo "MDM profile: ${PROFILE} (PKI keychain; PLAIN TEXT passwords)"
+        echo "Entry:       ${GROUP}/${TITLE}, attachment ${PROFILE}.mobileconfig"
+        echo "Database:    ${DB}"
+        return 0
+    fi
     if [ -z "${INSTALLER}" ]; then
         echo "Database:    ${DB:-none (--xml-out)}"
         return 0
@@ -837,6 +867,67 @@ if [ -n "${KEYFILE}" ]; then
 fi
 if [ "${NOPASS}" -eq 1 ]; then DB_ARGS+=(--no-password); fi
 
+# ------------------------------------------------ MDM profile (attachment)
+
+# backup_db: copy --db to DB.bak-<time> unless --no-backup
+backup_db() {
+    local bak
+
+    if [ "${BACKUP}" -eq 1 ]; then
+        bak="${DB}.bak-$(date -u '+%Y%m%dT%H%M%SZ')"
+        cp -p "${DB}" "${bak}"
+        chmod 0600 "${bak}"
+        echo "Backup: ${bak}"
+    fi
+}
+
+# keepassxc-cli cannot import attachments from XML, so a profile goes into
+# --db directly: group, entry, attachment. Unchanged content is skipped.
+if [ -n "${PROFILE}" ]; then
+    ENTRY="${GROUP}/${TITLE}"
+    PROFILE_FILE="${TMPD}/${PROFILE}.mobileconfig"
+    "${PYTHON}" "${SCRIPT_DIR}/pki_keychain.py" profile-get --name "${PROFILE}" \
+        --out "${PROFILE_FILE}" 2>"${TMPD}/profile.err" \
+        || { cat "${TMPD}/profile.err" >&2; die "cannot extract profile '${PROFILE}'"; }
+    SHA=$("${OPENSSL}" dgst -sha256 "${PROFILE_FILE}" | sed 's/^.*= *//')
+    LISTING=$(kp 1 ls -R -f "${DB_ARGS[@]}" "${DB}")
+    HAVE_ENTRY=0
+    if grep -qxF -- "${ENTRY}" <<<"${LISTING}"; then HAVE_ENTRY=1; fi
+    if [ "${HAVE_ENTRY}" -eq 1 ] && [ "${FORCE}" -eq 0 ]; then
+        OLD_NOTES=$(kp 1 show -a Notes "${DB_ARGS[@]}" "${DB}" "${ENTRY}") || OLD_NOTES=""
+        if grep -qF -- "SHA-256 ${SHA}" <<<"${OLD_NOTES}"; then
+            echo "${ENTRY} is up to date in ${DB##*/}."
+            exit 0
+        fi
+    fi
+    backup_db
+    if ! grep -qxF -- "${GROUP}/" <<<"${LISTING}"; then
+        kp 1 mkdir "${DB_ARGS[@]}" "${DB}" "${GROUP}" >/dev/null \
+            || die "cannot create the group ${GROUP}"
+    fi
+    if [ "${HAVE_ENTRY}" -eq 1 ]; then
+        kp 1 rm "${DB_ARGS[@]}" "${DB}" "${ENTRY}" >/dev/null \
+            || die "cannot replace ${ENTRY}"
+        # leave no copy of the old profile in the recycle bin
+        kp 1 rm "${DB_ARGS[@]}" "${DB}" "Recycle Bin/${TITLE}" >/dev/null 2>&1 || true
+    fi
+    NOTES=$(printf '%s\n' \
+        "Signed MDM profile '${PROFILE}' (PKI keychain). The attachment" \
+        "holds account passwords in PLAIN TEXT." \
+        "SHA-256 ${SHA}" \
+        "Added $(date -u '+%Y-%m-%dT%H:%M:%SZ').")
+    kp 1 add "${DB_ARGS[@]}" --notes "${NOTES}" "${DB}" "${ENTRY}" >/dev/null \
+        || die "cannot add ${ENTRY}"
+    if ! kp 1 attachment-import "${DB_ARGS[@]}" "${DB}" "${ENTRY}" \
+            "${PROFILE}.mobileconfig" "${PROFILE_FILE}" >/dev/null; then
+        kp 1 rm "${DB_ARGS[@]}" "${DB}" "${ENTRY}" >/dev/null 2>&1 || true
+        die "cannot attach ${PROFILE}.mobileconfig"
+    fi
+    echo "Added '${ENTRY}' with the attachment ${PROFILE}.mobileconfig."
+    echo "It holds account passwords in PLAIN TEXT: protect ${DB##*/}."
+    exit 0
+fi
+
 STAGE="${TMPD}/staging.kdbx"
 XML="${TMPD}/entry.xml"
 
@@ -851,12 +942,7 @@ kp 1 merge --dry-run -s "${DB_ARGS[@]}" "${DB}" "${STAGE}" | sed 's/^/  /' \
     || die "merge preview failed"
 if ! confirm "Apply it?"; then die "Aborted; ${DB##*/} is unchanged."; fi
 
-if [ "${BACKUP}" -eq 1 ]; then
-    BAK="${DB}.bak-$(date -u '+%Y%m%dT%H%M%SZ')"
-    cp -p "${DB}" "${BAK}"
-    chmod 0600 "${BAK}"
-    echo "Backup: ${BAK}"
-fi
+backup_db
 kp 1 merge -s "${DB_ARGS[@]}" "${DB}" "${STAGE}" || die "merge failed"
 
 echo "Merged. Entry found by:"

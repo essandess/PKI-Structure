@@ -41,8 +41,8 @@ Entries   one per private key, found by SHA-256 of its public key, so every
   kdf-check                 database is KDBX4, Argon2 >= 64 MiB, 4 lanes
   installer-set --name NAME store an installer password (stdin) as entry NAME
   installer-get --name NAME print it
-  profile-get --name NAME --out FILE
-                            extract a stored MDM profile (PLAIN TEXT secrets)
+  profile-get --name NAME [--unsigned] --out FILE
+                            extract a stored profile (--unsigned: the plist)
   profile-list | profile-rm --name NAME
   export-master             print the master password (escrow)
   import-master             restore the master from stdin; refuses if present
@@ -836,18 +836,19 @@ def profile_check(name: str, ident: str) -> bool:
     return mine in titles
 
 
-def profile_set(name: str, path, ident: str, labels: list[str]) -> None:
-    """Store a signed profile as the attachment of its own entry."""
+def profile_set(name: str, path, ident: str, labels: list[str],
+                secret: bool) -> None:
+    """Store a profile as the attachment of its own entry."""
     need_attachments()
     title = profile_title(name)
     path = Path(path)
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     notes = "\n".join([
-        "Signed MDM profile. The attachment holds account passwords in",
-        "PLAIN TEXT (signing does not encrypt).",
+        "Configuration profile, signed unless built with --no-sign.",
         f"SHA-256 {digest}",
         f"Stored {datetime.now(timezone.utc):%Y-%m-%dT%H:%M:%SZ}",
         "Secrets prompted: " + (", ".join(labels) or "none"),
+        f"Holds secrets: {'yes' if secret else 'no'}",
         f"Extract: bin/pki_keychain.py profile-get --name {name} --out FILE",
     ])
     with lock():
@@ -865,7 +866,21 @@ def profile_set(name: str, path, ident: str, labels: list[str]) -> None:
             raise
 
 
-def profile_get(name: str, out) -> None:
+def unsign(data: bytes) -> bytes:
+    """The content of a CMS-signed profile (made with -nodetach)."""
+    with tempfile.TemporaryDirectory(prefix="pki-profile.") as td:
+        src, dst = Path(td, "signed"), Path(td, "content")
+        src.write_bytes(data)
+        r = subprocess.run(
+            [openssl(), "smime", "-verify", "-binary", "-inform", "der",
+             "-noverify", "-in", str(src), "-out", str(dst)],
+            capture_output=True, text=True)
+        if r.returncode:
+            fail("cannot read the signed profile: " + r.stderr.strip())
+        return dst.read_bytes()
+
+
+def profile_get(name: str, out, unsigned: bool = False) -> None:
     need_attachments()
     title = profile_title(name)
     out = Path(out)
@@ -885,17 +900,20 @@ def profile_get(name: str, out) -> None:
         data = tmp.read_bytes()
     if hashlib.sha256(data).hexdigest() != m.group(1):
         fail("stored profile does not match its recorded SHA-256")
+    if unsigned and data[:1] == b"\x30":   # DER: signed; an unsigned one is a plist
+        data = unsign(data)
     fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
     if out.resolve().is_relative_to(PKI_ROOT.resolve()):
         print(textwrap.fill(f"Warning: {out} is inside the PKI tree.", 79),
               file=sys.stderr)
-    print(textwrap.fill(EXPOSED.format(out), 79), file=sys.stderr)
+    if "Holds secrets: no" not in notes:   # older entries lack the line
+        print(textwrap.fill(EXPOSED.format(out), 79), file=sys.stderr)
 
 
 def cmd_profile_get(a) -> None:
-    profile_get(a.name, a.out)
+    profile_get(a.name, a.out, a.unsigned)
 
 
 def cmd_profile_list(a) -> None:
@@ -980,6 +998,8 @@ def main() -> None:
     p = sub.add_parser("profile-get")
     p.add_argument("--name", required=True)
     p.add_argument("--out", required=True)
+    p.add_argument("--unsigned", "--no-sign", action="store_true",
+                   help="write the plist, not the signed profile")
     p.set_defaults(func=cmd_profile_get)
     sub.add_parser("profile-list").set_defaults(func=cmd_profile_list)
     p = sub.add_parser("profile-rm")

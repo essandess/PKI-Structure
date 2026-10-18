@@ -44,7 +44,7 @@ Usage:
 $(basename "$0") [--create-pki] [-h|--help]
 
 Deletes every key, certificate and CA database in this PKI deployment,
-and the generated installers and MDM profiles (not the YAML sources).
+and the generated installers and stored profiles (not the YAML sources).
 With --create-pki, the PKI is then regenerated from scratch.
 Default is to clean only.
 USAGE
@@ -73,7 +73,7 @@ echo
 echo "This includes the root CA, both intermediate CAs, server, codesign, S/MIME,"
 echo "privoxy, and adblock2privoxy keys and certificates. Anything issued by"
 echo "the current root/intermediate will no longer be valid once this completes."
-echo "The generated installers and MDM profiles in mdm/ are deleted too"
+echo "The generated installers in mdm/ and the stored profiles are deleted too"
 echo "(the YAML sources are kept)."
 if [ "${CREATE_PKI}" != "1" ]; then
     echo "The PKI will NOT be recreated (pass --create-pki to do so)."
@@ -90,10 +90,12 @@ fi
 bin/create_root.sh -c ; bin/create_intermediate.sh -c ; bin/create_intermediate_smime.sh -c ; bin/create_server.sh -c ; bin/create_codesign.sh -c ; bin/create_smime.sh -c
 bin/create_privoxy.sh -c ; bin/create_adblock2privoxy.sh -c
 
-# Generated installers and profiles chain to the deleted CAs; YAML is kept
-rm -f mdm/credentials/install_credentials_*.sh \
-      mdm/mobfileconfigs-unsigned/*.mobileconfig \
-      mdm/mobfileconfigs-signed/*.mobileconfig
+# Generated installers and stored profiles chain to the deleted CAs; YAML is kept
+. bin/define_python.sh
+rm -f mdm/credentials/install_credentials_*.sh
+for p in $("${PYTHON}" bin/pki_keychain.py profile-list 2>/dev/null); do
+    "${PYTHON}" bin/pki_keychain.py profile-rm --name "${p}"
+done
 
 if [ "${CREATE_PKI}" == "1" ]; then
     # the deployment's own chain, else the defaults

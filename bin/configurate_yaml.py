@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-configurate_yaml.py -- YAML -> .mobileconfig (unsigned) -> signed
+configurate_yaml.py -- YAML -> .mobileconfig, stored in the PKI keychain
 
 Usage (any directory):
     bin/configurate_yaml.py mdm/yaml/NAME.yaml [--no-sign]
 
-Paths are relative to PKI_ROOT (the parent of bin/), which the script enters.
-The YAML and the output directories must be under mdm/. Keys and examples:
-README.md, "Configuration profiles", and mdm/yaml/*.sample.
+The profile is signed and stored only as the attachment of the keychain entry
+'mobileconfig :: NAME' (pki_keychain.py profile-get [--unsigned]); --no-sign
+stores it unsigned. Paths are relative to PKI_ROOT (the parent of bin/), which
+the script enters. The YAML must be under mdm/. Keys and examples: README.md,
+"Configuration profiles", and mdm/yaml/*.sample.
 
 Secrets: no YAML holds one. '!secret LABEL' is prompted for twice. A profile
-with a !secret or with identities is signed in a private temporary directory
-and stored only in the PKI keychain (pki_keychain.py profile-get); the
-extracted file holds those passwords in plain text. A literal value under a
-password-like key is an error. umask is 077.
+with a !secret or with identities holds them in plain text (signing does not
+encrypt). A literal value under a password-like key is an error. umask is 077.
 
 Placeholders: ${VAR} and ${VAR|rdns|lower|upper} in text fields come from
 pki_identity.env. A missing 'identifier:' defaults to
@@ -21,8 +21,8 @@ pki_identity.env. A missing 'identifier:' defaults to
 
 Environment: CERTDIR, CERTNAME (codesign), ISSUERCADIR, ISSUERCANAME
 (intermediate), SMIME_ISSUERCADIR, SMIME_ISSUERCANAME (intermediate_smime),
-HASH_DIGEST (sha256), CERTSHA1, UNSIGNED_DIR, SIGNED_DIR, IDENTITY_DOMAIN_VAR
-(DOMAIN_NAME), PKI_ASSUME_YES.
+HASH_DIGEST (sha256), CERTSHA1, IDENTITY_DOMAIN_VAR (DOMAIN_NAME),
+PKI_ASSUME_YES.
 """
 from __future__ import annotations
 
@@ -1069,16 +1069,6 @@ def validate_profile(profile: dict[str, Any]) -> None:
 # ---------------------------------------------------------------------
 # Signing (same layout/conventions as create_codesign.sh)
 # ---------------------------------------------------------------------
-def output_dirs() -> tuple[Path, Path]:
-    unsigned = under_root(
-        os.environ.get("UNSIGNED_DIR", "mdm/mobfileconfigs-unsigned")
-    )
-    signed = under_root(
-        os.environ.get("SIGNED_DIR", "mdm/mobfileconfigs-signed")
-    )
-    return unsigned, signed
-
-
 def collect_crls() -> list[tuple[Path, x509.CertificateRevocationList]]:
     """Load every CRL under PKI_ROOT/*/crl/. In each directory
     prefer '*.crl.pem'; if there is none, use '*.crl' (DER or PEM).
@@ -1272,7 +1262,7 @@ def main() -> None:
     )
     ap.add_argument("yaml_file", help="path to YAML (relative to PKI_ROOT)")
     ap.add_argument("--no-sign", action="store_true",
-                    help="only write the unsigned profile")
+                    help="store the profile unsigned")
     args = ap.parse_args()
 
     build(args)
@@ -1355,24 +1345,30 @@ def confirm_replace(stem: str, ident: str) -> bool:
     return not exists or confirm(f"Replace the stored profile '{stem}'?")
 
 
-def store_sensitive(profile: dict[str, Any], stem: str,
-                    labels: list[str]) -> None:
-    """Sign in a private temporary directory; keep only the keychain copy."""
+def store_profile(profile: dict[str, Any], stem: str, labels: list[str],
+                  secret: bool, do_sign: bool) -> None:
+    """Sign (unless --no-sign) in a private temporary directory; keep only
+    the keychain copy."""
     with tempfile.TemporaryDirectory(prefix="pki-profile.") as td:
-        unsigned = Path(td) / "unsigned" / f"{stem}.mobileconfig"
-        signed = Path(td) / "signed" / f"{stem}.mobileconfig"
-        unsigned.parent.mkdir()
-        unsigned.write_bytes(plistlib.dumps(profile, fmt=plistlib.FMT_XML))
-        sign(unsigned, signed)
+        item = Path(td) / "unsigned" / f"{stem}.mobileconfig"
+        item.parent.mkdir()
+        item.write_bytes(plistlib.dumps(profile, fmt=plistlib.FMT_XML))
+        if shutil.which("plutil"):
+            subprocess.run(["plutil", "-lint", str(item)], check=True)
+        if do_sign:
+            signed = Path(td) / "signed" / f"{stem}.mobileconfig"
+            sign(item, signed)
+            item = signed
         try:
-            pki_keychain.profile_set(stem, signed,
-                                     profile["PayloadIdentifier"], labels)
+            pki_keychain.profile_set(stem, item, profile["PayloadIdentifier"],
+                                     labels, secret)
         except pki_keychain.KeychainError as e:
             die(str(e))
     print(f"  stored in the PKI keychain: mobileconfig :: {stem}")
     print(f"  extract: bin/pki_keychain.py profile-get --name {stem} "
-          f"--out FILE")
-    print("  the extracted file holds passwords in plain text")
+          f"[--unsigned] --out FILE")
+    if secret:
+        print("  the extracted file holds passwords in plain text")
 
 
 def build(args: argparse.Namespace) -> None:
@@ -1431,73 +1427,15 @@ def build(args: argparse.Namespace) -> None:
     profile = build_profile(cfg, cert_dirs, identity_payloads)
     labels = list(dict.fromkeys(secret_labels(profile)))
     # secrets, or S/MIME identities (their .p12 passwords are embedded)
-    sensitive = bool(labels) or bool(identity_payloads)
-    if sensitive and args.no_sign:
-        die("a profile with secrets is stored signed; drop --no-sign")
-    if sensitive and not confirm_replace(ypath.stem,
-                                         profile["PayloadIdentifier"]):
+    secret = bool(labels) or bool(identity_payloads)
+    if not confirm_replace(ypath.stem, profile["PayloadIdentifier"]):
         die("not replacing; nothing was changed.")
     values = {label: prompt_secret(label) for label in labels}
     profile = map_secrets(profile, values.__getitem__)
     values.clear()
     check_plistable(profile)
     validate_profile(profile)
-    if sensitive:
-        store_sensitive(profile, ypath.stem, labels)
-        return
-
-    unsigned_dir, signed_dir = output_dirs()
-    for d in (unsigned_dir, signed_dir):
-        if not d.resolve().is_relative_to(MDM_DIR.resolve()):
-            die(f"output directory {d} must be inside {MDM_DIR}")
-    unsigned_dir.mkdir(parents=True, exist_ok=True)
-    unsigned = unsigned_dir / (ypath.stem + ".mobileconfig")
-    signed = signed_dir / unsigned.name
-
-    # What this run replaces: this profile's own files, and any other
-    # profile with the same PayloadIdentifier (two such profiles replace
-    # each other on a device). Both the unsigned and the signed copy go.
-    old: dict[Path, str] = {}
-
-    def mark(p: Path, why: str) -> None:
-        if p.exists() or p.is_symlink():
-            old.setdefault(p, why)
-
-    mark(unsigned, "same file name")
-    mark(signed, "same file name")
-    for other in unsigned_dir.glob("*.mobileconfig"):
-        if other.resolve() == unsigned.resolve():
-            continue
-        try:
-            other_id = plistlib.loads(other.read_bytes()).get(
-                "PayloadIdentifier"
-            )
-        except Exception:
-            continue
-        if other_id == profile["PayloadIdentifier"]:
-            why = f"same PayloadIdentifier '{other_id}'"
-            mark(other, why)
-            mark(signed_dir / other.name, why)
-
-    if old:
-        print("\nThese existing profile files would be replaced:",
-              file=sys.stderr)
-        for p, why in old.items():
-            print(f"  {p.relative_to(PKI_ROOT)}  ({why})", file=sys.stderr)
-        if not confirm("Overwrite them (unsigned and signed)?"):
-            die("not overwriting; nothing was changed.")
-        for p in old:
-            p.unlink()
-
-    unsigned.write_bytes(plistlib.dumps(profile, fmt=plistlib.FMT_XML))
-    plistlib.loads(unsigned.read_bytes())  # round-trip sanity check
-    if shutil.which("plutil"):
-        subprocess.run(["plutil", "-lint", str(unsigned)], check=True)
-    print(f"  wrote {unsigned}")
-
-    if not args.no_sign:
-        sign(unsigned, signed)
-        print(f"  wrote {signed}")
+    store_profile(profile, ypath.stem, labels, secret, not args.no_sign)
 
 
 if __name__ == "__main__":

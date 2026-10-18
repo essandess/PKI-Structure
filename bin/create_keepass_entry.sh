@@ -6,15 +6,17 @@
 #            [--title TITLE] [--group PATH] [--individual-smime-passwords]
 #            [--force-update] [--no-backup] [--kp-prompt] [-n|--dry-run]
 #            [--root-cert FILE] [--export-master] [--master-title TITLE]
-#            [INSTALLER|PROFILE]
+#            [--trust NAME]... [--no-trust] [INSTALLER|PROFILE]
 #        create_keepass_entry.sh --xml-out FILE [--title TITLE]
 #            [--group PATH] [--individual-smime-passwords] [--root-cert FILE]
 #            [--export-master] [INSTALLER]
 #
 # INSTALLER: an encrypted installer from create_credentials.sh. Its signature
 # is checked, then its keychain password opens the payload; it is never run.
-# PROFILE: a name from `pki_keychain.py profile-list`; its .mobileconfig
-# (PLAIN TEXT secrets) is attached to the entry 'MDM profile: NAME'.
+# PROFILE: a name from `pki_keychain.py profile-list`. Its .mobileconfig and
+# the trust profiles (--trust NAME, default: stored profiles named *-trust;
+# --no-trust: none) are attached to the entry 'MDM profile: NAME'. Secrets in
+# a profile are in PLAIN TEXT.
 # --export-master stores the PKI master password. Entries are merged into
 # --db (backed up first); UUIDs derive from the title, so re-runs update in
 # place. Secrets never appear in argv or the environment. See README.md.
@@ -60,7 +62,7 @@ Usage: create_keepass_entry.sh --db FILE [--key-file FILE | --no-password]
          [--title TITLE] [--group PATH] [--individual-smime-passwords]
          [--force-update] [--no-backup] [--kp-prompt] [-n|--dry-run]
          [--root-cert FILE] [--export-master] [--master-title TITLE]
-         [INSTALLER|PROFILE]
+         [--trust NAME]... [--no-trust] [INSTALLER|PROFILE]
        create_keepass_entry.sh --xml-out FILE [--group PATH]
          [--individual-smime-passwords] [--root-cert FILE]
          [--export-master] [INSTALLER]
@@ -90,6 +92,7 @@ KEEPASS_GROUP_NAME="Password"
 
 DB="" KEYFILE="" NOPASS=0 TITLE="" GROUP="" XML_OUT="" ROOT_CERT=""
 FORCE=0 BACKUP=1 KP_PROMPT=0 DRYRUN=0 INDIVIDUAL=0
+TRUST=() NO_TRUST=0
 EXPORT_MASTER=0 MASTER_TITLE="PKI-Structure KeePassXC Passphrase"
 MASTER_SERVICE="com.github.essandess.pki-structure.keepassxc-passphrase"
 ARGS=()
@@ -107,6 +110,8 @@ while [ $# -gt 0 ]; do
         --root-cert)     need_arg $# "$1"; ROOT_CERT=$2; shift 2 ;;
         --export-master) EXPORT_MASTER=1; shift ;;
         --master-title)  need_arg $# "$1"; MASTER_TITLE=$2; shift 2 ;;
+        --trust)         need_arg $# "$1"; TRUST+=("$2"); shift 2 ;;
+        --no-trust)      NO_TRUST=1; shift ;;
         --individual-smime-passwords) INDIVIDUAL=1; shift ;;
         --force-update)  FORCE=1; shift ;;
         --no-backup)     BACKUP=0; shift ;;
@@ -508,8 +513,8 @@ print_plan() {
         echo "  (PKI keychain item ${MASTER_SERVICE})"
     fi
     if [ -n "${PROFILE}" ]; then
-        echo "MDM profile: ${PROFILE} (PKI keychain; PLAIN TEXT passwords)"
-        echo "Entry:       ${GROUP}/${TITLE}, attachment ${PROFILE}.mobileconfig"
+        echo "Profile:     ${PROFILE} (PKI keychain)"
+        echo "Entry:       ${GROUP}/${TITLE}: profile + trust profiles"
         echo "Database:    ${DB}"
         return 0
     fi
@@ -816,20 +821,35 @@ backup_db() {
 }
 
 # keepassxc-cli cannot import attachments from XML, so a profile goes into
-# --db directly: group, entry, attachment. Unchanged content is skipped.
+# --db directly: group, entry, attachments (the profile, then trust profiles).
 if [ -n "${PROFILE}" ]; then
     ENTRY="${GROUP}/${TITLE}"
-    PROFILE_FILE="${TMPD}/${PROFILE}.mobileconfig"
-    "${PYTHON}" "${SCRIPT_DIR}/pki_keychain.py" profile-get --name "${PROFILE}" \
-        --out "${PROFILE_FILE}" 2>"${TMPD}/profile.err" \
-        || { cat "${TMPD}/profile.err" >&2; die "cannot extract profile '${PROFILE}'"; }
-    SHA=$("${OPENSSL}" dgst -sha256 "${PROFILE_FILE}" | sed 's/^.*= *//')
+    ATTACH=("${PROFILE}")
+    if [ "${NO_TRUST}" -eq 0 ]; then
+        if [ "${#TRUST[@]}" -eq 0 ]; then   # default: stored profiles named *-trust
+            while IFS= read -r t; do
+                case ${t} in *-trust) TRUST+=("${t}") ;; esac
+            done <<<"${LISTED}"
+        fi
+        for t in ${TRUST[@]+"${TRUST[@]}"}; do
+            if [ "${t}" != "${PROFILE}" ]; then ATTACH+=("${t}"); fi
+        done
+    fi
+    SHAS="" SECRET=0
+    for t in "${ATTACH[@]}"; do
+        "${PYTHON}" "${SCRIPT_DIR}/pki_keychain.py" profile-get --name "${t}" \
+            --out "${TMPD}/${t}.mobileconfig" 2>"${TMPD}/profile.err" \
+            || { cat "${TMPD}/profile.err" >&2; die "cannot extract profile '${t}'"; }
+        if grep -q 'PLAIN TEXT' "${TMPD}/profile.err"; then SECRET=1; fi
+        SHAS+="SHA-256 $("${OPENSSL}" dgst -sha256 "${TMPD}/${t}.mobileconfig" | sed 's/^.*= *//') ${t}.mobileconfig"$'\n'
+    done
+    SHAS=${SHAS%$'\n'}
     LISTING=$(kp 1 ls -R -f "${DB_ARGS[@]}" "${DB}")
     HAVE_ENTRY=0
     if grep -qxF -- "${ENTRY}" <<<"${LISTING}"; then HAVE_ENTRY=1; fi
     if [ "${HAVE_ENTRY}" -eq 1 ] && [ "${FORCE}" -eq 0 ]; then
         OLD_NOTES=$(kp 1 show -a Notes "${DB_ARGS[@]}" "${DB}" "${ENTRY}") || OLD_NOTES=""
-        if grep -qF -- "SHA-256 ${SHA}" <<<"${OLD_NOTES}"; then
+        if [ "$(grep '^SHA-256 ' <<<"${OLD_NOTES}" || true)" = "${SHAS}" ]; then
             echo "${ENTRY} is up to date in ${DB##*/}."
             exit 0
         fi
@@ -845,20 +865,26 @@ if [ -n "${PROFILE}" ]; then
         # leave no copy of the old profile in the recycle bin
         kp 1 rm "${DB_ARGS[@]}" "${DB}" "Recycle Bin/${TITLE}" >/dev/null 2>&1 || true
     fi
-    NOTES=$(printf '%s\n' \
-        "Signed MDM profile '${PROFILE}' (PKI keychain). The attachment" \
-        "holds account passwords in PLAIN TEXT." \
-        "SHA-256 ${SHA}" \
-        "Added $(date -u '+%Y-%m-%dT%H:%M:%SZ').")
+    NOTES=$(
+        echo "Configuration profile '${PROFILE}' (PKI keychain)."
+        [ "${SECRET}" = 0 ] || echo "An attachment holds passwords in PLAIN TEXT."
+        [ "${#ATTACH[@]}" -lt 2 ] || echo "Install the trust profile(s) first."
+        echo "${SHAS}"
+        echo "Added $(date -u '+%Y-%m-%dT%H:%M:%SZ')."
+    )
     kp 1 add "${DB_ARGS[@]}" --notes "${NOTES}" "${DB}" "${ENTRY}" >/dev/null \
         || die "cannot add ${ENTRY}"
-    if ! kp 1 attachment-import "${DB_ARGS[@]}" "${DB}" "${ENTRY}" \
-            "${PROFILE}.mobileconfig" "${PROFILE_FILE}" >/dev/null; then
-        kp 1 rm "${DB_ARGS[@]}" "${DB}" "${ENTRY}" >/dev/null 2>&1 || true
-        die "cannot attach ${PROFILE}.mobileconfig"
+    for t in "${ATTACH[@]}"; do
+        if ! kp 1 attachment-import "${DB_ARGS[@]}" "${DB}" "${ENTRY}" \
+                "${t}.mobileconfig" "${TMPD}/${t}.mobileconfig" >/dev/null; then
+            kp 1 rm "${DB_ARGS[@]}" "${DB}" "${ENTRY}" >/dev/null 2>&1 || true
+            die "cannot attach ${t}.mobileconfig"
+        fi
+    done
+    echo "Added '${ENTRY}' with: ${ATTACH[*]}"
+    if [ "${SECRET}" = 1 ]; then
+        echo "It holds passwords in PLAIN TEXT: protect ${DB##*/}."
     fi
-    echo "Added '${ENTRY}' with the attachment ${PROFILE}.mobileconfig."
-    echo "It holds account passwords in PLAIN TEXT: protect ${DB##*/}."
     exit 0
 fi
 

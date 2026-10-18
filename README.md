@@ -12,8 +12,8 @@ file (login keychain item for other users) and separable keyfile.
 | `revoke_certificate.sh`, `create_crl.sh`, `publish_crls.sh` | Revocation, CRL generation and publication |
 | `create_credentials.sh` | Signed macOS install scripts for CA certificates and S/MIME identities |
 | `verify_installer.sh` | Signature check of an installer without running it |
-| `create_keepass_entry.sh` | Install-script and master passwords, and stored MDM profiles, into KeePassXC |
-| `configurate_yaml.py` | Signed `.mobileconfig` profiles from YAML |
+| `create_keepass_entry.sh` | Install-script and master passwords, and stored profiles with their trust profiles, into KeePassXC |
+| `configurate_yaml.py` | `.mobileconfig` profiles from YAML, stored in the keychain |
 | `create_organization_{smime,mdm,credentials}.sh` | Per-deployment driver scripts, seeded from `.sample` |
 | `certs_that_expire_soon.sh`, `updatedb_and_delete_expired_certs.sh` | Expiry reports and cleanup |
 | `replicate_pki_structure.sh`, `clean_everything_and_create_pki.sh` | New deployment; full clean or rebuild |
@@ -64,8 +64,8 @@ root/  intermediate/  intermediate_smime/  server/  codesign/  smime/
 privoxy/            separate trust anchor
 privoxy/adblock2privoxy/
 keepassxc/          secrets; keychain/ keyfile/ master/
-mdm/                installers and profiles; keep out of version control
-    yaml/  mobfileconfigs-unsigned/  mobfileconfigs-signed/  credentials/
+mdm/                YAML sources and installers; keep out of version control
+    yaml/  credentials/
 ```
 
 Each PKI directory has `certs/` (`*.cert.pem`, `*.chain.pem`, `*.cer`),
@@ -144,7 +144,7 @@ bin/pki_keychain.py list | prune [-n] | reap          # reap: failed issuances
 bin/pki_keychain.py export-master | import-master     # escrow / restore (stdin)
 bin/pki_keychain.py verify | kdf-check | selftest     # master + database; KDF; keychain
 bin/pki_keychain.py installer-set | installer-get --name NAME   # installer passwords
-bin/pki_keychain.py profile-get --name NAME --out FILE          # stored MDM profile
+bin/pki_keychain.py profile-get --name NAME [--unsigned] --out FILE          # stored profile
 bin/pki_keychain.py profile-list | profile-rm --name NAME
 ```
 
@@ -379,7 +379,8 @@ It is the one secret passed through the environment; prefer the prompt.
 
 ```sh
 bin/create_keepass_entry.sh --db FILE [--key-file FILE | --no-password] [--title T] [--group PATH]
-    [--individual-smime-passwords] [--force-update] [--no-backup] [--kp-prompt] [-n] INSTALLER|PROFILE
+    [--individual-smime-passwords] [--force-update] [--no-backup] [--kp-prompt] [-n]
+    [--trust NAME]... [--no-trust] INSTALLER|PROFILE
 bin/create_keepass_entry.sh --xml-out FILE [--individual-smime-passwords] INSTALLER
 ```
 
@@ -395,11 +396,13 @@ password fails before anything is stored. `--ca-certs-only` installers are unenc
 * **`--individual-smime-passwords`:** also one protected attribute per S/MIME
   issuance (`<certname> [<issued>]`), each checked against its `.p12`.
 * **`PROFILE`:** an argument that is not a file names a profile in
-  `pki_keychain.py profile-list`. Its `.mobileconfig` is attached to the entry
-  `MDM profile: NAME` in the group `Profile` (created if absent); the
-  attachment holds account passwords in plain text. Not with `--xml-out` or
-  `--export-master`; needs `keepassxc-cli` 2.7+. A re-run with unchanged
-  content is skipped; `--force-update` replaces the entry.
+  `pki_keychain.py profile-list`. Its `.mobileconfig` and the trust profiles
+  (`--trust NAME`, repeatable; default: stored profiles named `*-trust`;
+  `--no-trust`: none) are attached to the entry `MDM profile: NAME` in the
+  group `Profile` (created if absent). Install the trust profile first. An
+  attachment holds passwords in plain text if its profile has secrets. Not
+  with `--xml-out` or `--export-master`; needs `keepassxc-cli` 2.7+. A re-run
+  with unchanged content is skipped; `--force-update` replaces the entry.
 * Entry UUIDs derive from title and group, so re-runs update in place.
   The entry is imported into a staging database, previewed with `merge
   --dry-run`, and merged; `--db` is first copied to `DB.bak-<time>` unless
@@ -417,17 +420,20 @@ Copy values with `keepassxc-cli clip DB 'TITLE'` (installer password) or
 bin/configurate_yaml.py mdm/yaml/myorganization-trust.yaml [--no-sign]
 ```
 
-Builds an unsigned `.mobileconfig`, then signs it (DER CMS, signer per
+Builds a `.mobileconfig`, signs it (DER CMS, signer per
 [Signer selection](#signer-selection); signature and payload round-trip
-verified). YAML and output directories must be under `mdm/`; relative
-paths resolve against the PKI root. `create_organization_mdm.sh` runs this
-deployment's list of profiles and takes no arguments. Never edit a profile
-after signing; regenerate.
+verified) and stores it as the attachment of the PKI keychain entry
+`mobileconfig :: <yaml name>`; nothing is written to `mdm/`. `--no-sign`
+stores it unsigned. The YAML must be under `mdm/`; relative paths resolve
+against the PKI root. `create_organization_mdm.sh` runs this deployment's
+list of profiles and takes no arguments. Never edit a profile after
+signing; regenerate. At least one of `certificates`, `payloads`,
+`identities`, `accounts` is required.
 
-Output, for a profile without secrets:
-`mdm/mobfileconfigs-{unsigned,signed}/<yaml name>.mobileconfig`.
-At least one of `certificates`, `payloads`, `identities`, `accounts` is
-required.
+```sh
+bin/pki_keychain.py profile-list
+bin/pki_keychain.py profile-get --name NAME [--unsigned] --out FILE
+```
 
 | Key | Description |
 |---|---|
@@ -466,31 +472,22 @@ required.
   payload with the same `id` overrides field by field); `smime.identity` must
   be in `identities`. A `settings:` mapping on an entry takes Apple keys.
   Passwords are `!secret LABEL` (see Secrets).
-* **Overwrite.** If the output exists, or another profile in
-  `mobfileconfigs-unsigned/` has the same `PayloadIdentifier`, the unsigned and
-  signed files to be replaced are listed and `[y/N]` is asked; `PKI_ASSUME_YES=1`
-  answers yes.
+* **Replace.** A stored profile of the same name is replaced after `[y/N]`
+  (`PKI_ASSUME_YES=1` answers yes); one with the same `PayloadIdentifier`
+  under another name is an error.
 
 Environment: `CERTDIR`, `CERTNAME` (default `codesign`), `ISSUERCADIR`,
 `ISSUERCANAME` (default `intermediate`), `SMIME_ISSUERCADIR`,
 `SMIME_ISSUERCANAME` (default `intermediate_smime`), `HASH_DIGEST`
-(`sha256`), `CERTSHA1`, `UNSIGNED_DIR`, `SIGNED_DIR`, `IDENTITY_DOMAIN_VAR`
+(`sha256`), `CERTSHA1`, `IDENTITY_DOMAIN_VAR`
 (`DOMAIN_NAME`), `PKI_ASSUME_YES`. CRLs are read from `*/crl/*.crl.pem`, else
 `*/crl/*.crl`.
 
 **Secrets.** No YAML holds a secret. Write `!secret LABEL` for a password: it
-is prompted for twice at build time. A profile with any `!secret`, or with
-`identities` (the `.p12` passwords are embedded), is signed in a private
-temporary directory and stored only as the attachment of the KeePassXC entry
-`mobileconfig :: <yaml name>`; nothing is written to `mobfileconfigs-*`.
-A literal under a password-like key is an error. Extract a stored profile:
-
-```sh
-bin/pki_keychain.py profile-get --name NAME --out FILE
-```
-
-Signing does not encrypt: the extracted file holds those passwords in plain
-text. Use it at once, then delete it. `configurate_yaml.py` sets `umask 077`;
+is prompted for twice at build time. A literal under a password-like key is an
+error. A profile with a `!secret` or with `identities` (the `.p12` passwords
+are embedded) holds them in plain text; signing does not encrypt. Extract it,
+use it at once, then delete it. `configurate_yaml.py` sets `umask 077`;
 `create_credentials.sh` sets `mdm/` and `credentials/` to 0700, installers
 0750; `replicate_pki_structure.sh` audits `mdm/` at the destination.
 

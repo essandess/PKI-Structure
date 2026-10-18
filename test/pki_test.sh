@@ -35,7 +35,7 @@ step() { printf '\n== %s\n' "$*"; }
 
 # Keep caller overrides from redirecting the tools at another tree or site.
 unset CERTDIR CERTNAME ISSUERCADIR ISSUERCANAME SMIME_ISSUERCADIR SMIME_ISSUERCANAME \
-      UNSIGNED_DIR SIGNED_DIR PKI_STRUCTURE_SRC PKI_SITE_DIR \
+      PKI_STRUCTURE_SRC PKI_SITE_DIR \
       PKI_SITE_GROUP PKI_ROOT_SHA256 PKI_ROOT_CRL PKI_INTERMEDIATE_CRL \
       PKI_CODESIGN_DIR PKI_CODESIGN_NAME PKI_CODESIGN_SHA1 CERTSHA1 \
       PKI_KEYCHAIN_DIR PKI_KEYCHAIN_ITEM PKI_KEYCHAIN_FILE PKI_KEYCHAIN_KEYFILE
@@ -680,27 +680,24 @@ check "keepass: --export-master re-run is idempotent"   kpmaster
 step "MDM profiles"
 export PTY_SECRET="pki-test-secret-0042"
 run "MDM profiles" ptyrun "${INST_PW_FILE}" bin/create_organization_mdm.sh
-no_profile_on_disk() { [ -z "$(find mdm -name "$1.mobileconfig" | sed -n 1p)" ]; }
+no_profile_on_disk() { [ -z "$(find mdm -name '*.mobileconfig' | sed -n 1p)" ]; }
 no_secret_in_tree() {
     [ -z "$(grep -rlaF --exclude-dir=.git --exclude=pki_test.sh -- "${PTY_SECRET}" . 2>/dev/null | sed -n 1p)" ]
 }
-p=myorganization-trust
-U="mdm/mobfileconfigs-unsigned/${p}.mobileconfig"
-S="mdm/mobfileconfigs-signed/${p}.mobileconfig"
-check "${p}: signature chains to root, content intact" verify_profile "${S}" "${U}"
-tamper_profile "${S}" "${TMPD}/${p}.tampered" || die "tamper_profile failed"
-fails "${p}: tampered profile rejected"     "${OPENSSL}" smime -verify -binary -inform der \
-    -in "${TMPD}/${p}.tampered" -CAfile root/certs/root.cert.pem -purpose any -out /dev/null
-for p in myorganization-settings persona-settings; do
+for p in myorganization-trust myorganization-settings persona-settings; do
     S="${TMPD}/${p}.mobileconfig"
     run "${p}: extract from the keychain" KC profile-get --name "${p}" --out "${S}"
+    run "${p}: extract unsigned" KC profile-get --name "${p}" --unsigned --out "${TMPD}/${p}.unsigned"
     check "${p}: signature chains to root" verify_signed "${S}" "${TMPD}/${p}.content"
-    check "${p}: holds the prompted secret" grep -aqF -- "${PTY_SECRET}" "${TMPD}/${p}.content"
-    check "${p}: not written to mdm/" no_profile_on_disk "${p}"
+    check "${p}: --unsigned is the signed content" cmp -s "${TMPD}/${p}.content" "${TMPD}/${p}.unsigned"
     tamper_profile "${S}" "${TMPD}/${p}.tampered" || die "tamper_profile failed"
-    fails "${p}: tampered profile rejected"     "${OPENSSL}" smime -verify -binary -inform der \
+    fails "${p}: tampered profile rejected" "${OPENSSL}" smime -verify -binary -inform der \
         -in "${TMPD}/${p}.tampered" -CAfile root/certs/root.cert.pem -purpose any -out /dev/null
 done
+for p in myorganization-settings persona-settings; do
+    check "${p}: holds the prompted secret" grep -aqF -- "${PTY_SECRET}" "${TMPD}/${p}.unsigned"
+done
+check "no profile written to mdm/" no_profile_on_disk
 check "no prompted secret on disk in the tree" no_secret_in_tree
 refuse "profile-get refuses an existing file" "exists" KC profile-get --name persona-settings \
     --out "${TMPD}/persona-settings.mobileconfig"
@@ -713,7 +710,7 @@ refuse "literal secret in YAML rejected" "literal secret" \
     "${PYTHON}" bin/configurate_yaml.py mdm/yaml/literal-test.yaml
 rm -f mdm/yaml/literal-test.yaml
 trust_profile_ok() {
-    "${PYTHON}" - mdm/mobfileconfigs-unsigned/myorganization-trust.mobileconfig root/certs/root.cert.pem <<'PY'
+    "${PYTHON}" - "${TMPD}/myorganization-trust.unsigned" root/certs/root.cert.pem <<'PY'
 import hashlib
 import plistlib
 import sys
@@ -732,6 +729,23 @@ assert len(prof["PayloadUUID"]) == 36
 PY
 }
 check "trust profile: root present, CA certificates only" trust_profile_ok
+
+kp_profile() { bin/create_keepass_entry.sh --db "${DB}" --key-file "${KEYFILE}" --no-password persona-settings; }
+kp_trust_attached() {
+    "${KPCLI}" attachment-export --stdout -k "${KEYFILE}" --no-password "${DB}" \
+        "Profile/MDM profile: persona-settings" myorganization-trust.mobileconfig \
+        | cmp -s - "${TMPD}/myorganization-trust.mobileconfig"
+}
+nosign_roundtrip() {
+    KC profile-get --name myorganization-trust --out "${TMPD}/nosign.out" \
+        && cmp -s "${TMPD}/nosign.out" "${TMPD}/myorganization-trust.unsigned"
+}
+check "keepass: profile entry with its trust profile" kp_profile
+check "keepass: the trust profile is attached"        kp_trust_attached
+check "keepass: profile re-run is idempotent"         kp_profile
+run   "trust profile built with --no-sign" "${PYTHON}" bin/configurate_yaml.py mdm/yaml/myorganization-trust.yaml --no-sign
+check "--no-sign stores the unsigned plist"           nosign_roundtrip
+run   "signed trust profile restored" "${PYTHON}" bin/configurate_yaml.py mdm/yaml/myorganization-trust.yaml
 
 # ================================================================ permissions
 step "permissions"

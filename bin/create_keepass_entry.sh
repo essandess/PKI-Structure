@@ -15,8 +15,8 @@
 # is checked, then its keychain password opens the payload; it is never run.
 # PROFILE: a name from `pki_keychain.py profile-list`. Its .mobileconfig and
 # the trust profiles (--trust NAME, default: stored profiles named *-trust;
-# --no-trust: none) are attached to the entry 'MDM profile: NAME'. Secrets in
-# a profile are in PLAIN TEXT.
+# --no-trust: none) are attached to the entry 'MDM profile: NAME' in the group
+# MDM (created if absent). Secrets in a profile are in PLAIN TEXT.
 # --export-master stores the PKI master password. Entries are merged into
 # --db (backed up first); UUIDs derive from the title, so re-runs update in
 # place. Secrets never appear in argv or the environment. See README.md.
@@ -167,7 +167,7 @@ if [ -n "${INSTALLER}" ]; then
     if [ -z "${TITLE}" ]; then TITLE="S/MIME installer: ${INST_BASE}"; fi
 elif [ -n "${PROFILE}" ]; then
     TITLE=${TITLE:-"MDM profile: ${PROFILE}"}
-    GROUP=${GROUP:-Profile}
+    GROUP=${GROUP:-MDM}
 else
     TITLE=${TITLE:-${MASTER_TITLE}}
 fi

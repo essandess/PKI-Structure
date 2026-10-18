@@ -20,6 +20,7 @@ Master    192 random bits; created only when absent and never next to an
           ($PKI_KEYCHAIN_ITEM), name "PKI-Structure KeePassXC Passphrase".
 Installer passwords: entry "<installer file name>" (installer-set /
           installer-get).
+Profiles  entry "MDM/mobileconfig :: NAME" (profile-get, profile-list, profile-rm).
 Entries   one per private key, found by SHA-256 of its public key, so every
           certificate of that key (same-key renewal) finds it.
           "<id16> :: <CN>": Password = key passphrase, UserName = serial,
@@ -587,7 +588,7 @@ class Db:
 
     def rm(self, title: str) -> None:
         self.kp(["rm", self.file, title])
-        self.kp(["rm", self.file, f"Recycle Bin/{title}"], check=False)  # drop it for good
+        self.kp(["rm", self.file, f"Recycle Bin/{title.rsplit('/', 1)[-1]}"], check=False)  # drop it for good
 
 
 def get_secret(cert=None, field: str = "key", kid: str | None = None,
@@ -796,7 +797,8 @@ def cmd_installer_get(a) -> None:
     print(db.show(a.name))
 
 
-PROFILE_PREFIX = "mobileconfig :: "
+MDM_GROUP = "MDM"
+PROFILE_PATH = f"{MDM_GROUP}/mobileconfig :: "
 EXPOSED = ("WARNING: {} holds account passwords in PLAIN TEXT (signing does "
            "not encrypt). Deploy it now, then delete it and empty the Trash.")
 
@@ -811,12 +813,12 @@ def need_attachments() -> None:
 def profile_title(name: str) -> str:
     if not NAME_RE.match(name):
         fail("NAME must be a profile file stem (letters, digits, _ . -)")
-    return PROFILE_PREFIX + name
+    return PROFILE_PATH + name
 
 
 def profile_titles(db: Db) -> list[str]:
     out = db.kp(["ls", "-R", "-f", db.file]).stdout.splitlines()
-    return [t for t in out if t.startswith(PROFILE_PREFIX)]
+    return [t for t in out if t.startswith(PROFILE_PATH)]
 
 
 def profile_ident(db: Db, title: str) -> str:
@@ -855,7 +857,10 @@ def profile_set(name: str, path, ident: str, labels: list[str],
         ensure_db()
         profile_check(name, ident)
         db = Db()
-        if db.has(title):
+        listing = db.kp(["ls", "-R", "-f", db.file]).stdout.splitlines()
+        if f"{MDM_GROUP}/" not in listing:
+            db.kp(["mkdir", db.file, MDM_GROUP])
+        if title in listing:
             db.rm(title)
         db.kp(["add", db.file, title, "-u", ident, "--notes", notes])
         try:
@@ -918,7 +923,7 @@ def cmd_profile_get(a) -> None:
 
 def cmd_profile_list(a) -> None:
     for t in profile_titles(Db()):
-        print(t[len(PROFILE_PREFIX):])
+        print(t[len(PROFILE_PATH):])
 
 
 def cmd_profile_rm(a) -> None:

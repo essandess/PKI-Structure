@@ -6,7 +6,8 @@ Usage (any directory):
     bin/configurate_yaml.py mdm/yaml/NAME.yaml [--no-sign]
 
 The profile is signed and stored only as the attachment of the keychain entry
-'mobileconfig :: NAME' (pki_keychain.py profile-get [--unsigned]); --no-sign
+'MDM/mobileconfig :: NAME' (pki_keychain.py profile-get [--unsigned]);
+--no-sign
 stores it unsigned. Paths are relative to PKI_ROOT (the parent of bin/), which
 the script enters. The YAML must be under mdm/. Keys and examples: README.md,
 "Configuration profiles", and mdm/yaml/*.sample.
@@ -1364,7 +1365,7 @@ def store_profile(profile: dict[str, Any], stem: str, labels: list[str],
                                      labels, secret)
         except pki_keychain.KeychainError as e:
             die(str(e))
-    print(f"  stored in the PKI keychain: mobileconfig :: {stem}")
+    print(f"  stored in the PKI keychain: {pki_keychain.profile_title(stem)}")
     print(f"  extract: bin/pki_keychain.py profile-get --name {stem} "
           f"[--unsigned] --out FILE")
     if secret:

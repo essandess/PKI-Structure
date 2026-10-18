@@ -399,7 +399,7 @@ password fails before anything is stored. `--ca-certs-only` installers are unenc
   `pki_keychain.py profile-list`. Its `.mobileconfig` and the trust profiles
   (`--trust NAME`, repeatable; default: stored profiles named `*-trust`;
   `--no-trust`: none) are attached to the entry `MDM profile: NAME` in the
-  group `Profile` (created if absent). Install the trust profile first. An
+  group `MDM` (created if absent). Install the trust profile first. An
   attachment holds passwords in plain text if its profile has secrets. Not
   with `--xml-out` or `--export-master`; needs `keepassxc-cli` 2.7+. A re-run
   with unchanged content is skipped; `--force-update` replaces the entry.
@@ -423,7 +423,7 @@ bin/configurate_yaml.py mdm/yaml/myorganization-trust.yaml [--no-sign]
 Builds a `.mobileconfig`, signs it (DER CMS, signer per
 [Signer selection](#signer-selection); signature and payload round-trip
 verified) and stores it as the attachment of the PKI keychain entry
-`mobileconfig :: <yaml name>`; nothing is written to `mdm/`. `--no-sign`
+`MDM/mobileconfig :: <yaml name>`; nothing is written to `mdm/`. `--no-sign`
 stores it unsigned. The YAML must be under `mdm/`; relative paths resolve
 against the PKI root. `create_organization_mdm.sh` runs this deployment's
 list of profiles and takes no arguments. Never edit a profile after

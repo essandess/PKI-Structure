@@ -642,7 +642,7 @@ fails "installer script does not embed its password" embeds_password
 step "KeePassXC"
 DB="${TMPD}/passwords.kdbx"
 KEYFILE="${TMPD}/kdbx.key"
-"${OPENSSL}" rand -hex 32 | tr -d '\n' > "${KEYFILE}"
+"${PYTHON}" -c 'import sys; sys.path.insert(0, "bin"); import pki_keychain as k; k.write_keyfile(k.Path(sys.argv[1]))' "${KEYFILE}"
 run "keepass db-create" "${KPCLI}" db-create --set-key-file "${KEYFILE}" "${DB}"
 kpentry() { bin/create_keepass_entry.sh --db "${DB}" --key-file "${KEYFILE}" --no-password --title "pki_test installer" "$@" "${INST}"; }
 kp_password_matches() {
@@ -731,10 +731,11 @@ PY
 check "trust profile: root present, CA certificates only" trust_profile_ok
 
 kp_profile() { bin/create_keepass_entry.sh --db "${DB}" --key-file "${KEYFILE}" --no-password persona-settings; }
-kp_trust_attached() {
-    "${KPCLI}" attachment-export --stdout -k "${KEYFILE}" --no-password "${DB}" \
-        "Profile/MDM profile: persona-settings" myorganization-trust.mobileconfig \
-        | cmp -s - "${TMPD}/myorganization-trust.mobileconfig"
+kp_trust_attached() {   # exported to a file, not --stdout
+    "${KPCLI}" attachment-export -k "${KEYFILE}" --no-password "${DB}" \
+        "MDM/MDM profile: persona-settings" myorganization-trust.mobileconfig \
+        "${TMPD}/attached.trust" \
+        && cmp -s "${TMPD}/attached.trust" "${TMPD}/myorganization-trust.mobileconfig"
 }
 nosign_roundtrip() {
     KC profile-get --name myorganization-trust --out "${TMPD}/nosign.out" \

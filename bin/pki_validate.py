@@ -5,11 +5,15 @@ Library for configurate_yaml.py; CLI for create_credentials.sh:
   pki_validate.py ROLE CERT --ca-bundle PEM --crl-bundle PEM --index FILE...
                   [--allow-expired] [--allow-superseded]
                   [--allow-signature-with-encryption]
-Accepted: prints the state, exit 0. Rejected: reasons on stderr, exit 1.
+  pki_validate.py signer DIR [--name PREFIX] [--sha1 HEX]   (same bundles)
+Accepted: prints the state, exit 0 (signer: the sha1 of the newest valid code
+signing certificate DIR/certs/PREFIX.<sha1>.cert.pem). Rejected: reasons on
+stderr, exit 1.
 """
 from __future__ import annotations
 
 import argparse
+import glob
 import os
 import re
 import subprocess
@@ -89,17 +93,19 @@ def validity(c: x509.Certificate) -> tuple[datetime, datetime]:
     return nb, na
 
 
-def load_ca_index(index_file: Path) -> dict[int, tuple[str, str]]:
-    """OpenSSL index.txt -> {serial: (status, revocation field)}."""
-    db: dict[int, tuple[str, str]] = {}
+def index_entries(index_file: Path) -> list[tuple[str, str, str, str]]:
+    """Rows of an OpenSSL index.txt: (status, revocation field, serial, subject)."""
+    rows = []
     for line in Path(index_file).read_text().splitlines():
         f = line.split("\t")
-        if len(f) >= 4:
-            try:
-                db[int(f[3], 16)] = (f[0], f[2])
-            except ValueError:
-                pass
-    return db
+        if len(f) >= 6:
+            rows.append((f[0], f[2], f[3], f[5]))
+    return rows
+
+
+def load_ca_index(index_file: Path) -> dict[int, tuple[str, str]]:
+    """OpenSSL index.txt -> {serial: (status, revocation field)}."""
+    return {int(s, 16): (st, rev) for st, rev, s, _ in index_entries(index_file)}
 
 
 def strict_verify() -> bool:
@@ -154,8 +160,14 @@ def crl_revocation_reason(cert: x509.Certificate, crl_bundle: Path) -> str | Non
     return None
 
 
+_CHAIN_PROBLEMS: dict[tuple[Path, Path], list[str]] = {}
+
+
 def ca_chain_problems(trust: Trust) -> list[str]:
     """Every non-root CA in the bundle must be valid and not revoked."""
+    key = (trust.ca_bundle, trust.crl_bundle)
+    if key in _CHAIN_PROBLEMS:
+        return _CHAIN_PROBLEMS[key]
     problems: list[str] = []
     pem = trust.ca_bundle.read_text()
     with tempfile.TemporaryDirectory() as td:
@@ -171,6 +183,7 @@ def ca_chain_problems(trust: Trust) -> list[str]:
             if err:
                 problems.append(
                     f"CA {common_name(ca.subject, 'certificate')}: {err}")
+    _CHAIN_PROBLEMS[key] = problems
     return problems
 
 
@@ -280,10 +293,43 @@ def validate(cert: x509.Certificate, cert_file: Path, role_name: str,
     return [], state
 
 
+def pick_signer(certdir: Path, certname: str, trust: Trust, now: datetime,
+                want: str = "") -> tuple[Path, str, list[str]]:
+    """Newest in-date code signing certificate certdir/certs/NAME.<sha1>.cert.pem
+    that validates. Returns (file, sha1, notes); notes list the rejected
+    candidates and any ambiguity. LookupError if none qualifies."""
+    pat = re.compile(rf"^{re.escape(certname)}\.([0-9a-f]{{40}})\.cert\.pem$")
+    usable: list[tuple[datetime, str, Path]] = []
+    notes: list[str] = []
+    for f in sorted((certdir / "certs").glob(f"{glob.escape(certname)}.*.cert.pem")):
+        m = pat.match(f.name)
+        if not m or (want and m.group(1) != want):
+            continue
+        c = load_cert(f)
+        problems, _ = validate(c, f, "codesign", trust, now)
+        if problems:
+            notes.append(f"skipping signer {f.name}: {problems[0]}")
+        else:
+            usable.append((validity(c)[0], m.group(1), f))
+    if not usable:
+        raise LookupError(
+            f"no usable signing certificate '{certname}.<sha1>.cert.pem' in "
+            f"{certdir / 'certs'}" + (f" with sha1 {want}" if want else "")
+            + "".join(f"\n  {n}" for n in notes))
+    usable.sort(key=lambda t: t[0])
+    _, sha, f = usable[-1]
+    if len(usable) > 1:
+        notes.append(f"{len(usable)} usable signer certificates; using the "
+                     f"newest ({sha}); pin one with its sha1")
+    return f, sha, notes
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Validate one certificate.")
-    ap.add_argument("role", choices=sorted(POLICY))
-    ap.add_argument("cert")
+    ap.add_argument("role", choices=[*sorted(POLICY), "signer"])
+    ap.add_argument("cert", help="certificate; for signer: the directory")
+    ap.add_argument("--name", default="codesign", help="signer: file name prefix")
+    ap.add_argument("--sha1", default="", help="signer: pin one certificate")
     ap.add_argument("--ca-bundle", required=True)
     ap.add_argument("--crl-bundle", required=True)
     ap.add_argument("--index", action="append", required=True)
@@ -297,6 +343,16 @@ def main() -> None:
     for f in a.index:
         index.update(load_ca_index(Path(f)))
     trust = Trust(Path(a.ca_bundle), Path(a.crl_bundle), index)
+    if a.role == "signer":
+        try:
+            _, sha, notes = pick_signer(Path(a.cert), a.name, trust,
+                                        datetime.now(timezone.utc), a.sha1.lower())
+        except LookupError as e:
+            sys.exit(str(e))
+        for n in notes:
+            print(n, file=sys.stderr)
+        print(sha)
+        return
     cert = load_cert(Path(a.cert))
     problems, state = validate(cert, Path(a.cert), a.role, trust,
                                datetime.now(timezone.utc),

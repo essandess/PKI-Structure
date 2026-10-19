@@ -52,7 +52,7 @@ from cryptography.hazmat.primitives.serialization import pkcs12
 
 # ./pki_validate.py
 from pki_validate import (Trust, common_name, load_ca_index, load_cert,
-                          validate, validity as _validity)
+                          pick_signer, validate)
 import pki_keychain
 
 # Fixed namespace so UUIDs are deterministic across rebuilds. Change
@@ -1138,64 +1138,34 @@ SignerInfo = tuple[Path, x509.Certificate, Path, Path]
 
 
 def find_signer() -> SignerInfo:
-    """Pick the newest signing cert that is in date, not revoked
-    (per the issuer's index.txt), and chains to the issuer CA
-    bundle. Layout follows create_codesign.sh."""
+    """The newest valid signing certificate (pki_validate.pick_signer).
+    Layout follows create_codesign.sh."""
     certdir_name = os.environ.get("CERTDIR", "codesign")
     certname = os.environ.get("CERTNAME", certdir_name)
     certdir = under_root(certdir_name)
-    want = os.environ.get("CERTSHA1", "").lower()
-
     ca_bundle, ca_db, crls = load_issuer_context(
         "ISSUERCADIR", "ISSUERCANAME", "intermediate"
     )
-
-    now = datetime.now(timezone.utc)
-    pat = re.compile(rf"^{re.escape(certname)}\.([0-9a-f]{{40}})\.cert\.pem$")
-    usable: list[tuple[datetime, str, Path, x509.Certificate]] = []
-    rejected: list[tuple[Path, str]] = []
     with tempfile.TemporaryDirectory() as td:
         crl_bundle = Path(td) / "crls.pem"
         crl_bundle.write_bytes(
             b"".join(c.public_bytes(serialization.Encoding.PEM)
                     for _, c in crls)
         )
-        for f in sorted((certdir / "certs").glob(
-            f"{glob.escape(certname)}.*.cert.pem"
-        )):
-            m = pat.match(f.name)
-            if not m or (want and m.group(1) != want):
-                continue
-            c = load_cert(f)
-            problems, _ = validate(
-                c, f, "codesign", Trust(ca_bundle, crl_bundle, ca_db), now
-            )
-            if problems:
-                rejected.append((f, problems[0]))
-            else:
-                usable.append((_validity(c)[0], m.group(1), f, c))
-
-    for f, why in rejected:
-        print(f"  skipping signer {f.name}: {why}", file=sys.stderr)
-    if not usable:
-        die(f"no usable signing certificate "
-            f"'{certname}.<sha1>.cert.pem' in {certdir / 'certs'}"
-            + (f" with sha1 {want}" if want else "")
-            + (" (all candidates rejected, see above)" if rejected
-               else " (none found)"))
-
-    usable.sort(key=lambda t: t[0])
-    _, sha, cert_file, cert = usable[-1]  # newest usable
-    if len(usable) > 1:
-        print(f"  note: {len(usable)} usable signer certs found, "
-              f"using newest ({sha}); set CERTSHA1 to override",
-              file=sys.stderr)
-
+        try:
+            cert_file, sha, notes = pick_signer(
+                certdir, certname, Trust(ca_bundle, crl_bundle, ca_db),
+                datetime.now(timezone.utc),
+                os.environ.get("CERTSHA1", "").lower())
+        except LookupError as e:
+            die(str(e))
+    for n in notes:
+        print(f"  {n}", file=sys.stderr)
     key = certdir / "private" / f"{certname}.{sha}.key.pem"
     chain = certdir / "certs" / f"{certname}.{sha}.chain.pem"
     if not key.is_file():
         die(f"missing {key}")
-    return cert_file, cert, key, chain
+    return cert_file, load_cert(cert_file), key, chain
 
 
 def sign(unsigned: Path, signed: Path) -> None:

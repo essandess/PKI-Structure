@@ -168,7 +168,7 @@ crl_refresh_reason() {
     fi
 
     # Revoked serials, leading zeros dropped, one per line, sorted
-    in_index=$(awk -F'\t' '$1 == "R" { s = toupper($4); sub(/^0+/, "", s); print s }' "${CERTDIR}/index.txt" | sort)
+    in_index=$("${PYTHON}" "${PKI_ROOT}/bin/pki_index.py" revoked "${CERTDIR}/index.txt" | sort)
     in_crl=$("${OPENSSL}" crl -noout -text -in "${CRLOUT}" \
 		 | awk '/^ *Serial Number:/ { s = toupper($NF); sub(/^0+/, "", s); print s }' | sort)
     if [ "${in_index}" != "${in_crl}" ]; then

@@ -4,7 +4,7 @@
 Layout    keepassxc/ (0700) holds keychain/, keyfile/ and master/.
 Database  $PKI_KEYCHAIN_DIR (default keepassxc/keychain)/pki-structure.kdbx;
           dir 0700, file 0600. KDBX4, Argon2id, 64 MiB, 4 lanes,
-          at least $PKI_KEYCHAIN_KDF_ROUNDS (16) rounds; written here because
+          $PKI_KEYCHAIN_KDF_ROUNDS (16) rounds; written here because
           keepassxc-cli db-create makes KDBX3.
 Key file  $PKI_KEYCHAIN_KEYFILE (default keepassxc/keyfile/pki-structure.keyx),
           KeePassXC XML v2, 0600. Required to open the database; keep a copy
@@ -70,7 +70,6 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,7 +86,6 @@ DB_NAME = "pki-structure.kdbx"
 KEYFILE_NAME = "pki-structure.keyx"
 SECURITY = "/usr/bin/security"
 ERR_NOT_FOUND = 44  # security(1) exit status for errSecItemNotFound
-KDF_MS = 250  # 1/4 s
 KDF_ROUNDS_MIN = 16  # master is 192 random bits: a slow KDF adds nothing
 KDF_ROUNDS = int(os.environ.get("PKI_KEYCHAIN_KDF_ROUNDS") or KDF_ROUNDS_MIN)
 KDF_MEM_MIB, KDF_LANES = 64, 4
@@ -383,8 +381,8 @@ def keyfile_key(kf: Path) -> bytes:
 
 
 def make_kdbx4(path: Path, password: str, kf: Path) -> None:
-    """Write an empty KDBX4 database (AES-256, Argon2id, KDF_MEM_MIB x KDF_LANES, iterations
-    calibrated to KDF_MS) keyed by password + key file."""
+    """Write an empty KDBX4 database (AES-256, Argon2id, KDF_MEM_MIB x KDF_LANES,
+    KDF_ROUNDS iterations) keyed by password + key file."""
     from cryptography.hazmat.primitives import padding
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
     try:
@@ -395,15 +393,10 @@ def make_kdbx4(path: Path, password: str, kf: Path) -> None:
     composite = hashlib.sha256(hashlib.sha256(password.encode()).digest() + keyfile_key(kf)).digest()
     seed, iv, salt = os.urandom(32), os.urandom(16), os.urandom(32)
 
-    def argon(rounds: int) -> bytes:
-        return Argon2id(salt=salt, length=32,
-                        iterations=rounds, lanes=KDF_LANES,
-                        memory_cost=KDF_MEM_MIB * 1024).derive(composite)
-
-    t0 = time.perf_counter()
-    argon(1)
-    rounds = max(KDF_ROUNDS, round(KDF_MS / max(1e-3, (time.perf_counter() - t0) * 1000)))
-    transformed = argon(rounds)
+    rounds = KDF_ROUNDS
+    transformed = Argon2id(salt=salt, length=32, iterations=rounds,
+                           lanes=KDF_LANES,
+                           memory_cost=KDF_MEM_MIB * 1024).derive(composite)
 
     def field(i: int, data: bytes) -> bytes:
         return struct.pack("<BI", i, len(data)) + data
@@ -571,8 +564,9 @@ class Db:
             return None
         return rows
 
-    def find(self, kid: str, p12: bool = False) -> str | None:
-        for t in self.titles():
+    def find(self, kid: str, p12: bool = False,
+             titles: list[str] | None = None) -> str | None:
+        for t in self.titles() if titles is None else titles:
             if t.startswith(kid[:16] + " :: ") and t.endswith(" :: p12") == p12:
                 return t
         return None
@@ -699,25 +693,41 @@ def cmd_record(a) -> None:
     base = f"{kid[:16]} :: {cert_cn(cert)}"
     with lock():
         db = Db()
-        kt = db.find(kid) or fail(f"no keychain entry for key {kid[:16]}")
+        titles = db.titles()
+        kt = db.find(kid, titles=titles) or fail(f"no keychain entry for key {kid[:16]}")
         args = ["-u", f"serial {cert.serial_number:X}",
                 "--url", "sha256:" + cert.fingerprint(hashes.SHA256()).hex()]
         if kt != base:
             args += ["-t", base]
         db.kp(["edit", db.file, kt, *args])
-        pt = db.find(kid, True)
+        pt = db.find(kid, True, titles)
         if pt and pt != base + " :: p12":
             db.kp(["edit", db.file, pt, "-t", base + " :: p12"])
         if not pt:
             if a.p12_like:
-                lt = db.find(cert_id(a.p12_like), True) or fail("no .p12 entry for --p12-like")
+                lt = db.find(cert_id(a.p12_like), True, titles) or fail("no .p12 entry for --p12-like")
                 pw = db.show(lt)
             else:
                 pw = new_secret()
             db.add(base + " :: p12", "p12", "", pw)
 
 
+def all_secrets(field: str) -> dict[str, str]:
+    """{key id16: secret} for every key passphrase (key) or .p12 password (p12)."""
+    db = Db()
+    rows = db.entries()
+    if rows is None:   # export disabled: one `show` per entry
+        rows = [{"Title": t, "Password": db.show(t)} for t in db.titles()]
+    return {r["Title"][:16]: r["Password"] for r in rows
+            if TITLE_RE.match(r["Title"])
+            and r["Title"].endswith(" :: p12") == (field == "p12")}
+
+
 def cmd_get(a) -> None:
+    if a.all:
+        for kid, pw in all_secrets(a.field).items():
+            print(f"{kid}\t{pw}")
+        return
     print(get_secret(kid=target(a), field=a.field))
 
 
@@ -963,6 +973,7 @@ def main() -> None:
         g = p.add_mutually_exclusive_group(required=True)
         g.add_argument("--id")
         g.add_argument("--cert")
+        return g
 
     sub.add_parser("init").set_defaults(func=cmd_init)
     sub.add_parser("export-master").set_defaults(func=cmd_export_master)
@@ -982,7 +993,8 @@ def main() -> None:
     p.add_argument("--p12-like")
     p.set_defaults(func=cmd_record)
     p = sub.add_parser("get")
-    sel(p)
+    sel(p).add_argument("--all", action="store_true",
+                        help="every secret of --field, as id16<TAB>secret")
     p.add_argument("--field", choices=("key", "p12"), default="key")
     p.set_defaults(func=cmd_get)
     p = sub.add_parser("forget")

@@ -338,27 +338,6 @@ confirm() {
     [[ "${reply}" =~ ^[Yy]$ ]]
 }
 
-cert_serial() {
-    "${OPENSSL}" x509 -noout -serial -in "$1" | sed 's|^serial=||' | tr '[:lower:]' '[:upper:]'
-}
-
-cert_is_current() {
-    "${OPENSSL}" x509 -checkend 0 -noout -in "$1" >/dev/null 2>&1
-}
-
-cert_enddate() {
-    "${OPENSSL}" x509 -noout -enddate -in "$1" | sed 's|^notAfter=||'
-}
-
-# date_epoch "Oct  3 08:32:07 2026 GMT" -> seconds since the epoch
-date_epoch() {
-    date -u -d "$1" +%s 2>/dev/null || date -u -j -f '%b %e %T %Y %Z' "$1" +%s
-}
-
-cert_enddate_epoch() {
-    date_epoch "$(cert_enddate "$1")"
-}
-
 # cert_cn CERT: the common name, reduced to characters that are safe in a
 # file name
 cert_cn() {
@@ -373,7 +352,7 @@ cert_cn() {
 cert_expiry_date() {
     local epoch
 
-    epoch=$(cert_enddate_epoch "$1")
+    epoch=$(pki_cert_end_epoch "$1")
     date -u -d "@${epoch}" +%Y-%m-%d 2>/dev/null || date -u -r "${epoch}" +%Y-%m-%d
 }
 
@@ -484,7 +463,7 @@ collect_crls() {
             continue   # not a CRL
         fi
         next=$("${OPENSSL}" crl -noout -nextupdate -in "${out}" 2>/dev/null | sed 's|^nextUpdate=||') || true
-        if [ -n "${next}" ] && [ "$(date_epoch "${next}")" -le "${now}" ]; then
+        if [ -n "${next}" ] && [ "$(pki_date_epoch "${next}")" -le "${now}" ]; then
             warn "ignoring expired CRL ${f}"
             continue
         fi
@@ -570,20 +549,13 @@ pick_main_intermediate() {
     INTERMEDIATE_PEM=""
     for f in "${INT_MAIN[@]}"; do
         [[ "${f}" == "${d}"/* ]] || continue
-        epoch=$(cert_enddate_epoch "${f}")
+        epoch=$(pki_cert_end_epoch "${f}")
         if [ -z "${INTERMEDIATE_PEM}" ] || [ "${epoch}" -gt "${best_epoch}" ]; then
             INTERMEDIATE_PEM="${f}"
             best_epoch="${epoch}"
         fi
     done
     [ -n "${INTERMEDIATE_PEM}" ]   # fails if DIR has no valid intermediate; callers decide
-}
-
-# verify_chain [options] CERT: verify CERT against the root through the valid
-# intermediates, checking the CRLs of the whole chain.
-verify_chain() {
-    "${OPENSSL}" verify -x509_strict -crl_check_all -CRLfile "${CRL_ALL}" -CAfile "${ANCHORS}" \
-        -untrusted "${INTS}" "$@" 2>&1
 }
 
 # validate_smime_cert CERT ROLE: 0 accepted, 1 rejected; sets CERT_STATE.
@@ -610,20 +582,35 @@ validate_smime_cert() {
     return 1
 }
 
-# p12_password P12 CERT TREE: set P12PW to the password that opens the .p12: its key's
-# keychain entry (the main tree's, or an extra tree's keepassxc/keychain).
-# Returns 1 if there is none or it does not open the .p12.
-p12_password() {
-    local p12="$1" cert="$2" tree="$3" pw
+# p12_load TREE: the .p12 passwords of TREE's keychain (this tree's, or an
+# extra tree's keepassxc/keychain), read once into P12_PW["TREE|id16"].
+declare -A P12_PW=() P12_LOADED=()
+p12_load() {
+    local tree="$1" out id pw
 
-    P12PW=""
+    [ -z "${P12_LOADED[${tree}]:-}" ] || return 0
+    P12_LOADED[${tree}]=1
     if [ "${tree}" = "${PKI_ROOT}" ]; then
-        pw=$(pki_kc get --cert "${cert}" --field p12 2>/dev/null) || return 1
+        out=$(pki_kc get --all --field p12 2>/dev/null) || return 1
     else
         [ -d "${tree}/keepassxc/keychain" ] || return 1
-        pw=$(PKI_KEYCHAIN_DIR="${tree}/keepassxc/keychain" PKI_KEYCHAIN_KEYFILE="${tree}/keepassxc/keyfile/pki-structure.keyx" \
-                 pki_kc get --cert "${cert}" --field p12 2>/dev/null) || return 1
+        out=$(PKI_KEYCHAIN_DIR="${tree}/keepassxc/keychain" PKI_KEYCHAIN_KEYFILE="${tree}/keepassxc/keyfile/pki-structure.keyx" \
+                  pki_kc get --all --field p12 2>/dev/null) || return 1
     fi
+    while IFS=$'\t' read -r id pw; do
+        P12_PW["${tree}|${id}"]=${pw}
+    done <<<"${out}"
+}
+
+# p12_password P12 CERT TREE: set P12PW to the password that opens the .p12
+# (its key's keychain entry). Returns 1 if there is none or it does not open it.
+p12_password() {
+    local p12="$1" cert="$2" tree="$3" id pw
+
+    P12PW=""
+    p12_load "${tree}" || return 1
+    id=$(pki_kc id --cert "${cert}") || return 1
+    pw=${P12_PW["${tree}|${id:0:16}"]:-}
     [ -n "${pw}" ] || return 1
     "${OPENSSL}" pkcs12 -legacy -noout -in "${p12}" -passin fd:3 \
         3< <(printf '%s\n' "${pw}") >/dev/null 2>&1 || return 1
@@ -668,133 +655,29 @@ stage_p12_password() {
 # The signature
 # ---------------------------------------------------------------------
 
-# find_codesign_signer -- pick the code-signing certificate for create_credentials.sh.
-#
-# Bash counterpart of find_signer() in configurate_yaml.py:
-# the NEWEST certificate named ${CODESIGN_NAME}.<sha1>.cert.pem in
-# ${CODESIGN_DIR}/certs that is
-#   * in date (not expired, not yet valid),
-#   * 'V' in the issuing CA's index.txt (revoked, superseded and 'E'
-#     certificates are never accepted for signing),
-#   * allowed to sign code (ExtendedKeyUsage, when present),
-#   * verified against the root through a valid, verified intermediate with
-#     the CRLs of the whole chain checked (verify_chain).
-# Sets SIGNER_CERT, SIGNER_SHA1, SIGNER_KEY, SIGNER_PASSFILE. PKI_CODESIGN_SHA1
-# (optional) picks one specific signer. ISSUERCADIR (default intermediate)
-# names the CA whose index.txt is consulted.
-
-# codesign_index_status INDEX SERIAL -> V, R, E, other status letter, or none
-codesign_index_status() {
-    awk -F'\t' -v s="$2" '
-        BEGIN { sub(/^0+/, "", s) }
-        { a = toupper($4); sub(/^0+/, "", a) }
-        a == s { print $1; found = 1; exit }
-        END { if (!found) print "none" }' "$1"
-}
-
+# find_codesign_signer: the newest valid code-signing certificate
+# ${CODESIGN_DIR}/certs/${CODESIGN_NAME}.<sha1>.cert.pem, chosen by
+# pki_validate.py signer (the selection configurate_yaml.py uses).
+# PKI_CODESIGN_SHA1 pins one. Sets SIGNER_CERT, SIGNER_SHA1, SIGNER_KEY.
 find_codesign_signer() {
-    local certdir=${CODESIGN_DIR:-codesign}
-    local certname=${CODESIGN_NAME:-codesign}
-    local want=${PKI_CODESIGN_SHA1:-}
-    local idx="${ISSUERCADIR:-intermediate}/index.txt"
-    local f b sha1 st out eku epoch best_epoch=0 now usable=0 why
+    local certdir=${CODESIGN_DIR:-codesign} certname=${CODESIGN_NAME:-codesign}
 
-    SIGNER_CERT="" SIGNER_SHA1="" SIGNER_KEY="" SIGNER_PASSFILE=""
-
-    # needs the trust context (ANCHORS, INTS, CRL_ALL): build_trust_context
-    [ -s "${INTS:-}" ] \
-        || die "no valid intermediate to verify the code-signing certificate with."
-    [ -f "${idx}" ] \
-        || die "${idx} not found; cannot check whether code-signing certificates are revoked."
-    now=$(date +%s)
-
-    for f in "${certdir}/certs/${certname}".*.cert.pem; do
-        b=${f##*/}
-        sha1=${b#"${certname}."}
-        sha1=${sha1%.cert.pem}
-        [[ "${sha1}" =~ ^[0-9a-f]{40}$ ]] || continue
-        if [ -n "${want}" ] && [ "${sha1}" != "${want}" ]; then continue; fi
-
-        why=""
-        epoch=$(date_epoch "$("${OPENSSL}" x509 -noout -startdate -in "${f}" | sed 's|^notBefore=||')")
-        if [ "${epoch}" -gt "${now}" ]; then
-            why="not valid yet"
-        elif ! cert_is_current "${f}"; then
-            why="expired"
-        else
-            st=$(codesign_index_status "${idx}" "$(cert_serial "${f}")")
-            case "${st}" in
-                V) ;;
-                R) why="revoked (a signing certificate is never accepted when revoked or superseded)" ;;
-                E) why="index.txt status 'E' (expired)" ;;
-                none) why="serial not in ${idx} (cannot confirm it is not revoked)" ;;
-                *) why="index.txt status '${st}' (expected V)" ;;
-            esac
-        fi
-        if [ -z "${why}" ]; then
-            eku=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage -in "${f}" 2>/dev/null || true)
-            if ! grep -qi 'Code Signing' <<<"${eku}"; then
-                why="ExtendedKeyUsage does not include codeSigning"
-            fi
-        fi
-        if [ -z "${why}" ]; then
-            # chain, CRLs, index.txt, EKUs incl. the issuing CA's (one validator)
-            if ! out=$("${PYTHON}" "${SCRIPT_DIR}/pki_validate.py" codesign "${f}" \
-                           --ca-bundle "${CA_BUNDLE}" --crl-bundle "${CRL_ALL}" \
-                           "${INDEX_ARGS[@]}" 2>&1); then
-                why="${out}"
-            fi
-        fi
-        if [ -n "${why}" ]; then
-            warn "skipping code-signing certificate ${b}: ${why}"
-            continue
-        fi
-
-        usable=$((usable + 1))
-        if [ "${epoch}" -gt "${best_epoch}" ]; then   # newest notBefore wins
-            best_epoch=${epoch}
-            SIGNER_CERT=${f}
-            SIGNER_SHA1=${sha1}
-        fi
-    done
-
-    if [ -z "${SIGNER_CERT}" ]; then
-        die "no usable code-signing certificate '${certname}.<sha1>.cert.pem' in ${certdir}/certs${want:+ with sha1 ${want}} (see the reasons above)."
-    fi
-    if [ "${usable}" -gt 1 ]; then
-        echo "Note: ${usable} usable code-signing certificates; using the newest" >&2
-        echo "(${SIGNER_SHA1})." >&2
-        echo "Set PKI_CODESIGN_SHA1 to override." >&2
-    fi
-
+    SIGNER_SHA1=$("${PYTHON}" "${SCRIPT_DIR}/pki_validate.py" signer "${certdir}" \
+        --name "${certname}" --sha1 "${PKI_CODESIGN_SHA1:-}" \
+        --ca-bundle "${CA_BUNDLE}" --crl-bundle "${CRL_ALL}" "${INDEX_ARGS[@]}") \
+        || die "no usable code-signing certificate in ${certdir}/certs (see above)."
+    SIGNER_CERT="${certdir}/certs/${certname}.${SIGNER_SHA1}.cert.pem"
     SIGNER_KEY="${certdir}/private/${certname}.${SIGNER_SHA1}.key.pem"
-    
     [ -f "${SIGNER_KEY}" ] || die "missing ${SIGNER_KEY}"
-    
     echo "Code-signing certificate: ${SIGNER_CERT}" >&2
 }
 
-# load_codesign: the certificate that signs the installer: the newest valid
-# ${CODESIGN_NAME}.<sha1>.cert.pem (find_codesign_signer). Sets CS_CERT,
-# CS_KEY. It must verify against the root
-# through a valid intermediate, with the CRLs checked, and allow code signing.
+# load_codesign: the certificate that signs the installer (find_codesign_signer,
+# validated by pki_validate.py). Sets CS_CERT, CS_KEY. A CA certificate is refused.
 load_codesign() {
-    local f out text
-
     find_codesign_signer
     CS_CERT="${SIGNER_CERT}"
     CS_KEY="${SIGNER_KEY}"
-    
-    for f in "${CS_CERT}" "${CS_KEY}"; do
-        [ -f "${f}" ] \
-            || die "'${f}' not found. The installer is signed with the code signing certificate (PKI_CODESIGN_DIR, PKI_CODESIGN_NAME)."
-    done
-    if ! out=$(verify_chain "${CS_CERT}"); then
-        die "code signing certificate ${CS_CERT}: $(verify_error "${out}")"
-    fi
-    text=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage -in "${CS_CERT}" 2>/dev/null) || text=""
-    [[ "${text}" == *"Code Signing"* ]] \
-        || die "${CS_CERT} does not allow code signing (extendedKeyUsage)."
     if cert_is_ca "${CS_CERT}"; then
         die "${CS_CERT} is a CA certificate."
     fi

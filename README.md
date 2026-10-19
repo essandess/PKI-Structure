@@ -17,7 +17,7 @@ file (login keychain item for other users) and separable keyfile.
 | `create_organization_{smime,mdm,credentials}.sh` | Per-deployment driver scripts, seeded from `.sample` |
 | `certs_that_expire_soon.sh`, `updatedb_and_delete_expired_certs.sh` | Expiry reports and cleanup |
 | `replicate_pki_structure.sh`, `clean_everything_and_create_pki.sh` | New deployment; full clean or rebuild |
-| `pki_structure.sh`, `pki_common.sh`, `define_openssl.sh`, `pki_validate.py`, `pki_keychain.py` | Shared libraries; `pki_validate.py` is the one certificate validator, `pki_keychain.py` the passphrase store |
+| `pki_structure.sh`, `pki_common.sh`, `define_openssl.sh`, `pki_validate.py`, `pki_keychain.py`, `pki_index.py` | Shared libraries; `pki_validate.py` is the one certificate validator, `pki_keychain.py` the passphrase store, `pki_index.py` the `index.txt` queries |
 
 ## Requirements
 
@@ -103,7 +103,7 @@ Environment (tool-specific variables are listed with each tool):
 | `PKI_KEYCHAIN_DIR`, `PKI_KEYCHAIN_KEYFILE` | `keepassxc/keychain`, `keepassxc/keyfile/pki-structure.keyx` | Database directory and key file |
 | `PKI_KEYCHAIN_MASTER` | `keepassxc/master/pki-structure.pass` | Master password file; setting it selects the file backend |
 | `PKI_KEYCHAIN_FILE`, `PKI_KEYCHAIN_ITEM` | login keychain, service name | Keychain file and item of the master (tests) |
-| `PKI_KEYCHAIN_KDF_ROUNDS` | `16` | Minimum Argon2 rounds of a new database |
+| `PKI_KEYCHAIN_KDF_ROUNDS` | `16` | Argon2 rounds of a new database |
 | `PKI_SITE_DIR`, `PKI_SITE_GROUP` | `<prefix>/var/www/PKI_FQDN`, `_www` else `nobody` | CRL web directory and its group |
 | `CRL_MIN_DAYS_LEFT` | `15` | Regenerate a CRL that expires sooner |
 | `PKI_VERIFY_STRICT` | `1` | `0` drops `-x509_strict`; honored only in a test tree (`.pki_test_tree`) |
@@ -116,7 +116,7 @@ them in the shell. `test/pki_test.sh` unsets them.
 
 Each private key has its own random passphrase in
 `keepassxc/keychain/pki-structure.kdbx` (KeePassXC; KDBX4, Argon2id, 64 MiB,
-4 lanes, at least 16 rounds; `PKI_KEYCHAIN_KDF_ROUNDS` sets the rounds of a new
+4 lanes, 16 rounds; `PKI_KEYCHAIN_KDF_ROUNDS` sets the rounds of a new
 database), found by SHA-256 of the key's public key, so a same-key renewal
 finds it. Entry `<id16> :: <CN>`: Password = key passphrase, UserName = serial,
 URL = certificate SHA-256; `... :: p12` holds the `.p12` export password.
@@ -141,6 +141,7 @@ restore it with `import-master` before issuing or refreshing CRLs.
 ```sh
 bin/pki_keychain.py get --cert CERT [--field p12]     # print a secret
 bin/pki_keychain.py list | prune [-n] | reap          # reap: failed issuances
+bin/pki_keychain.py get --all --field key|p12         # every secret, id16<TAB>secret
 bin/pki_keychain.py export-master | import-master     # escrow / restore (stdin)
 bin/pki_keychain.py verify | kdf-check | selftest     # master + database; KDF; keychain
 bin/pki_keychain.py installer-set | installer-get --name NAME   # installer passwords
@@ -260,7 +261,7 @@ grep '^R' intermediate/index.txt        # revoked; '^V' for valid
 
 ## Signer selection
 
-`configurate_yaml.py` and `create_credentials.sh` sign with the newest
+`configurate_yaml.py` and `create_credentials.sh` sign with the newest (`pki_validate.py signer`)
 `codesign/certs/<name>.<sha1>.cert.pem` that:
 
 1. is within its validity period;

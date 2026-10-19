@@ -27,39 +27,9 @@ cd "${PKI_ROOT}" || exit
 # Never longer than the issuer's remaining life
 DAYS=$(pki_cap_days "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem" "${DAYS}")
 
-# Certificate encrypted key
-KEY_ID=$(pki_kc genkey --alg "${ALGORITHM}" --curve "${EC_PARAMGEN_CURVE}" --bits "${RSA_KEYGEN_BITS}" \
-	--out "${CERTDIR}/private/${CERTNAME}.key.pem" --label "${CERTNAME}")
-
-# CSR
-"${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
-	-new -"${HASH_DIGEST}" \
-	-key "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-	-passin fd:3 3< <(pki_kc get --id "${KEY_ID}") \
-	-out "${CERTDIR}"/certs/"${CERTNAME}".csr.pem -batch
-
-# Certificate
-if "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
-	-extensions "${CERTDIR}" \
-	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
-	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
-	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	-passin fd:3 3< <(pki_kc get --cert "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem") \
-	-batch
-then
-    if ! pki_assert_leaf_scope "${CERTDIR}/certs/${CERTNAME}.cert.pem" codesign; then
-        pki_revoke_unscoped "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${ISSUERCADIR}" "${CERTDIR}/certs/${CERTNAME}.cert.pem" intermediate
-        rm -f "${CERTDIR}"/private/"${CERTNAME}".key.pem "${CERTDIR}"/certs/"${CERTNAME}".csr.pem "${CERTDIR}"/certs/"${CERTNAME}".cert.pem
-        exit 1
-    fi
-    NEW_SERIAL=$("${OPENSSL}" x509 -in "${CERTDIR}/certs/${CERTNAME}.cert.pem" -noout -serial | sed 's|^serial=||')
-    pki_revoke_matching_cn "${ISSUERCADIR}" "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${ORG_NAME}" "${NEW_SERIAL}" intermediate
-    rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem
-else
-    rm "${CERTDIR}"/private/"${CERTNAME}".key.pem
-    rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem
-    exit 1
-fi
+# Certificate: key, CSR, issuance and scope check
+pki_issue_leaf "${CERTNAME}" "${CERTDIR}/openssl_${CERTDIR}.cnf" "${CERTDIR}" codesign "${CERTNAME}"
+pki_revoke_matching_cn "${ISSUERCADIR}" "${ORG_NAME}" "${NEW_SERIAL}"
 
 pki_finish_cert "${CERTDIR}" "${CERTNAME}" "${ISSUERCADIR}" "${ISSUERCANAME}"
 

@@ -43,56 +43,14 @@ POSITIONAL_ARGS_USAGE="[--decrypt-key]"
 # Never longer than the issuer's remaining life
 DAYS=$(pki_cap_days "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem" "${DAYS}")
 
-# Certificate encrypted key
-KEY_ID=$(pki_kc genkey --alg "${ALGORITHM}" --curve "${EC_PARAMGEN_CURVE}" --bits "${RSA_KEYGEN_BITS}" \
-	--out "${CERTDIR}/private/${CERTNAME}.key.pem" --label "${CERTNAME}")
+# Certificate: key, CSR, issuance and scope check
+pki_issue_leaf "${CERTNAME}" "${CERTDIR}/openssl_${CERTDIR##*/}.cnf" "${CERTDIR##*/}" \
+    adblock2privoxy "${CERTNAME}" \
+    -keyfile "${ISSUERCADIR}/private/${ISSUERCANAME}.key.pem" \
+    -cert "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem"
+pki_revoke_matching_cn "${ISSUERCADIR}" "${CERTNAME}" "${NEW_SERIAL}"
 if [ "${DECRYPT_KEY}" = "1" ]; then
-case ${ALGORITHM} in
-    EC)
-	"${OPENSSL}" ec -in "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-		-passin fd:3 -out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted \
-		3< <(pki_kc get --id "${KEY_ID}")
-	;;
-    RSA)
-	"${OPENSSL}" rsa -in "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-		-passin fd:3 -out "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted \
-		3< <(pki_kc get --id "${KEY_ID}")
-	;;
-esac
-chmod 0600 "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted
-fi
-
-# Server CSR
-"${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR##*/}".cnf \
-	-new -"${HASH_DIGEST}" \
-	-key "${CERTDIR}"/private/"${CERTNAME}".key.pem \
-	-passin fd:3 3< <(pki_kc get --id "${KEY_ID}") \
-	-out "${CERTDIR}"/certs/"${CERTNAME}".csr.pem -batch
-
-# Server certificate
-if "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR##*/}".cnf \
-	-extensions "${CERTDIR##*/}" \
-	-keyfile "${ISSUERCADIR}"/private/"${ISSUERCANAME}".key.pem \
-	-cert "${ISSUERCADIR}"/certs/"${ISSUERCANAME}".cert.pem \
-	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
-	-in "${CERTDIR}"/certs/"${CERTNAME}".csr.pem \
-	-out "${CERTDIR}"/certs/"${CERTNAME}".cert.pem \
-	-passin fd:3 3< <(pki_kc get --cert "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem") \
-	-batch
-then
-    if ! pki_assert_leaf_scope "${CERTDIR}/certs/${CERTNAME}.cert.pem" adblock2privoxy; then
-        pki_revoke_unscoped "${CERTDIR}/openssl_${CERTDIR##*/}.cnf" "${ISSUERCADIR}" "${CERTDIR}/certs/${CERTNAME}.cert.pem" privoxy
-        rm -f "${CERTDIR}"/private/"${CERTNAME}".key.pem "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted "${CERTDIR}"/certs/"${CERTNAME}".csr.pem "${CERTDIR}"/certs/"${CERTNAME}".cert.pem
-        exit 1
-    fi
-    NEW_SERIAL=$("${OPENSSL}" x509 -in "${CERTDIR}/certs/${CERTNAME}.cert.pem" -noout -serial | sed 's|^serial=||')
-    pki_revoke_matching_cn "${ISSUERCADIR}" "${CERTDIR}/openssl_${CERTDIR##*/}.cnf" "${CERTNAME}" "${NEW_SERIAL}" privoxy
-    rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem
-else
-    rm "${CERTDIR}"/private/"${CERTNAME}".key.pem
-    rm -f "${CERTDIR}"/private/"${CERTNAME}".key.pem.decrypted
-    rm "${CERTDIR}"/certs/"${CERTNAME}".csr.pem
-    exit 1
+    pki_decrypt_key "${CERTNAME}"
 fi
 
 pki_finish_cert "${CERTDIR}" "${CERTNAME}" "${ISSUERCADIR}" "${ISSUERCANAME}"

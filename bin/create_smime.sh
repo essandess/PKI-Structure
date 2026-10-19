@@ -39,61 +39,33 @@ POSITIONAL_ARGS_USAGE=${POSITIONAL_ARGS_USAGE:-EMAIL CERTNAME}
 # Files that make up one S/MIME certificate, as <subdirectory>/<suffix>
 SMIME_FILES="private/key.pem private/p12 certs/cert.pem certs/chain.pem certs/cer"
 
-# Move existing signature/encryption certificates for CERTNAME to SHA1-named
-# files so that new ones can be issued. Each one is named after its own
-# fingerprint, so the signature and encryption archives never collide.
-# Key passphrases stay in the keychain: an archived key keeps its entry.
+# Archive each existing signature/encryption certificate of CERTNAME under its
+# own fingerprint, so that new ones can be issued. Key passphrases stay in the
+# keychain: an archived key keeps its entry.
+ARCHIVED=()
 archive_existing_smime() {
-    local ext old_cert sha1 item dir suffix
+    local ext
+
     for ext in signature encryption; do
-	old_cert="${CERTDIR}/certs/${CERTNAME}-${ext}.cert.pem"
-	[ -f "${old_cert}" ] || continue
-
-	sha1=$(cert_sha1 "${old_cert}")
-	if [ -z "${sha1}" ]; then
-	    echo "Error: could not compute the SHA1 fingerprint of '${old_cert}'." >&2
-	    exit 1
+	pki_archive_existing_cert "${CERTDIR}" "${CERTNAME}-${ext}" "${SMIME_FILES}"
+	if [ -n "${PKI_ARCHIVED_SHA1}" ]; then
+	    ARCHIVED+=("${ext}:${PKI_ARCHIVED_SHA1}")
 	fi
-	ARCHIVED="${ARCHIVED} ${ext}:${sha1}"
-
-	echo "Archiving existing ${CERTNAME}-${ext} certificate as" >&2
-	echo "  ${CERTNAME}-${ext}.${sha1}.*" >&2
-	for item in ${SMIME_FILES}; do
-	    dir=${item%%/*}
-	    suffix=${item#*/}
-	    if [ -f "${CERTDIR}/${dir}/${CERTNAME}-${ext}.${suffix}" ]; then
-		mv -f "${CERTDIR}/${dir}/${CERTNAME}-${ext}.${suffix}" \
-		   "${CERTDIR}/${dir}/${CERTNAME}-${ext}.${sha1}.${suffix}"
-	    fi
-	done
     done
 }
 
-# If issuing the new certificates fails part way, put the previous pair back
-# so the signature and encryption certificates stay consistent.
+# If issuing fails part way, revoke what was issued (never delivered) and put
+# the previous pair back, so signature and encryption stay consistent.
 restore_archived_smime() {
+    local s pair
+
     [ -z "${REISSUED}" ] || return 0
-    # certificates issued before the failure were never delivered: revoke
-    local s
     for s in ${REVOKE_SERIAL[@]+"${REVOKE_SERIAL[@]}"}; do
-	pki_revoke_unscoped "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" \
-	    "${ISSUERCADIR}" "${ISSUERCADIR}/newcerts/${s}.pem" "${ISSUERCADIR}"
+	pki_revoke_unscoped "${ISSUERCADIR}" "${ISSUERCADIR}/newcerts/${s}.pem"
     done
-    [ -n "${ARCHIVED}" ] || return 0
-    echo "Reissuing the ${CERTNAME} S/MIME certificates failed;" >&2
-    echo "restoring the previous ones." >&2
-    local pair ext sha1 item dir suffix
-    for pair in ${ARCHIVED}; do
-	ext=${pair%%:*}
-	sha1=${pair#*:}
-	for item in ${SMIME_FILES}; do
-	    dir=${item%%/*}
-	    suffix=${item#*/}
-	    if [ -f "${CERTDIR}/${dir}/${CERTNAME}-${ext}.${sha1}.${suffix}" ]; then
-		cp -p "${CERTDIR}/${dir}/${CERTNAME}-${ext}.${sha1}.${suffix}" \
-		   "${CERTDIR}/${dir}/${CERTNAME}-${ext}.${suffix}"
-	    fi
-	done
+    for pair in ${ARCHIVED[@]+"${ARCHIVED[@]}"}; do
+	pki_restore_archived_cert "${CERTDIR}" "${CERTNAME}-${pair%%:*}" \
+	    "${SMIME_FILES}" "${pair#*:}"
     done
 }
 
@@ -164,51 +136,18 @@ for EXTENSION in signature encryption; do
     # Encryption cert is always RSA: Apple Mail (macOS/iOS) does not support
     # ECDH-based S/MIME encryption certificates, only ECDSA signing. Do not
     # change this to honor ${ALGORITHM}=EC for the encryption cert.
-    if [ "${ALGORITHM}" == "EC" ] && [ ${EXTENSION} != "encryption" ]; then
-	KEY_ID=$(pki_kc genkey --alg EC --curve "${EC_PARAMGEN_CURVE}" \
-		--out "${CERTDIR}/private/${CERTNAME}-${EXTENSION}.key.pem" --label "${EMAIL} - ${EXTENSION}")
-	HASH_DIGEST=${EC_HASH_DIGEST}
+    if [ "${ALGORITHM}" == "EC" ] && [ "${EXTENSION}" != "encryption" ]; then
+	SMIME_ALG=EC SMIME_HASH=${EC_HASH_DIGEST}
     else
-	KEY_ID=$(pki_kc genkey --alg RSA --bits "${RSA_KEYGEN_BITS}" \
-		--out "${CERTDIR}/private/${CERTNAME}-${EXTENSION}.key.pem" --label "${EMAIL} - ${EXTENSION}")
-	HASH_DIGEST=${RSA_HASH_DIGEST}
+	SMIME_ALG=RSA SMIME_HASH=${RSA_HASH_DIGEST}
     fi
-
-    # CSR
-    "${OPENSSL}" req -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
-	-new -"${HASH_DIGEST}" \
-	-key "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem \
-	-passin fd:3 3< <(pki_kc get --id "${KEY_ID}") \
-	-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem -batch
-
-    # Certificate
-    if "${OPENSSL}" ca -config "${CERTDIR}"/openssl_"${CERTDIR}".cnf \
-	-extensions "${CERTDIR}_${EXTENSION}" \
-	-days ${DAYS} -notext -md "${HASH_DIGEST}" \
-	-in "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem \
-	-out "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem \
-	-passin fd:3 3< <(pki_kc get --cert "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem") \
-	-subj "/CN=${EMAIL_SUBJ} - ${EXTENSION}/emailAddress=${EMAIL_SUBJ}/O=${ORG_NAME}/OU=${ORG_NAME} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}" \
-	-batch
-    then
-	if ! pki_assert_leaf_scope "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem" smime_${EXTENSION}; then
-		for s in ${REVOKE_SERIAL[@]+"${REVOKE_SERIAL[@]}"}; do
-			pki_revoke_unscoped "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${ISSUERCADIR}" "${ISSUERCADIR}/newcerts/${s}.pem" "${ISSUERCADIR}"
-		done
-		pki_revoke_unscoped "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${ISSUERCADIR}" "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem" ${ISSUERCADIR}
-		rm -f "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.cert.pem
-		exit 1
-	fi
-	NEW_SERIAL=$("${OPENSSL}" x509 -in "${CERTDIR}/certs/${CERTNAME}-${EXTENSION}.cert.pem" -noout -serial | sed 's|^serial=||')
-	# not revoked yet: see the end of this script
-	REVOKE_CN+=("${EMAIL} - ${EXTENSION}")
-	REVOKE_SERIAL+=("${NEW_SERIAL}")
-	rm "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem
-    else
-	rm "${CERTDIR}"/private/"${CERTNAME}"-${EXTENSION}.key.pem
-	rm "${CERTDIR}"/certs/"${CERTNAME}"-${EXTENSION}.csr.pem
-	exit 1
-    fi
+    ALGORITHM=${SMIME_ALG} HASH_DIGEST=${SMIME_HASH} pki_issue_leaf \
+	"${CERTNAME}-${EXTENSION}" "${CERTDIR}/openssl_${CERTDIR}.cnf" \
+	"${CERTDIR}_${EXTENSION}" "smime_${EXTENSION}" "${EMAIL} - ${EXTENSION}" \
+	-subj "/CN=${EMAIL_SUBJ} - ${EXTENSION}/emailAddress=${EMAIL_SUBJ}/O=${ORG_NAME}/OU=${ORG_NAME} S\\/MIME/L=${ORG_LOCALITY}/ST=${ORG_STATE}/C=${ORG_COUNTRY}"
+    # not revoked yet: see the end of this script
+    REVOKE_CN+=("${EMAIL} - ${EXTENSION}")
+    REVOKE_SERIAL+=("${NEW_SERIAL}")
 
     # .p12 password: shared by the pair (keychain)
     pki_finish_cert "${CERTDIR}" "${CERTNAME}-${EXTENSION}" "${ISSUERCADIR}" "${ISSUERCANAME}" "${P12_LIKE}"
@@ -225,7 +164,7 @@ done
 
 # Only now, with both replacements complete, revoke what they supersede.
 for i in "${!REVOKE_CN[@]}"; do
-    pki_revoke_matching_cn "${ISSUERCADIR}" "${ISSUERCADIR}/openssl_${ISSUERCADIR}.cnf" "${REVOKE_CN[i]}" "${REVOKE_SERIAL[i]}" "${ISSUERCADIR}"
+    pki_revoke_matching_cn "${ISSUERCADIR}" "${REVOKE_CN[i]}" "${REVOKE_SERIAL[i]}"
 done
 
 echo "The .p12 password of ${CERTNAME} (give it only to the recipient):" >&2

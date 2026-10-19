@@ -5,8 +5,9 @@
 # Shared functions: key passphrases (pki_kc), archive and restore of a
 # certificate's files, revocation of superseded certificates by CommonName
 # (pki_revoke_matching_cn), CA renewal, validity capping, random passwords,
-# scope assertions for CA and leaf certificates, and the finishing steps of
-# every certificate (pki_finish_cert, pki_sha1_files).
+# scope assertions for CA and leaf certificates, leaf issuance (pki_issue_leaf),
+# and the finishing steps of every certificate (pki_finish_cert,
+# pki_sha1_files).
 
 # Key passphrases: one per key in the KeePassXC database
 # ./keepassxc/keychain (bin/pki_keychain.py); its master is a root-only file
@@ -69,9 +70,12 @@ pki_archive_existing_cert() {
     done
 }
 
+# pki_restore_archived_cert CERTDIR CERTNAME FILES [SHA1]
+# SHA1 defaults to PKI_ARCHIVED_SHA1; a script that archives several
+# certificates passes each one's.
 pki_restore_archived_cert() {
-    local certdir="$1" certname="$2" files="$3"
-    if [ -z "${PKI_ARCHIVED_SHA1}" ] || [ -n "${REISSUED}" ]; then
+    local certdir="$1" certname="$2" files="$3" sha1="${4:-${PKI_ARCHIVED_SHA1}}"
+    if [ -z "${sha1}" ] || [ -n "${REISSUED}" ]; then
         return 0
     fi
     echo "Reissuing '${certname}' failed; restoring the previous one." >&2
@@ -79,41 +83,24 @@ pki_restore_archived_cert() {
     for item in ${files}; do
         dir=${item%%/*}
         ext=${item#*/}
-        if [ -f "${certdir}/${dir}/${certname}.${PKI_ARCHIVED_SHA1}.${ext}" ]; then
-            cp -p "${certdir}/${dir}/${certname}.${PKI_ARCHIVED_SHA1}.${ext}" \
+        if [ -f "${certdir}/${dir}/${certname}.${sha1}.${ext}" ]; then
+            cp -p "${certdir}/${dir}/${certname}.${sha1}.${ext}" \
                "${certdir}/${dir}/${certname}.${ext}"
         fi
     done
 }
 
-# pki_serial_norm SERIAL: upper case, leading zeros dropped, so serials from
-# index.txt and from `openssl x509 -serial` compare equal whatever their padding
-pki_serial_norm() {
-    printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | sed 's/^0*//'
-}
-
-# issuer_dir, issuer_config, target_cn, exclude_serial, crl_caname
+# pki_revoke_matching_cn ISSUER_DIR CN EXCLUDE_SERIAL: revoke the issuer's other
+# valid certificates with that CommonName (superseded), refresh its CRL
 pki_revoke_matching_cn() {
-    local issuer_dir="$1" issuer_config="$2" target_cn="$3" \
-          exclude_serial="$4" crl_caname="$5"
+    local issuer_dir="$1" target_cn="$2" exclude_serial="$3"
+    local issuer_name="${issuer_dir##*/}" serials serial newcert revoked_any=0
+
     [ -f "${issuer_dir}/index.txt" ] || return 0
-
-    local status serial subject cn newcert
-    local revoked_any=0
-    while IFS=$'\t' read -r -a fields; do
-        status="${fields[0]}"
-        [ "${status}" = "V" ] || continue
-
-        local n=${#fields[@]}
-        serial="${fields[$((n-3))]}"
-        subject="${fields[$((n-1))]}"
-
-        [ "$(pki_serial_norm "${serial}")" = "$(pki_serial_norm "${exclude_serial}")" ] && continue
-
-        cn="${subject#*/CN=}"
-        cn="${cn%%/*}"
-        [ "${cn}" = "${target_cn}" ] || continue
-
+    serials=$("${PYTHON}" "${PKI_ROOT}/bin/pki_index.py" valid "${issuer_dir}/index.txt" \
+                  --cn "${target_cn}" --exclude "${exclude_serial}")
+    while IFS= read -r serial; do
+        [ -n "${serial}" ] || continue
         newcert="${issuer_dir}/newcerts/${serial}.pem"
         if [ ! -f "${newcert}" ]; then
             echo "Warning: ${issuer_dir}/index.txt references serial ${serial} (CN=${target_cn}) but ${newcert} is missing; skipping." >&2
@@ -125,15 +112,15 @@ pki_revoke_matching_cn() {
   serial ${serial}, in ${issuer_dir}"
         echo "Revoking superseded certificate, CN=${target_cn}" >&2
         echo "  serial ${serial}, in ${issuer_dir}" >&2
-        "${OPENSSL}" ca -config "${issuer_config}" \
+        "${OPENSSL}" ca -config "${issuer_dir}/openssl_${issuer_name}.cnf" \
             -revoke "${newcert}" \
             -crl_reason superseded \
-            -passin fd:3 3< <(pki_kc get --cert "${issuer_dir}/certs/${issuer_dir##*/}.cert.pem")
+            -passin fd:3 3< <(pki_kc get --cert "${issuer_dir}/certs/${issuer_name}.cert.pem")
         revoked_any=1
-    done < "${issuer_dir}/index.txt"
+    done <<<"${serials}"
 
     if [ "${revoked_any}" = "1" ]; then
-        "${PKI_ROOT}"/bin/create_crl.sh "${crl_caname}"
+        "${PKI_ROOT}"/bin/create_crl.sh "${issuer_name}"
     fi
 }
 
@@ -382,22 +369,72 @@ pki_assert_leaf_scope() {
     fi
 }
 
-# pki_revoke_unscoped CONFIG ISSUERDIR CERT CRLNAME: revoke a just-issued
+# pki_revoke_unscoped ISSUERDIR CERT: revoke a just-issued
 # certificate that failed pki_assert_leaf_scope, and refresh the issuer's CRL.
 # Reason "unspecified": "superseded" would let an encryption certificate be
 # re-admitted with --allow-superseded-encryption.
 pki_revoke_unscoped() {
-    local config="$1" issuer_dir="$2" cert="$3" crl_caname="$4"
+    local issuer_dir="$1" cert="$2" issuer_name="${1##*/}"
 
     echo "Revoking the unscoped certificate ${cert}." >&2
-    "${OPENSSL}" ca -config "${config}" -revoke "${cert}" -crl_reason unspecified \
-        -passin fd:3 3< <(pki_kc get --cert "${issuer_dir}/certs/${issuer_dir##*/}.cert.pem") || true
-    "${PKI_ROOT}"/bin/create_crl.sh "${crl_caname}" || true
+    "${OPENSSL}" ca -config "${issuer_dir}/openssl_${issuer_name}.cnf" -revoke "${cert}" \
+        -crl_reason unspecified \
+        -passin fd:3 3< <(pki_kc get --cert "${issuer_dir}/certs/${issuer_name}.cert.pem") || true
+    "${PKI_ROOT}"/bin/create_crl.sh "${issuer_name}" || true
 }
 
 # ---------------------------------------------------------------------
 # Finishing a certificate
 # ---------------------------------------------------------------------
+
+# pki_issue_leaf NAME CONFIG EXTENSIONS KIND LABEL [openssl-ca-args...]
+# Key, CSR and certificate ${CERTDIR}/{private,certs}/NAME.*, issued by
+# ISSUERCADIR/ISSUERCANAME with CONFIG and its EXTENSIONS section, then
+# scope-checked as KIND (pki_assert_leaf_scope; an unscoped certificate is
+# revoked). Sets KEY_ID and NEW_SERIAL; on failure removes what it made and
+# exits. Uses CERTDIR, ISSUERCADIR, ISSUERCANAME, ALGORITHM, EC_PARAMGEN_CURVE,
+# RSA_KEYGEN_BITS, HASH_DIGEST and DAYS.
+pki_issue_leaf() {
+    local name="$1" config="$2" ext="$3" kind="$4" label="$5"
+    local key="${CERTDIR}/private/${name}.key.pem"
+    local csr="${CERTDIR}/certs/${name}.csr.pem"
+    local cert="${CERTDIR}/certs/${name}.cert.pem"
+
+    shift 5
+    KEY_ID=$(pki_kc genkey --alg "${ALGORITHM}" --curve "${EC_PARAMGEN_CURVE}" \
+        --bits "${RSA_KEYGEN_BITS}" --out "${key}" --label "${label}")
+    "${OPENSSL}" req -config "${config}" -new -"${HASH_DIGEST}" -key "${key}" \
+        -passin fd:3 3< <(pki_kc get --id "${KEY_ID}") -out "${csr}" -batch
+    if ! "${OPENSSL}" ca -config "${config}" -extensions "${ext}" \
+            -days "${DAYS}" -notext -md "${HASH_DIGEST}" -in "${csr}" -out "${cert}" \
+            -passin fd:3 3< <(pki_kc get --cert "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem") \
+            -batch "$@"; then
+        rm -f "${key}" "${csr}"
+        exit 1
+    fi
+    if ! pki_assert_leaf_scope "${cert}" "${kind}"; then
+        pki_revoke_unscoped "${ISSUERCADIR}" "${cert}"
+        rm -f "${key}" "${csr}" "${cert}"
+        exit 1
+    fi
+    NEW_SERIAL=$("${OPENSSL}" x509 -in "${cert}" -noout -serial | sed 's|^serial=||')
+    rm "${csr}"
+}
+
+# pki_decrypt_key NAME: ${CERTDIR}/private/NAME.key.pem.decrypted (0600), the
+# UNENCRYPTED key for daemons that cannot ask for a passphrase. Uses KEY_ID.
+pki_decrypt_key() {
+    local key="${CERTDIR}/private/$1.key.pem"
+
+    case ${ALGORITHM} in
+        EC)  "${OPENSSL}" ec -in "${key}" -out "${key}.decrypted" \
+                 -passin fd:3 3< <(pki_kc get --id "${KEY_ID}") ;;
+        RSA) "${OPENSSL}" rsa -in "${key}" -out "${key}.decrypted" \
+                 -passin fd:3 3< <(pki_kc get --id "${KEY_ID}") ;;
+        *)   echo "Unknown algorithm '${ALGORITHM}'" >&2; exit 1 ;;
+    esac
+    chmod 0600 "${key}.decrypted"
+}
 
 # pki_finish_cert CERTDIR CERTNAME ISSUERDIR ISSUERNAME [LIKE_CERT]
 # Chain, verify, DER and .p12 of CERTDIR/certs/CERTNAME.cert.pem (self-signed: no chain

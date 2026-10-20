@@ -822,13 +822,12 @@ if [ "${NOPASS}" -eq 1 ]; then DB_ARGS+=(--no-password); fi
 
 # ------------------------------------------------ MDM profile (attachment)
 
-# ensure_group GROUP: create GROUP in --db unless present
+# ensure_group GROUP: create GROUP unless LISTING (ls -R -f) has it
 ensure_group() {
-    local listing
-    listing=$(kp 1 ls -R -f "${DB_ARGS[@]}" "${DB}")
-    if ! grep -qxF -- "$1/" <<<"${listing}"; then
+    if ! grep -qxF -- "$1/" <<<"${LISTING}"; then
         kp 1 mkdir "${DB_ARGS[@]}" "${DB}" "$1" >/dev/null \
             || die "cannot create the group $1"
+        LISTING+=$'\n'"$1/"
     fi
 }
 

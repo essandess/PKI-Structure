@@ -21,8 +21,9 @@ Master    192 random bits; created only when absent and never next to an
 Installer passwords: entry "<installer file name>" (installer-set /
           installer-get).
 Profiles  entry "Profile/mobileconfig :: NAME" (profile-get, -list, -rm).
-Groups    root "PKI-Structure" holds "Password" (key, .p12 and installer
-          passwords) and "Profile" (profiles).
+Groups    root "PKI-Structure": "Password" = bare secrets (key, .p12,
+          installer passwords); "Profile" = installable artifacts with
+          their secrets (profiles). Encrypted files stay on disk.
 Entries   one per private key, found by SHA-256 of its public key, so every
           certificate of that key (same-key renewal) finds it.
           "<id16> :: <CN>": Password = key passphrase, UserName = serial,
@@ -883,9 +884,9 @@ def profile_set(name: str, path, ident: str, labels: list[str],
     ])
     with lock():
         ensure_db()
-        profile_check(name, ident)
+        stored = profile_check(name, ident)
         db = Db()
-        if db.has(title):
+        if stored:
             db.rm(title)
         db.kp(["add", db.file, title, "-u", ident, "--notes", notes])
         try:

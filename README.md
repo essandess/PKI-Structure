@@ -120,8 +120,10 @@ Each private key has its own random passphrase in
 database), found by SHA-256 of the key's public key, so a same-key renewal
 finds it. Entry `Password/<id16> :: <CN>`: Password = key passphrase,
 UserName = serial, URL = certificate SHA-256; `... :: p12` holds the `.p12`
-export password. Group `Profile` holds stored profiles; both groups are
-children of the root group `PKI-Structure`.
+export password. Under the root `PKI-Structure`: `Password` holds bare
+secrets (key, `.p12`, installer, master), `Profile` installable artifacts
+with their secrets attached (profiles, exported installers). Encrypted
+files stay on disk; only plaintext artifacts live in the vault.
 
 The database opens only with the master password (192 random bits) and the
 key file `keepassxc/keyfile/pki-structure.keyx` (`PKI_KEYCHAIN_KEYFILE`; 0600;

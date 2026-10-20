@@ -393,11 +393,12 @@ password fails before anything is stored. `--ca-certs-only` installers are unenc
 
 * **Default:** one entry: Password = installer password, attachment = the
   installer; Notes list the contents, no passwords. The entry goes into the
-  group `Password` (`--group` overrides; created if absent).
+  group `Profile` (`--group` overrides; created if absent).
   `--xml-out` cannot carry the attachment.
 * **`--export-master`:** also (or, without `INSTALLER`, only) the PKI master
   password (`pki_keychain.py export-master`), titled `PKI-Structure KeePassXC Passphrase`
-  (`--master-title`). Back up the key file and the `.kdbx` with it.
+  (`--master-title`), in the group `Password`. Back up the key file and the
+  `.kdbx` with it.
 * **`--individual-smime-passwords`:** also one protected attribute per S/MIME
   issuance (`<certname> [<issued>]`), each checked against its `.p12`.
 * **`PROFILE`:** an argument that is not a file names a profile in

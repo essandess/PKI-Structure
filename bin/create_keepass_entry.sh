@@ -14,7 +14,7 @@
 # INSTALLER: an encrypted installer from create_credentials.sh. Its signature
 # is checked, then its keychain password opens the payload; it is never run.
 # The installer is attached to the entry that holds its password.
-# Default group: Password (installer, master) or Profile (profile).
+# Default group: Profile (installer, profile) or Password (master).
 # PROFILE: a name from `pki_keychain.py profile-list`. Its .mobileconfig and
 # the trust profiles (--trust NAME, default: stored profiles named *-trust;
 # --no-trust: none) are attached to the entry 'MDM profile: NAME' in the group
@@ -169,11 +169,11 @@ if [ -n "${INSTALLER}" ]; then
     if [ -z "${TITLE}" ]; then TITLE="S/MIME installer: ${INST_BASE}"; fi
 elif [ -n "${PROFILE}" ]; then
     TITLE=${TITLE:-"MDM profile: ${PROFILE}"}
-    GROUP=${GROUP:-Profile}
 else
     TITLE=${TITLE:-${MASTER_TITLE}}
 fi
-GROUP=${GROUP:-Password}
+MASTER_GROUP=${GROUP:-Password}
+GROUP=${GROUP:-Profile}
 
 # ---------------------------------------------------------------- helpers
 
@@ -716,7 +716,7 @@ emit_master_entry() {
     local notes
     notes=$(build_master_notes)
     printf '\t\t<Entry>\n\t\t\t<UUID>%s</UUID>\n' \
-        "$(det_uuid "entry:${GROUP}/${MASTER_TITLE}")"
+        "$(det_uuid "entry:${MASTER_GROUP}/${MASTER_TITLE}")"
     printf '\t\t\t<IconID>0</IconID>\n\t\t\t<Tags>pki;master</Tags>\n'
     emit_times "${MASTER_MOD}"
     emit_string Title "${MASTER_TITLE}"
@@ -728,22 +728,29 @@ emit_master_entry() {
     printf '\t\t</Entry>\n'
 }
 
-# emit_xml [GROUP]: the entries, nested in GROUP when given
-emit_xml() {
+# emit_nested GROUP CMD: run CMD with its output inside GROUP ("": none)
+emit_nested() {
     local parts=() p path=""
+    if [ -n "$1" ]; then IFS=/ read -r -a parts <<<"$1"; fi
+    for p in "${parts[@]}"; do
+        path="${path}/${p}"
+        emit_group_open "${p}" "${path}"
+    done
+    "$2"
+    for p in "${parts[@]}"; do printf '\t\t</Group>\n'; done
+}
+
+# emit_xml [NEST]: with NEST, each entry sits in its own group
+emit_xml() {
     printf '<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n'
     printf '<KeePassFile>\n\t<Meta>\n'
     printf '\t\t<Generator>%s</Generator>\n' "${0##*/}"
     printf '\t</Meta>\n\t<Root>\n'
     emit_group_open "${KEEPASS_ROOT_NAME}" ""
-    if [ -n "${1:-}" ]; then IFS=/ read -r -a parts <<<"$1"; fi
-    for p in "${parts[@]}"; do
-        path="${path}/${p}"
-        emit_group_open "${p}" "${path}"
-    done
-    if [ -n "${INSTALLER}" ]; then emit_entry; fi
-    if [ "${EXPORT_MASTER}" -eq 1 ]; then emit_master_entry; fi
-    for p in "${parts[@]}"; do printf '\t\t</Group>\n'; done
+    if [ -n "${INSTALLER}" ]; then emit_nested "${1:+${GROUP}}" emit_entry; fi
+    if [ "${EXPORT_MASTER}" -eq 1 ]; then
+        emit_nested "${1:+${MASTER_GROUP}}" emit_master_entry
+    fi
     printf '\t\t</Group>\n\t</Root>\n</KeePassFile>\n'
 }
 
@@ -759,7 +766,7 @@ if [ -n "${XML_OUT}" ]; then
     elif ! confirm "Write it?"; then
         die "Aborted."
     fi
-    ( set -o noclobber; emit_xml "${GROUP}" > "${XML_OUT}" )
+    ( set -o noclobber; emit_xml nest > "${XML_OUT}" )
     echo "Wrote ${XML_OUT} (mode 0600)."
     exit 0
 fi
@@ -815,11 +822,22 @@ if [ "${NOPASS}" -eq 1 ]; then DB_ARGS+=(--no-password); fi
 
 # ------------------------------------------------ MDM profile (attachment)
 
-# ensure_group GROUP LISTING: create GROUP unless LISTING (ls -R -f) has it
+# ensure_group GROUP: create GROUP in --db unless present
 ensure_group() {
-    if ! grep -qxF -- "$1/" <<<"$2"; then
+    local listing
+    listing=$(kp 1 ls -R -f "${DB_ARGS[@]}" "${DB}")
+    if ! grep -qxF -- "$1/" <<<"${listing}"; then
         kp 1 mkdir "${DB_ARGS[@]}" "${DB}" "$1" >/dev/null \
             || die "cannot create the group $1"
+    fi
+}
+
+# place TITLE GROUP: move a merged root-level entry (in LISTING) into GROUP
+place() {
+    ensure_group "$2"
+    if grep -qxF -- "$1" <<<"${LISTING}"; then
+        kp 1 mv "${DB_ARGS[@]}" "${DB}" "$1" "$2" >/dev/null \
+            || die "cannot move '$1' into $2"
     fi
 }
 
@@ -870,7 +888,7 @@ if [ -n "${PROFILE}" ]; then
         fi
     fi
     backup_db
-    ensure_group "${GROUP}" "${LISTING}"
+    ensure_group "${GROUP}"
     if [ "${HAVE_ENTRY}" -eq 1 ]; then
         kp 1 rm "${DB_ARGS[@]}" "${DB}" "${ENTRY}" >/dev/null \
             || die "cannot replace ${ENTRY}"
@@ -917,18 +935,12 @@ if ! confirm "Apply it?"; then die "Aborted; ${DB##*/} is unchanged."; fi
 backup_db
 kp 1 merge -s "${DB_ARGS[@]}" "${DB}" "${STAGE}" || die "merge failed"
 
-# A merge puts new entries in the root group; move them into GROUP.
+# A merge puts new entries in the root group; move them into their groups.
 LISTING=$(kp 1 ls -R -f "${DB_ARGS[@]}" "${DB}")
-ensure_group "${GROUP}" "${LISTING}"
-TITLES=()
-if [ -n "${INSTALLER}" ]; then TITLES+=("${TITLE}"); fi
-if [ "${EXPORT_MASTER}" -eq 1 ]; then TITLES+=("${MASTER_TITLE}"); fi
-for t in "${TITLES[@]}"; do
-    if grep -qxF -- "${t}" <<<"${LISTING}"; then
-        kp 1 mv "${DB_ARGS[@]}" "${DB}" "${t}" "${GROUP}" >/dev/null \
-            || die "cannot move '${t}' into ${GROUP}"
-    fi
-done
+if [ -n "${INSTALLER}" ]; then place "${TITLE}" "${GROUP}"; fi
+if [ "${EXPORT_MASTER}" -eq 1 ]; then
+    place "${MASTER_TITLE}" "${MASTER_GROUP}"
+fi
 
 # Attach the installer to its password entry; a merge that replaces the
 # entry drops attachments, so (re)attach every time.

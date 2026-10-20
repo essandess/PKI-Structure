@@ -502,14 +502,14 @@ kpentry() { bin/create_keepass_entry.sh --db "${DB}" --key-file "${KEYFILE}" --n
 kp_password_matches() {
     local got want
     got=$("${KPCLI}" show -s -a Password -k "${KEYFILE}" --no-password \
-              "${DB}" "Password/pki_test installer") || return 1
+              "${DB}" "Profile/pki_test installer") || return 1
     want=$(sed -n 1p "${INST_PW_FILE}")
     [ "${got}" = "${want}" ]
 }
 run   "keepass: installer-password entry"        kpentry
 kp_installer_attached() {
     "${KPCLI}" attachment-export -k "${KEYFILE}" --no-password "${DB}" \
-        "Password/pki_test installer" "${INST##*/}" \
+        "Profile/pki_test installer" "${INST##*/}" \
         "${TMPD}/attached.inst" \
         && cmp -s "${TMPD}/attached.inst" "${INST}"
 }

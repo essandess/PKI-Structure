@@ -13,10 +13,11 @@
 #
 # INSTALLER: an encrypted installer from create_credentials.sh. Its signature
 # is checked, then its keychain password opens the payload; it is never run.
+# The installer is attached to the entry that holds its password.
 # PROFILE: a name from `pki_keychain.py profile-list`. Its .mobileconfig and
 # the trust profiles (--trust NAME, default: stored profiles named *-trust;
 # --no-trust: none) are attached to the entry 'MDM profile: NAME' in the group
-# MDM (created if absent). Secrets in a profile are in PLAIN TEXT.
+# Profile (created if absent). Secrets in a profile are in PLAIN TEXT.
 # --export-master stores the PKI master password. Entries are merged into
 # --db (backed up first); UUIDs derive from the title, so re-runs update in
 # place. Secrets never appear in argv or the environment. See README.md.
@@ -67,10 +68,10 @@ Usage: create_keepass_entry.sh --db FILE [--key-file FILE | --no-password]
          [--individual-smime-passwords] [--root-cert FILE]
          [--export-master] [INSTALLER]
 
-Stores an installer's password (and, with --export-master, the PKI master
-password), or a stored MDM profile as an attachment, in a KeePassXC
-database. INSTALLER|PROFILE is optional only with --export-master. See the
-top of this file for details.
+Stores an installer and its password in one entry, or a stored MDM profile
+as an attachment, in a KeePassXC database. --export-master adds the PKI
+master password. INSTALLER|PROFILE is optional only with --export-master.
+See the top of this file for details.
 USAGE
 }
 
@@ -167,7 +168,7 @@ if [ -n "${INSTALLER}" ]; then
     if [ -z "${TITLE}" ]; then TITLE="S/MIME installer: ${INST_BASE}"; fi
 elif [ -n "${PROFILE}" ]; then
     TITLE=${TITLE:-"MDM profile: ${PROFILE}"}
-    GROUP=${GROUP:-MDM}
+    GROUP=${GROUP:-Profile}
 else
     TITLE=${TITLE:-${MASTER_TITLE}}
 fi
@@ -528,6 +529,9 @@ print_plan() {
     echo
     echo "Password field: installer password (PKI keychain);" \
          "it decrypts the payload"
+    if [ -n "${DB}" ]; then
+        echo "Attachment:     ${INST_BASE} (the installer)"
+    fi
     echo "The payload holds ${#M_TYPE[@]} item(s):"
     for ((m = 0; m < ${#M_TYPE[@]}; m++)); do
         parse_name "${M_FILE[m]}"
@@ -904,6 +908,14 @@ if ! confirm "Apply it?"; then die "Aborted; ${DB##*/} is unchanged."; fi
 
 backup_db
 kp 1 merge -s "${DB_ARGS[@]}" "${DB}" "${STAGE}" || die "merge failed"
+
+# Attach the installer to its password entry; a merge that replaces the
+# entry drops attachments, so (re)attach every time.
+if [ -n "${INSTALLER}" ]; then
+    kp 1 attachment-import -f "${DB_ARGS[@]}" "${DB}" \
+        "${GROUP:+${GROUP}/}${TITLE}" "${INST_BASE}" "${INSTALLER}" \
+        >/dev/null || die "cannot attach ${INST_BASE}"
+fi
 
 echo "Merged. Entry found by:"
 kp 1 search "${DB_ARGS[@]}" "${DB}" "${TITLE}" | sed 's/^/  /' \

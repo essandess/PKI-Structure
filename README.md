@@ -12,7 +12,7 @@ file (login keychain item for other users) and separable keyfile.
 | `revoke_certificate.sh`, `create_crl.sh`, `publish_crls.sh` | Revocation, CRL generation and publication |
 | `create_credentials.sh` | Signed macOS install scripts for CA certificates and S/MIME identities |
 | `verify_installer.sh` | Signature check of an installer without running it |
-| `create_keepass_entry.sh` | Install-script and master passwords, and stored profiles with their trust profiles, into KeePassXC |
+| `create_keepass_entry.sh` | Installers with their passwords, master password, and stored profiles with trust profiles, into KeePassXC |
 | `configurate_yaml.py` | `.mobileconfig` profiles from YAML, stored in the keychain |
 | `create_organization_{smime,mdm,credentials}.sh` | Per-deployment driver scripts, seeded from `.sample` |
 | `certs_that_expire_soon.sh`, `updatedb_and_delete_expired_certs.sh` | Expiry reports and cleanup |
@@ -389,8 +389,9 @@ bin/create_keepass_entry.sh --xml-out FILE [--individual-smime-passwords] INSTAL
 installer's keychain password (never running the installer), so a missing or wrong
 password fails before anything is stored. `--ca-certs-only` installers are unencrypted and rejected.
 
-* **Default:** one entry whose Password is the installer password; Notes list
-  the contents, no passwords. Entries go into the root group, `Password`.
+* **Default:** one entry: Password = installer password, attachment = the
+  installer; Notes list the contents, no passwords. Entries go into the root
+  group, `Password`. `--xml-out` cannot carry the attachment.
 * **`--export-master`:** also (or, without `INSTALLER`, only) the PKI master
   password (`pki_keychain.py export-master`), titled `PKI-Structure KeePassXC Passphrase`
   (`--master-title`). Back up the key file and the `.kdbx` with it.
@@ -400,7 +401,7 @@ password fails before anything is stored. `--ca-certs-only` installers are unenc
   `pki_keychain.py profile-list`. Its `.mobileconfig` and the trust profiles
   (`--trust NAME`, repeatable; default: stored profiles named `*-trust`;
   `--no-trust`: none) are attached to the entry `MDM profile: NAME` in the
-  group `MDM` (created if absent). Install the trust profile first. An
+  group `Profile` (created if absent). Install the trust profile first. An
   attachment holds passwords in plain text if its profile has secrets. Not
   with `--xml-out` or `--export-master`; needs `keepassxc-cli` 2.7+. A re-run
   with unchanged content is skipped; `--force-update` replaces the entry.
@@ -424,7 +425,7 @@ bin/configurate_yaml.py mdm/yaml/myorganization-trust.yaml [--no-sign]
 Builds a `.mobileconfig`, signs it (DER CMS, signer per
 [Signer selection](#signer-selection); signature and payload round-trip
 verified) and stores it as the attachment of the PKI keychain entry
-`MDM/mobileconfig :: <yaml name>`; nothing is written to `mdm/`. `--no-sign`
+`Profile/mobileconfig :: <yaml name>`; nothing is written to `mdm/`. `--no-sign`
 stores it unsigned. The YAML must be under `mdm/`; relative paths resolve
 against the PKI root. `create_organization_mdm.sh` runs this deployment's
 list of profiles and takes no arguments. Never edit a profile after

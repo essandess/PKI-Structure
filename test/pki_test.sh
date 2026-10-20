@@ -498,7 +498,13 @@ kp_password_matches() {
     [ "${got}" = "${want}" ]
 }
 run   "keepass: installer-password entry"        kpentry
+kp_installer_attached() {
+    "${KPCLI}" attachment-export -k "${KEYFILE}" --no-password "${DB}" \
+        "pki_test installer" "${INST##*/}" "${TMPD}/attached.inst" \
+        && cmp -s "${TMPD}/attached.inst" "${INST}"
+}
 check "keepass: entry holds the installer password" kp_password_matches
+check "keepass: the installer is attached to that entry" kp_installer_attached
 check "keepass: re-run is idempotent"            kpentry
 check "keepass: per-issuance .p12 passwords"     kpentry --individual-smime-passwords
 run   "keepass: xml export"                      bin/create_keepass_entry.sh --xml-out "${TMPD}/entry.xml" \
@@ -579,7 +585,8 @@ check "trust profile: root present, CA certificates only" trust_profile_ok
 kp_profile() { bin/create_keepass_entry.sh --db "${DB}" --key-file "${KEYFILE}" --no-password persona-settings; }
 kp_trust_attached() {   # exported to a file, not --stdout
     "${KPCLI}" attachment-export -k "${KEYFILE}" --no-password "${DB}" \
-        "MDM/MDM profile: persona-settings" myorganization-trust.mobileconfig \
+        "Profile/MDM profile: persona-settings" \
+        myorganization-trust.mobileconfig \
         "${TMPD}/attached.trust" \
         && cmp -s "${TMPD}/attached.trust" "${TMPD}/myorganization-trust.mobileconfig"
 }

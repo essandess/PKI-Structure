@@ -20,7 +20,7 @@ Master    192 random bits; created only when absent and never next to an
           ($PKI_KEYCHAIN_ITEM), name "PKI-Structure KeePassXC Passphrase".
 Installer passwords: entry "<installer file name>" (installer-set /
           installer-get).
-Profiles  entry "MDM/mobileconfig :: NAME" (profile-get, profile-list, profile-rm).
+Profiles  entry "Profile/mobileconfig :: NAME" (profile-get, -list, -rm).
 Entries   one per private key, found by SHA-256 of its public key, so every
           certificate of that key (same-key renewal) finds it.
           "<id16> :: <CN>": Password = key passphrase, UserName = serial,
@@ -807,8 +807,8 @@ def cmd_installer_get(a) -> None:
     print(db.show(a.name))
 
 
-MDM_GROUP = "MDM"
-PROFILE_PATH = f"{MDM_GROUP}/mobileconfig :: "
+PROFILE_GROUP = "Profile"   # child of the root group
+PROFILE_PATH = f"{PROFILE_GROUP}/mobileconfig :: "
 EXPOSED = ("WARNING: {} holds account passwords in PLAIN TEXT (signing does "
            "not encrypt). Deploy it now, then delete it and empty the Trash.")
 
@@ -868,8 +868,8 @@ def profile_set(name: str, path, ident: str, labels: list[str],
         profile_check(name, ident)
         db = Db()
         listing = db.kp(["ls", "-R", "-f", db.file]).stdout.splitlines()
-        if f"{MDM_GROUP}/" not in listing:
-            db.kp(["mkdir", db.file, MDM_GROUP])
+        if f"{PROFILE_GROUP}/" not in listing:
+            db.kp(["mkdir", db.file, PROFILE_GROUP])
         if title in listing:
             db.rm(title)
         db.kp(["add", db.file, title, "-u", ident, "--notes", notes])

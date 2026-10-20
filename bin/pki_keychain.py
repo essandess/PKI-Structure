@@ -21,6 +21,8 @@ Master    192 random bits; created only when absent and never next to an
 Installer passwords: entry "<installer file name>" (installer-set /
           installer-get).
 Profiles  entry "Profile/mobileconfig :: NAME" (profile-get, -list, -rm).
+Groups    root "PKI-Structure" holds "Password" (key, .p12 and installer
+          passwords) and "Profile" (profiles).
 Entries   one per private key, found by SHA-256 of its public key, so every
           certificate of that key (same-key renewal) finds it.
           "<id16> :: <CN>": Password = key passphrase, UserName = serial,
@@ -89,7 +91,10 @@ ERR_NOT_FOUND = 44  # security(1) exit status for errSecItemNotFound
 KDF_ROUNDS_MIN = 16  # master is 192 random bits: a slow KDF adds nothing
 KDF_ROUNDS = int(os.environ.get("PKI_KEYCHAIN_KDF_ROUNDS") or KDF_ROUNDS_MIN)
 KDF_MEM_MIB, KDF_LANES = 64, 4
-PASSWORD_GROUP = "Password"
+ROOT_GROUP = "PKI-Structure"
+PASSWORD_GROUP = "Password"   # key, .p12 and installer passwords
+PROFILE_GROUP = "Profile"
+PASSWORD_PATH = PASSWORD_GROUP + "/"
 
 # https://keepass.info/help/kb/kdbx.html
 ARGON2D = bytes.fromhex("ef636ddf8c29444b91f7a9a403e30a0c")
@@ -414,17 +419,24 @@ def make_kdbx4(path: Path, password: str, kf: Path) -> None:
 
     now = base64.b64encode(struct.pack("<q", int(
         (datetime.now(timezone.utc) - datetime(1, 1, 1, tzinfo=timezone.utc)).total_seconds()))).decode()
-    guid = base64.b64encode(os.urandom(16)).decode()
+    def group(name: str, children: str = "") -> str:
+        guid = base64.b64encode(os.urandom(16)).decode()
+        times = "".join(f"<{k}>{now}</{k}>" for k in (
+            "CreationTime", "LastModificationTime", "LastAccessTime",
+            "ExpiryTime"))
+        return (f"<Group><UUID>{guid}</UUID><Name>{name}</Name>"
+                f"<IconID>48</IconID><Times>{times}<Expires>False</Expires>"
+                f"<UsageCount>0</UsageCount>"
+                f"<LocationChanged>{now}</LocationChanged></Times>"
+                f"<IsExpanded>True</IsExpanded>{children}</Group>")
+
+    tree = group(ROOT_GROUP, group(PASSWORD_GROUP) + group(PROFILE_GROUP))
     xml = ('<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n<KeePassFile><Meta>'
            '<Generator>pki_keychain</Generator><DatabaseName>PKI-Structure</DatabaseName>'
            '<MemoryProtection><ProtectTitle>False</ProtectTitle><ProtectUserName>False</ProtectUserName>'
            '<ProtectPassword>True</ProtectPassword><ProtectURL>False</ProtectURL>'
            '<ProtectNotes>False</ProtectNotes></MemoryProtection><RecycleBinEnabled>True</RecycleBinEnabled>'
-           f'</Meta><Root><Group><UUID>{guid}</UUID><Name>{PASSWORD_GROUP}</Name><IconID>48</IconID><Times>'
-           f'<CreationTime>{now}</CreationTime><LastModificationTime>{now}</LastModificationTime>'
-           f'<LastAccessTime>{now}</LastAccessTime><ExpiryTime>{now}</ExpiryTime><Expires>False</Expires>'
-           f'<UsageCount>0</UsageCount><LocationChanged>{now}</LocationChanged></Times>'
-           '<IsExpanded>True</IsExpanded></Group></Root></KeePassFile>').encode()
+           f'</Meta><Root>{tree}</Root></KeePassFile>').encode()
     inner = (struct.pack("<BII", 1, 4, 3) + field(2, os.urandom(64)) + struct.pack("<BI", 0, 0))
     padder = padding.PKCS7(128).padder()
     enc = Cipher(algorithms.AES(cipher_key), modes.CBC(iv)).encryptor()
@@ -546,8 +558,10 @@ class Db:
         return title in self.kp(["ls", "-R", "-f", self.file]).stdout.splitlines()
 
     def titles(self) -> list[str]:
+        """Paths of the key and .p12 entries."""
         out = self.kp(["ls", "-R", "-f", self.file]).stdout
-        return [t for t in out.splitlines() if TITLE_RE.match(t)]
+        return [t for t in out.splitlines() if t.startswith(PASSWORD_PATH)
+                and TITLE_RE.match(t[len(PASSWORD_PATH):])]
 
     def entries(self) -> list[dict[str, str]] | None:
         """All entries in one open (CSV export); None to use ls + show.
@@ -566,8 +580,9 @@ class Db:
 
     def find(self, kid: str, p12: bool = False,
              titles: list[str] | None = None) -> str | None:
+        prefix = f"{PASSWORD_PATH}{kid[:16]} :: "
         for t in self.titles() if titles is None else titles:
-            if t.startswith(kid[:16] + " :: ") and t.endswith(" :: p12") == p12:
+            if t.startswith(prefix) and t.endswith(" :: p12") == p12:
                 return t
         return None
 
@@ -575,7 +590,8 @@ class Db:
         return self.kp(["show", "-s", "-a", "Password", self.file, title]).stdout.rstrip("\n")
 
     def add(self, title: str, user: str, url: str, secret: str) -> None:
-        args = ["add", self.file, title, "-u", user]
+        """Add an entry to the Password group."""
+        args = ["add", self.file, PASSWORD_PATH + title, "-u", user]
         if url:
             args += ["--url", url]
         self.kp([*args, "-p"], [secret])
@@ -614,7 +630,7 @@ def reap_pending() -> None:
         if (TITLE_RE.match(t) and r.get("Username") == "pending"
                 and url.startswith("file:") and not Path(url[5:]).exists()):
             print("removing orphaned entry " + t, file=sys.stderr)
-            db.rm(t)
+            db.rm(PASSWORD_PATH + t)
 
 
 def cmd_reap(a) -> None:
@@ -697,11 +713,11 @@ def cmd_record(a) -> None:
         kt = db.find(kid, titles=titles) or fail(f"no keychain entry for key {kid[:16]}")
         args = ["-u", f"serial {cert.serial_number:X}",
                 "--url", "sha256:" + cert.fingerprint(hashes.SHA256()).hex()]
-        if kt != base:
+        if kt != PASSWORD_PATH + base:
             args += ["-t", base]
         db.kp(["edit", db.file, kt, *args])
         pt = db.find(kid, True, titles)
-        if pt and pt != base + " :: p12":
+        if pt and pt != f"{PASSWORD_PATH}{base} :: p12":
             db.kp(["edit", db.file, pt, "-t", base + " :: p12"])
         if not pt:
             if a.p12_like:
@@ -717,7 +733,8 @@ def all_secrets(field: str) -> dict[str, str]:
     db = Db()
     rows = db.entries()
     if rows is None:   # export disabled: one `show` per entry
-        rows = [{"Title": t, "Password": db.show(t)} for t in db.titles()]
+        rows = [{"Title": t[len(PASSWORD_PATH):], "Password": db.show(t)}
+                for t in db.titles()]
     return {r["Title"][:16]: r["Password"] for r in rows
             if TITLE_RE.match(r["Title"])
             and r["Title"].endswith(" :: p12") == (field == "p12")}
@@ -745,7 +762,7 @@ def cmd_forget(a) -> None:
 
 def cmd_list(a) -> None:
     for t in Db().titles():
-        print(t)
+        print(t[len(PASSWORD_PATH):])
 
 
 def cmd_prune(a) -> None:
@@ -759,7 +776,7 @@ def cmd_prune(a) -> None:
     with lock():
         db = Db()
         for t in db.titles():
-            if t[:16] not in ids:
+            if t[len(PASSWORD_PATH):][:16] not in ids:
                 print(("would remove " if a.dry_run else "removing ") + t)
                 if not a.dry_run:
                     db.rm(t)
@@ -795,19 +812,20 @@ def cmd_installer_set(a) -> None:
         fail("no password on stdin")
     with lock():
         db = Db()
-        if db.has(a.name):
-            db.rm(a.name)
+        path = PASSWORD_PATH + a.name
+        if db.has(path):
+            db.rm(path)
         db.add(a.name, "installer", "", pw)
 
 
 def cmd_installer_get(a) -> None:
     db = Db()
-    if not db.has(a.name):
+    path = PASSWORD_PATH + a.name
+    if not db.has(path):
         fail(f"no installer entry '{a.name}' in {db.file}")
-    print(db.show(a.name))
+    print(db.show(path))
 
 
-PROFILE_GROUP = "Profile"   # child of the root group
 PROFILE_PATH = f"{PROFILE_GROUP}/mobileconfig :: "
 EXPOSED = ("WARNING: {} holds account passwords in PLAIN TEXT (signing does "
            "not encrypt). Deploy it now, then delete it and empty the Trash.")
@@ -867,10 +885,7 @@ def profile_set(name: str, path, ident: str, labels: list[str],
         ensure_db()
         profile_check(name, ident)
         db = Db()
-        listing = db.kp(["ls", "-R", "-f", db.file]).stdout.splitlines()
-        if f"{PROFILE_GROUP}/" not in listing:
-            db.kp(["mkdir", db.file, PROFILE_GROUP])
-        if title in listing:
+        if db.has(title):
             db.rm(title)
         db.kp(["add", db.file, title, "-u", ident, "--notes", notes])
         try:

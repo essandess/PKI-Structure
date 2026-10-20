@@ -118,8 +118,10 @@ Each private key has its own random passphrase in
 `keepassxc/keychain/pki-structure.kdbx` (KeePassXC; KDBX4, Argon2id, 64 MiB,
 4 lanes, 16 rounds; `PKI_KEYCHAIN_KDF_ROUNDS` sets the rounds of a new
 database), found by SHA-256 of the key's public key, so a same-key renewal
-finds it. Entry `<id16> :: <CN>`: Password = key passphrase, UserName = serial,
-URL = certificate SHA-256; `... :: p12` holds the `.p12` export password.
+finds it. Entry `Password/<id16> :: <CN>`: Password = key passphrase,
+UserName = serial, URL = certificate SHA-256; `... :: p12` holds the `.p12`
+export password. Group `Profile` holds stored profiles; both groups are
+children of the root group `PKI-Structure`.
 
 The database opens only with the master password (192 random bits) and the
 key file `keepassxc/keyfile/pki-structure.keyx` (`PKI_KEYCHAIN_KEYFILE`; 0600;
@@ -390,8 +392,9 @@ installer's keychain password (never running the installer), so a missing or wro
 password fails before anything is stored. `--ca-certs-only` installers are unencrypted and rejected.
 
 * **Default:** one entry: Password = installer password, attachment = the
-  installer; Notes list the contents, no passwords. Entries go into the root
-  group, `Password`. `--xml-out` cannot carry the attachment.
+  installer; Notes list the contents, no passwords. The entry goes into the
+  group `Password` (`--group` overrides; created if absent).
+  `--xml-out` cannot carry the attachment.
 * **`--export-master`:** also (or, without `INSTALLER`, only) the PKI master
   password (`pki_keychain.py export-master`), titled `PKI-Structure KeePassXC Passphrase`
   (`--master-title`). Back up the key file and the `.kdbx` with it.

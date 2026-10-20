@@ -326,7 +326,15 @@ help_fits() { COLUMNS=80 "${PYTHON}" bin/pki_keychain.py --help | awk 'length($0
 MASTER=$(master_pw)
 check  "database KDF: >= 16 rounds, >= 64 MiB, 4 lanes" kdf_rounds_ok
 check  "pki_keychain.py --help fits 80 columns"       help_fits
+groups_ok() {   # Password/ holds the passphrases, Profile/ the profiles
+    local out
+    out=$(master_pw | "${KPCLI}" ls -R -f -q -k "${PKI_KEYCHAIN_KEYFILE}" \
+              "${PKI_KEYCHAIN_DIR}/pki-structure.kdbx") || return 1
+    grep -qxF 'Password/' <<<"${out}" && grep -qxF 'Profile/' <<<"${out}" \
+        && ! grep -Eq '^[0-9a-f]{16} :: ' <<<"${out}"
+}
 check  "master item exists, is readable, opens the database" KC verify
+check  "database groups: Password (keys), Profile" groups_ok
 fails  "database does not open without the key file"  no_keyfile
 check  "init keeps an existing master item"           init_keeps
 run    "drop master item"                             security delete-generic-password -s "${SERVICE}" "${PKI_KEYCHAIN_FILE}"
@@ -493,14 +501,16 @@ run "keepass db-create" "${KPCLI}" db-create --set-key-file "${KEYFILE}" "${DB}"
 kpentry() { bin/create_keepass_entry.sh --db "${DB}" --key-file "${KEYFILE}" --no-password --title "pki_test installer" "$@" "${INST}"; }
 kp_password_matches() {
     local got want
-    got=$("${KPCLI}" show -s -a Password -k "${KEYFILE}" --no-password "${DB}" "pki_test installer") || return 1
+    got=$("${KPCLI}" show -s -a Password -k "${KEYFILE}" --no-password \
+              "${DB}" "Password/pki_test installer") || return 1
     want=$(sed -n 1p "${INST_PW_FILE}")
     [ "${got}" = "${want}" ]
 }
 run   "keepass: installer-password entry"        kpentry
 kp_installer_attached() {
     "${KPCLI}" attachment-export -k "${KEYFILE}" --no-password "${DB}" \
-        "pki_test installer" "${INST##*/}" "${TMPD}/attached.inst" \
+        "Password/pki_test installer" "${INST##*/}" \
+        "${TMPD}/attached.inst" \
         && cmp -s "${TMPD}/attached.inst" "${INST}"
 }
 check "keepass: entry holds the installer password" kp_password_matches
@@ -517,15 +527,17 @@ KP_MASTER_TITLE="PKI-Structure KeePassXC Passphrase"
 kpmaster() { bin/create_keepass_entry.sh --db "${DB}" --key-file "${KEYFILE}" --no-password --export-master; }
 kp_master_matches() {
     local got
-    got=$("${KPCLI}" show -s -a Password -k "${KEYFILE}" --no-password "${DB}" "${KP_MASTER_TITLE}") || return 1
+    got=$("${KPCLI}" show -s -a Password -k "${KEYFILE}" --no-password \
+              "${DB}" "Password/${KP_MASTER_TITLE}") || return 1
     [ "${got}" = "$(master_pw)" ]
 }
-kp_master_in_passwords() {   # the entry sits in the root group, Passwords
-    "${KPCLI}" ls -k "${KEYFILE}" --no-password "${DB}" | grep -qxF "${KP_MASTER_TITLE}"
+kp_master_in_passwords() {   # the entry sits in the group Password
+    "${KPCLI}" ls -R -f -k "${KEYFILE}" --no-password "${DB}" \
+        | grep -qxF "Password/${KP_MASTER_TITLE}"
 }
 run   "keepass: --export-master without an installer"  kpmaster
 check "keepass: the entry holds the master password"    kp_master_matches
-check "keepass: the entry is in the group Passwords"    kp_master_in_passwords
+check "keepass: the entry is in the group Password"     kp_master_in_passwords
 check "keepass: --export-master re-run is idempotent"   kpmaster
 
 # ================================================================ MDM profiles

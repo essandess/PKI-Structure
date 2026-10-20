@@ -14,6 +14,7 @@
 # INSTALLER: an encrypted installer from create_credentials.sh. Its signature
 # is checked, then its keychain password opens the payload; it is never run.
 # The installer is attached to the entry that holds its password.
+# Default group: Password (installer, master) or Profile (profile).
 # PROFILE: a name from `pki_keychain.py profile-list`. Its .mobileconfig and
 # the trust profiles (--trust NAME, default: stored profiles named *-trust;
 # --no-trust: none) are attached to the entry 'MDM profile: NAME' in the group
@@ -88,8 +89,8 @@ trap 'exit 143' TERM HUP
 
 # ---------------------------------------------------------------- options
 
-# not actually an option
-KEEPASS_GROUP_NAME="Password"
+# root group of the staging database
+KEEPASS_ROOT_NAME="PKI-Structure"
 
 DB="" KEYFILE="" NOPASS=0 TITLE="" GROUP="" XML_OUT="" ROOT_CERT=""
 FORCE=0 BACKUP=1 KP_PROMPT=0 DRYRUN=0 INDIVIDUAL=0
@@ -172,6 +173,7 @@ elif [ -n "${PROFILE}" ]; then
 else
     TITLE=${TITLE:-${MASTER_TITLE}}
 fi
+GROUP=${GROUP:-Password}
 
 # ---------------------------------------------------------------- helpers
 
@@ -726,14 +728,15 @@ emit_master_entry() {
     printf '\t\t</Entry>\n'
 }
 
+# emit_xml [GROUP]: the entries, nested in GROUP when given
 emit_xml() {
     local parts=() p path=""
     printf '<?xml version="1.0" encoding="utf-8" standalone="yes"?>\n'
     printf '<KeePassFile>\n\t<Meta>\n'
     printf '\t\t<Generator>%s</Generator>\n' "${0##*/}"
     printf '\t</Meta>\n\t<Root>\n'
-    emit_group_open "${KEEPASS_GROUP_NAME}" ""
-    if [ -n "${GROUP}" ]; then IFS=/ read -r -a parts <<<"${GROUP}"; fi
+    emit_group_open "${KEEPASS_ROOT_NAME}" ""
+    if [ -n "${1:-}" ]; then IFS=/ read -r -a parts <<<"$1"; fi
     for p in "${parts[@]}"; do
         path="${path}/${p}"
         emit_group_open "${p}" "${path}"
@@ -756,7 +759,7 @@ if [ -n "${XML_OUT}" ]; then
     elif ! confirm "Write it?"; then
         die "Aborted."
     fi
-    ( set -o noclobber; emit_xml > "${XML_OUT}" )
+    ( set -o noclobber; emit_xml "${GROUP}" > "${XML_OUT}" )
     echo "Wrote ${XML_OUT} (mode 0600)."
     exit 0
 fi
@@ -812,6 +815,14 @@ if [ "${NOPASS}" -eq 1 ]; then DB_ARGS+=(--no-password); fi
 
 # ------------------------------------------------ MDM profile (attachment)
 
+# ensure_group GROUP LISTING: create GROUP unless LISTING (ls -R -f) has it
+ensure_group() {
+    if ! grep -qxF -- "$1/" <<<"$2"; then
+        kp 1 mkdir "${DB_ARGS[@]}" "${DB}" "$1" >/dev/null \
+            || die "cannot create the group $1"
+    fi
+}
+
 # backup_db: copy --db to DB.bak-<time> unless --no-backup
 backup_db() {
     local bak
@@ -859,10 +870,7 @@ if [ -n "${PROFILE}" ]; then
         fi
     fi
     backup_db
-    if ! grep -qxF -- "${GROUP}/" <<<"${LISTING}"; then
-        kp 1 mkdir "${DB_ARGS[@]}" "${DB}" "${GROUP}" >/dev/null \
-            || die "cannot create the group ${GROUP}"
-    fi
+    ensure_group "${GROUP}" "${LISTING}"
     if [ "${HAVE_ENTRY}" -eq 1 ]; then
         kp 1 rm "${DB_ARGS[@]}" "${DB}" "${ENTRY}" >/dev/null \
             || die "cannot replace ${ENTRY}"
@@ -909,11 +917,24 @@ if ! confirm "Apply it?"; then die "Aborted; ${DB##*/} is unchanged."; fi
 backup_db
 kp 1 merge -s "${DB_ARGS[@]}" "${DB}" "${STAGE}" || die "merge failed"
 
+# A merge puts new entries in the root group; move them into GROUP.
+LISTING=$(kp 1 ls -R -f "${DB_ARGS[@]}" "${DB}")
+ensure_group "${GROUP}" "${LISTING}"
+TITLES=()
+if [ -n "${INSTALLER}" ]; then TITLES+=("${TITLE}"); fi
+if [ "${EXPORT_MASTER}" -eq 1 ]; then TITLES+=("${MASTER_TITLE}"); fi
+for t in "${TITLES[@]}"; do
+    if grep -qxF -- "${t}" <<<"${LISTING}"; then
+        kp 1 mv "${DB_ARGS[@]}" "${DB}" "${t}" "${GROUP}" >/dev/null \
+            || die "cannot move '${t}' into ${GROUP}"
+    fi
+done
+
 # Attach the installer to its password entry; a merge that replaces the
 # entry drops attachments, so (re)attach every time.
 if [ -n "${INSTALLER}" ]; then
     kp 1 attachment-import -f "${DB_ARGS[@]}" "${DB}" \
-        "${GROUP:+${GROUP}/}${TITLE}" "${INST_BASE}" "${INSTALLER}" \
+        "${GROUP}/${TITLE}" "${INST_BASE}" "${INSTALLER}" \
         >/dev/null || die "cannot attach ${INST_BASE}"
 fi
 

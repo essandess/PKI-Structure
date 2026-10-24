@@ -5,8 +5,8 @@ PortGroup           github 1.0
 PortGroup           openssl 1.0
 
 # github.setup        essandess PKI-Structure 1.0.0 v
-github.setup        essandess pki-structure 0ebb42fbe9c35ba934a79143045cd8e0bdb29036
-version             1.0.0
+github.setup        essandess pki-structure 1d3703d5ef971ae8eca7a5b3606a2326fe620ad8
+version             1.0.0-pre
 revision            0
 categories          security
 license             MIT
@@ -20,12 +20,12 @@ long_description    {*}${description}. Shell tooling for a private PKI: \
                     root, intermediate, and privoxy CAs\; server, code \
                     signing, S/MIME, and adblock2privoxy certificates\; \
                     CRL publication and revocation\; signed macOS install \
-                    scripts and configuration profiles\; KeePassXC password keychain \
+                    scripts and MDM profiles\; KeePassXC password keychain \
                     with a root-only master password file and separable keyfile.
 
-checksums           rmd160  5a0be3b814185770594c563f27a4df7a96f62f93 \
-                    sha256  f7a68e9afdac189438e7ece2d6ec56b76dd668594154b96bf77a506f212fc3fc \
-                    size    138461
+checksums           rmd160  6466649284e65c9144b4b07c1f20ce5cd897d365 \
+                    sha256  9343b118b9ba4b35d7f1a2fc2bfd3e7c87016f90b9a114dfbcd37bd2d2c9bef0 \
+                    size    138287
 
 # ${prefix}/var/macports/sources/rsync.macports.org/macports/release/tarballs/ports/_resources/port1.0/group/python-1.0.tcl
 set python_version  314
@@ -407,8 +407,8 @@ Content details:
 
     ${pki_etc_dir}
         Live PKI deployment. pki_identity.env, 
-        create_organization_smime_pki.sh, and
-        create_organization_mdm.sh are seeded here once and
+        create_organization_pki.sh, create_organization_credentials.sh, 
+        and create_organization_mdm.sh are seeded here once and
         never overwritten. Edit pki_identity.env, then run the
         create_*.sh scripts from this directory.
 
@@ -427,16 +427,22 @@ Destructive overwrite of ${pki_etc_dir}:
         ${pki_share_dir}/bin/replicate_pki_structure.sh \\
             --overwrite ${pki_etc_dir}'
 
-Example PKI creation:
+Example creation of PKI, credential installers, and MDM Profiles.\
+It is recommended to copy the `create_organization_*.sh` scripts\
+to your own specific `create_yourspecificorg_*.sh` scripts.
     sudo bash -c 'CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1 \\
         PKI_ASSUME_YES=1 \\
-        ${pki_etc_dir}/bin/create_organization_pki.sh'
+        ${pki_etc_dir}/bin/create_organization_pki.sh \\
+        && ${pki_etc_dir}/bin/create_organization_credentials.sh \\
+        && ${pki_etc_dir}/bin/create_organization_mdm.sh \\
+    '
 
 Destructive clean of PKI:
     sudo bash -c 'CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1 \\
         PKI_ASSUME_YES=1 \\
         ${pki_etc_dir}/bin/clean_everything_and_create_pki.sh \\
             \[--create-pki]'
+     sudo /opt/local/etc/pki-structure/bin/pki_keychain.py init
 
 port load ${name} launches an nginx web server that listens\
     on port 80 in the CRL endpoint directory specified by\

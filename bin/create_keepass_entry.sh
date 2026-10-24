@@ -15,10 +15,11 @@
 # is checked, then its keychain password opens the payload; it is never run.
 # The installer is attached to the entry that holds its password.
 # Default group: Profile (installer, profile) or Password (master).
-# PROFILE: a name from `pki_keychain.py profile-list`. Its .mobileconfig and
-# the trust profiles (--trust NAME, default: stored profiles named *-trust;
-# --no-trust: none) are attached to the entry 'MDM profile: NAME' in the group
-# Profile (created if absent). Secrets in a profile are in PLAIN TEXT.
+# PROFILE: a name from `pki_keychain.py profile-list`. Its .mobileconfig, the
+# trust profiles (--trust NAME, default: stored profiles named *-trust) and the
+# organization settings profile <org>-settings of each <org>-trust, if stored,
+# are attached to the entry 'MDM profile: NAME' in the group Profile (created
+# if absent). --no-trust: neither. Secrets in a profile are in PLAIN TEXT.
 # --export-master stores the PKI master password. Entries are merged into
 # --db (backed up first); UUIDs derive from the title, so re-runs update in
 # place. Secrets never appear in argv or the environment. See README.md.
@@ -272,7 +273,7 @@ if ! grep -q '^__PAYLOAD_BELOW__$' "${INSTALLER}" \
     die "${INSTALLER} is not an installer made by create_credentials.sh"
 fi
 if [ "$(hdr_val PAYLOAD_ENCRYPTED)" != 1 ]; then
-    die "${INST_BASE} is not encrypted (a --ca-only or CA-only installer):" \
+    die "${INST_BASE} is not encrypted (a --ca-certs-only or CA-only installer):" \
         "it has no installer password and holds no .p12 passwords"
 fi
 ENC_CIPHER=$(hdr_val ENC_CIPHER)
@@ -865,6 +866,13 @@ if [ -n "${PROFILE}" ]; then
         fi
         for t in ${TRUST[@]+"${TRUST[@]}"}; do
             if [ "${t}" != "${PROFILE}" ]; then ATTACH+=("${t}"); fi
+        done
+        # <org>-settings for each <org>-trust, if stored
+        for t in ${TRUST[@]+"${TRUST[@]}"}; do
+            case ${t} in *-trust) s="${t%-trust}-settings" ;; *) continue ;; esac
+            grep -qxF -- "${s}" <<<"${LISTED}" || continue
+            for a in "${ATTACH[@]}"; do [ "${a}" = "${s}" ] && continue 2; done
+            ATTACH+=("${s}")
         done
     fi
     SHAS="" SECRET=0

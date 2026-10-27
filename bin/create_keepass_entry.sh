@@ -305,111 +305,26 @@ extract_payload() {
 
 # ------------------------------------------- signature of the installer
 
-# create_credentials.sh signs every installer (detached PKCS#7, DER, base64,
-# between __SIGNATURE_BELOW__ and __PAYLOAD_BELOW__, covering the file except
-# those lines). Check it before the payload is decrypted or unpacked. The
-# trust anchor is this PKI tree's own root (or --root-cert), never a root the
-# installer carries; the signature block holds the signer and intermediates.
-ANCHORS="${TMPD}/anchors.pem"
+# bin/verify_installer.sh checks the signature before the payload is
+# decrypted, against this tree's roots or --root-cert.
+verify_installer_signature() {
+    local r roots=()
 
-collect_anchors() {
-    local f pem n=0 candidates=()
-
-    : > "${ANCHORS}"
     if [ -n "${ROOT_CERT}" ]; then
         [ -r "${ROOT_CERT}" ] || die "cannot read --root-cert ${ROOT_CERT}"
-        candidates=("${ROOT_CERT}")
+        roots=(--root "${ROOT_CERT}")
     else
-        candidates=(root/certs/root.cert.pem root/certs/root.*.cert.pem)
+        for r in root/certs/root.cert.pem root/certs/root.*.cert.pem; do
+            if [ -f "${r}" ]; then roots+=(--root "${r}"); fi
+        done
     fi
-    for f in "${candidates[@]}"; do
-        [ -f "${f}" ] || continue
-        if ! pem=$("${OPENSSL}" x509 -in "${f}" 2>/dev/null); then
-            pem=$("${OPENSSL}" x509 -inform DER -in "${f}" 2>/dev/null) \
-                || { warn "ignoring ${f}: not a certificate"; continue; }
-        fi
-        printf '%s\n' "${pem}" > "${TMPD}/anchor.one.pem"
-        if "${OPENSSL}" verify -CAfile "${TMPD}/anchor.one.pem" \
-               "${TMPD}/anchor.one.pem" >/dev/null 2>&1; then
-            printf '%s\n' "${pem}" >> "${ANCHORS}"
-            n=$((n + 1))
-        else
-            warn "ignoring root certificate ${f}: does not verify (expired?)"
-        fi
-    done
-    if [ "${n}" -eq 0 ]; then
-        die "no valid root certificate to check the signature of ${INST_BASE}" \
-            "against (looked for root/certs/root*.cert.pem); use --root-cert FILE"
-    fi
+    [ "${#roots[@]}" -gt 0 ] \
+        || die "no root certificate to check the signature of ${INST_BASE}" \
+               "against (looked for root/certs/root*.cert.pem); use --root-cert FILE"
+    "${SCRIPT_DIR}/verify_installer.sh" "${INSTALLER}" "${roots[@]}" >&2 \
+        || exit 1
 }
 
-# signer_issuer_ok SIGNER SIG: the CA that issued SIGNER must allow
-# codeSigning (`-purpose any` ignores CA EKUs); a CA with no EKU is refused.
-signer_issuer_ok() {
-    local signer=$1 sig=$2 f eku
-    local certs="${TMPD}/sig.certs"
-
-    if "${OPENSSL}" verify -CAfile "${ANCHORS}" "${signer}" >/dev/null 2>&1; then
-        return 0   # issued by the root itself
-    fi
-    "${OPENSSL}" pkcs7 -inform DER -in "${sig}" -print_certs -out "${certs}" \
-        2>/dev/null || return 1
-    awk -v p="${TMPD}/sig.cert" '
-        /-----BEGIN CERTIFICATE-----/ { n++; f = sprintf("%s.%d.pem", p, n) }
-        f { print > f }
-        /-----END CERTIFICATE-----/ { close(f); f = "" }' "${certs}"
-    for f in "${TMPD}"/sig.cert.*.pem; do
-        "${OPENSSL}" verify -CAfile "${ANCHORS}" -untrusted "${f}" "${signer}" \
-            >/dev/null 2>&1 || continue
-        eku=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage -in "${f}" \
-                  2>/dev/null) || eku=""
-        case "${eku}" in
-            *"Code Signing"*) return 0 ;;
-        esac
-    done
-    return 1
-}
-
-verify_installer_signature() {
-    local signed="${TMPD}/installer.signed" sig="${TMPD}/installer.sig.der"
-    local signer="${TMPD}/installer.signer.pem" out text
-
-    if ! grep -q '^__SIGNATURE_BELOW__$' "${INSTALLER}" \
-       || ! grep -q '^__PAYLOAD_BELOW__$' "${INSTALLER}"; then
-        die "${INST_BASE} has no signature block: it was not made by the" \
-            "current create_credentials.sh"
-    fi
-    awk '/^__SIGNATURE_BELOW__$/ { print; skip = 1; next }
-         /^__PAYLOAD_BELOW__$/ { skip = 0 }
-         !skip { print }' "${INSTALLER}" > "${signed}"
-    awk '/^__SIGNATURE_BELOW__$/ { skip = 1; next }
-         /^__PAYLOAD_BELOW__$/ { skip = 0 }
-         skip' "${INSTALLER}" | "${OPENSSL}" base64 -d > "${sig}" 2>/dev/null || true
-    [ -s "${sig}" ] || die "${INST_BASE} carries no readable signature"
-
-    if ! out=$("${OPENSSL}" smime -verify -binary -inform DER -in "${sig}" \
-                   -content "${signed}" -CAfile "${ANCHORS}" -purpose any \
-                   -signer "${signer}" -out /dev/null 2>&1); then
-        die "SIGNATURE CHECK FAILED for ${INST_BASE}: it was changed after it" \
-            "was signed, or not signed by a certificate that chains to this" \
-            "PKI's root. ${out}"
-    fi
-    text=$("${OPENSSL}" x509 -noout -ext extendedKeyUsage -in "${signer}" 2>/dev/null) || text=""
-    case "${text}" in
-        *"Code Signing"*) ;;
-        *) die "the signer of ${INST_BASE} does not have the codeSigning extendedKeyUsage" ;;
-    esac
-    text=$("${OPENSSL}" x509 -noout -ext basicConstraints -in "${signer}" 2>/dev/null) || text=""
-    case "${text}" in
-        *"CA:TRUE"*) die "the signer of ${INST_BASE} is a CA certificate" ;;
-    esac
-    signer_issuer_ok "${signer}" "${sig}" \
-        || die "the issuing CA of the signer of ${INST_BASE} does not allow codeSigning"
-    echo "Signature OK: ${INST_BASE} signed by" \
-         "$("${OPENSSL}" x509 -noout -subject -in "${signer}" | sed 's/^subject= *//')." >&2
-}
-
-collect_anchors
 verify_installer_signature
 
 if ! extract_payload "${WORK}" 2>/dev/null; then

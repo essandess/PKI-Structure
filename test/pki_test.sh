@@ -483,6 +483,8 @@ check  "S/MIME installer: signature check needs no password" "${INST}" --check-s
 
 check  "verify_installer.sh: root file" bin/verify_installer.sh "${INST_CA}" --root root/certs/root.cert.pem
 check  "verify_installer.sh: root pin"  bin/verify_installer.sh "${INST}" --root-sha256 "$(cert_fp root/certs/root.cert.pem)"
+check  "verify_installer.sh: several roots" bin/verify_installer.sh "${INST_CA}" --root "${TMPD}/stray.pem" --root root/certs/root.cert.pem
+refuse "verify_installer.sh: unrelated root" "SIGNATURE CHECK FAILED" bin/verify_installer.sh "${INST_CA}" --root "${TMPD}/stray.pem"
 refuse "verify_installer.sh: tampered header" "SIGNATURE CHECK FAILED" bin/verify_installer.sh "${TMPD}/t_ca.sh" --root root/certs/root.cert.pem
 payload_has_no_secrets() {
     local listing

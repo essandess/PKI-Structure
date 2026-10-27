@@ -4,7 +4,7 @@
 #
 # Usage: verify_installer.sh INSTALLER (--root FILE | --root-sha256 HEX)
 #
-#   --root FILE        trust anchor: this PKI's root certificate (PEM or DER)
+#   --root FILE        trust anchor: root certificate, PEM or DER; repeatable
 #   --root-sha256 HEX  use the root in the signature block if its SHA-256
 #                      matches (fingerprint received separately)
 #
@@ -22,12 +22,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PKI_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 . "${PKI_ROOT}/bin/define_openssl.sh"
 
-INST="" ROOT="" PIN=""
+INST="" PIN="" ROOTS=()
 while [ $# -gt 0 ]; do
     case $1 in
         --root)
             [ $# -ge 2 ] || die "--root needs a FILE"
-            ROOT=$2; shift 2 ;;
+            ROOTS+=("$2"); shift 2 ;;
         --root-sha256)
             [ $# -ge 2 ] || die "--root-sha256 needs a value"
             PIN=$(printf '%s' "$2" | sed 's/^.*=//' | tr -d ': ' | tr '[:upper:]' '[:lower:]')
@@ -41,7 +41,8 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -f "${INST}" ] || die "usage: $(basename "$0") INSTALLER (--root FILE | --root-sha256 HEX)"
-[ -n "${ROOT}" ] || [ -n "${PIN}" ] || die "give --root FILE or --root-sha256 HEX"
+[ "${#ROOTS[@]}" -gt 0 ] || [ -n "${PIN}" ] \
+    || die "give --root FILE or --root-sha256 HEX"
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/verify-installer.XXXXXX")
 trap 'rm -rf "${T}"' EXIT
@@ -70,23 +71,32 @@ fp() {
         | sed -e 's/^.*=//' -e 's/://g' | tr '[:upper:]' '[:lower:]'
 }
 
-ANCHOR="${T}/anchor.pem"
-if [ -n "${ROOT}" ]; then
-    "${OPENSSL}" x509 -in "${ROOT}" -out "${ANCHOR}" 2>/dev/null \
-        || "${OPENSSL}" x509 -inform DER -in "${ROOT}" -out "${ANCHOR}" 2>/dev/null \
-        || die "cannot read ${ROOT}"
-    if [ -n "${PIN}" ] && [ "$(fp "${ANCHOR}")" != "${PIN}" ]; then
-        die "--root does not match --root-sha256"
-    fi
+ANCHOR="${T}/anchor.pem"   # every trust anchor, PEM
+ANCHORS=()                 # one file per anchor
+: > "${ANCHOR}"
+if [ "${#ROOTS[@]}" -gt 0 ]; then
+    for r in "${ROOTS[@]}"; do
+        c="${T}/root.${#ANCHORS[@]}.pem"
+        "${OPENSSL}" x509 -in "${r}" -out "${c}" 2>/dev/null \
+            || "${OPENSSL}" x509 -inform DER -in "${r}" -out "${c}" 2>/dev/null \
+            || die "cannot read ${r}"
+        if [ -n "${PIN}" ] && [ "$(fp "${c}")" != "${PIN}" ]; then continue; fi
+        "${OPENSSL}" verify -CAfile "${c}" "${c}" >/dev/null 2>&1 || continue
+        cat "${c}" >> "${ANCHOR}"
+        ANCHORS+=("${c}")
+    done
+    [ "${#ANCHORS[@]}" -gt 0 ] \
+        || die "no --root is a self-signed, unexpired root${PIN:+ with SHA-256 ${PIN}}"
 else
     for f in "${T}"/blk.*.pem; do
         { [ -f "${f}" ] && [ "$(fp "${f}")" = "${PIN}" ]; } || continue
         cp "${f}" "${ANCHOR}"
     done
     [ -s "${ANCHOR}" ] || die "no certificate in the signature block has SHA-256 ${PIN}"
+    "${OPENSSL}" verify -CAfile "${ANCHOR}" "${ANCHOR}" >/dev/null 2>&1 \
+        || die "the root is not self-signed, or has expired"
+    ANCHORS=("${ANCHOR}")
 fi
-"${OPENSSL}" verify -CAfile "${ANCHOR}" "${ANCHOR}" >/dev/null 2>&1 \
-    || die "the root is not self-signed, or has expired"
 
 out=$("${OPENSSL}" smime -verify -binary -inform DER -in "${T}/sig" \
           -content "${T}/signed" -CAfile "${ANCHOR}" -purpose any \
@@ -119,4 +129,9 @@ done
 
 echo "Signature OK: $(basename "${INST}") signed by" \
      "$("${OPENSSL}" x509 -noout -subject -in "${T}/signer.pem" | sed 's/^subject= *//')"
-echo "  root SHA-256 $(fp "${ANCHOR}")"
+for a in "${ANCHORS[@]}"; do   # the anchor the chain ends at
+    "${OPENSSL}" verify -CAfile "${a}" -untrusted "${T}/block.pem" \
+        "${T}/signer.pem" >/dev/null 2>&1 || continue
+    echo "  root SHA-256 $(fp "${a}")"
+    break
+done

@@ -80,9 +80,13 @@ USAGE
 # Private temporary directory: holds the decrypted payload and the XML
 TMPD=""
 KP_PASS=""
+DB_OWNER=""   # uid:gid of --db, recorded when run as root
 cleanup() {
     KP_PASS=""
     if [ -n "${TMPD}" ]; then rm -rf "${TMPD}"; fi
+    if [ -n "${DB_OWNER}" ]; then
+        chown "${DB_OWNER}" "${DB}" || warn "cannot restore the owner of ${DB}"
+    fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -789,6 +793,10 @@ if [ ! -f "${DB}" ]; then
         "to start one: keepassxc-cli db-create -p ${DB}"
 fi
 if [ ! -w "${DB}" ]; then die "cannot write ${DB}"; fi
+# As root, writes to --db change its owner: record it, restore on exit.
+if [ "$(id -u)" -eq 0 ]; then
+    DB_OWNER=$(stat -c %u:%g "${DB}" 2>/dev/null || stat -f %u:%g "${DB}")
+fi
 
 if ! confirm "Merge this entry into ${DB##*/}?"; then die "Aborted."; fi
 

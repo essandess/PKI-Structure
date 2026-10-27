@@ -515,6 +515,15 @@ kp_installer_attached() {
 }
 check "keepass: entry holds the installer password" kp_password_matches
 check "keepass: the installer is attached to that entry" kp_installer_attached
+owner_kept() {   # as root, merging into --db must leave its owner
+    local want got
+    [ "$(id -u)" -eq 0 ] || return 0
+    want=$(id -u nobody)
+    chown nobody "${DB}" && kpentry || return 1
+    got=$(stat -c %u "${DB}" 2>/dev/null || stat -f %u "${DB}")
+    [ "${got}" = "${want}" ]
+}
+check "keepass: --db keeps its owner (checked as root)" owner_kept
 check "keepass: re-run is idempotent"            kpentry
 check "keepass: per-issuance .p12 passwords"     kpentry --individual-smime-passwords
 run   "keepass: xml export"                      bin/create_keepass_entry.sh --xml-out "${TMPD}/entry.xml" \

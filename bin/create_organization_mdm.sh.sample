@@ -24,3 +24,17 @@ bin/configurate_yaml.py mdm/yaml/myorganization-settings.yaml
 
 # Person A
 bin/configurate_yaml.py mdm/yaml/persona-settings.yaml
+
+cat <<REMINDER
+
+To copy the profiles to an external KeePassXC database (it must already
+exist; add --key-file FILE [--no-password] if it uses a key file):
+
+  sudo ${PKI_ROOT}/bin/create_keepass_entry.sh \\
+      --db /path/to/keychain.kdbx persona-settings
+  sudo ${PKI_ROOT}/bin/create_keepass_entry.sh \\
+      --db /path/to/keychain.kdbx personb-settings
+
+Each entry also gets the *-trust profile and its <org>-settings profile,
+if stored. Attachments hold passwords in plain text: protect the database.
+REMINDER

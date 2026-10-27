@@ -1015,41 +1015,22 @@ umask 077
 
 usage() {
     cat <<USAGE
-Usage: $(basename "$0") [--system-only | --user-only] [--list] [--tar-only] [--check-signature-integrity]
+Usage: $(basename "$0") [OPTION]...
 
-Installs the credentials bundled in this script (${INSTALL_FOR}).
-Run it as yourself (not with sudo); sudo is requested only for the System keychain.
+Installs the credentials in this script (${INSTALL_FOR}). Run it as yourself;
+sudo is used only for the System keychain.
 
-  --system-only  only the System keychain items (sudo)
-  --user-only    only the login keychain items: S/MIME identities, and the
-                 CA certificates if the payload has them in user/ (no sudo)
-  --list         show what is included and exit
-  --tar-only     only write the payload (still encrypted, if it is) to
-                 ./${TAR_NAME} and exit
+  --system-only  System keychain items only (sudo)
+  --user-only    login keychain items only
+  --list         list the contents and exit
+  --tar-only     write the payload to ./${TAR_NAME} and exit
   --check-signature-integrity
-                 only check the signature of this script against the root
-                 and intermediates in its signature block and exit: 0 if
-                 valid, non-zero if not. No password, nothing decrypted or
-                 unpacked, root not anchored. Needs only openssl.
-                 For an untrusted copy use bin/verify_installer.sh
+                 verify the signature only and exit (needs openssl);
+                 for an untrusted copy use bin/verify_installer.sh
 
-Before anything is installed, the signature of this script is checked: it
-must come from a code signing certificate that chains to the root CA in its
-signature block, before the payload is decrypted or unpacked. If that root is not already installed on this machine, you are
-asked to compare its SHA-256 fingerprint with one you received separately;
-set PKI_ROOT_SHA256 to that fingerprint to have it checked for you
-(PKI_ASSUME_YES alone never accepts an unknown root).
-
-You are asked (y/N) before each certificate is added; set PKI_ASSUME_YES=1
-to answer yes to everything. A .p12 password the payload does not hold is
-asked for when needed; to avoid the prompt set PKI_P12_PASSWORD_<GROUP>, for
-example PKI_P12_PASSWORD_SMIME (GROUP is the name shown in the prompt,
-upper-cased, with other characters replaced by _).
-
-An encrypted payload (PAYLOAD_ENCRYPTED=1 in this script) asks for the
-installer password, which the sender provides separately. It is read from the
-terminal only, never from the environment, and it also supplies the .p12
-passwords, which are inside the payload.
+The signature is checked first. An unknown root CA must match
+PKI_ROOT_SHA256 or be confirmed by you. An encrypted payload asks for the
+installer password. PKI_ASSUME_YES=1 answers y to the other prompts.
 USAGE
 }
 

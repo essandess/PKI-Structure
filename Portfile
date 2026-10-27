@@ -5,7 +5,7 @@ PortGroup           github 1.0
 PortGroup           openssl 1.0
 
 # github.setup        essandess PKI-Structure 1.0.0 v
-github.setup        essandess pki-structure 1d3703d5ef971ae8eca7a5b3606a2326fe620ad8
+github.setup        essandess pki-structure 2a0c7c9f4a92acf59b91db1691787ba2c0f4d013
 version             1.0.0-pre
 revision            0
 categories          security
@@ -21,11 +21,14 @@ long_description    {*}${description}. Shell tooling for a private PKI: \
                     signing, S/MIME, and adblock2privoxy certificates\; \
                     CRL publication and revocation\; signed macOS install \
                     scripts and MDM profiles\; KeePassXC password keychain \
-                    with a root-only master password file and separable keyfile.
+                    with a root-only master password file and separable \
+                    keyfile. Profiles exported to external keychains synced \
+                    to mobile devices (e.g. Syncthing) provide serverless, \
+                    MDM-style distribution.
 
-checksums           rmd160  6466649284e65c9144b4b07c1f20ce5cd897d365 \
-                    sha256  9343b118b9ba4b35d7f1a2fc2bfd3e7c87016f90b9a114dfbcd37bd2d2c9bef0 \
-                    size    138287
+checksums           rmd160  cf7bbee8f2f3052d5d32144aa6660732a77c450c \
+                    sha256  7ea6e988edf7dbda3d56374910e7c2d268e45a76567e1ed6192a535ddc5a1cea \
+                    size    138521
 
 # ${prefix}/var/macports/sources/rsync.macports.org/macports/release/tarballs/ports/_resources/port1.0/group/python-1.0.tcl
 set python_version  314
@@ -437,12 +440,91 @@ to your own specific `create_yourspecificorg_*.sh` scripts.
         && ${pki_etc_dir}/bin/create_organization_mdm.sh \\
     '
 
+Escrow master passphrase:
+    sudo bash -c '${prefix}/etc/pki-structure/bin/create_keepass_entry.sh \\
+        --db /path/to/external.kdbx --export-master'
+
+Install --ca-certs-only installer:
+    sudo install -m 0755 -o \"\$(id -un)\" -g \"\$(id -gn)\" \\
+    ${pki_etc_dir}/mdm/credentials/install_credentials_cacerts.sh \\
+    ~/Downloads/
+
+Create installer credentials keychain attachment:
+    sudo bash -c '${pki_etc_dir}/bin/create_keepass_entry.sh \\
+        --db /path/to/external.kdbx \\
+        ${pki_etc_dir}/mdm/credentials/install_credentials_<stem>.sh'
+
+List MDM Profiles:
+    sudo bash -c '${pki_etc_dir}/bin/pki_keychain.py profile-list'
+
+Create MDM Profile keychain attachment:
+    sudo bash -c '${pki_etc_dir}/bin/create_keepass_entry.sh \\
+        --db /path/to/external.kdbx persona-settings'
+
+Server PKI deployment:
+    sudo bash -c 'cd ${pki_etc_dir} \\
+    && . ${pki_etc_dir}/pki_identity.env \\
+    && D=${prefix}/etc/certificates \\
+    && install -d -m 0755 -o root -g wheel \"\$D\" \\
+    && install -d -m 0700 -o root -g wheel \"\$D\"/private \\
+    && V=\$(bin/pki_index.py valid intermediate/index.txt \\
+        --cn \"\$SERVER_FQDN\" | sed \"s/^0*//\" | tr a-f A-F) \\
+    && F=\$(for f in server/certs/\"\$SERVER_FQDN\".*.cert.pem\; do \\
+        s=\$(openssl x509 -noout -serial -in \"\$f\" \\
+            | sed \"s/^serial=0*//\") \\
+        && openssl x509 -checkend 0 -noout -in \"\$f\" >/dev/null \\
+        && grep -qxF \"\$s\" <<<\"\$V\" && echo \"\$f\"; done | sed -n 1p) \\
+    && \[ -n \"\$F\" ] && B=\${F##*/} && B=\${B%.cert.pem} \\
+    && install -m 0644 -o root -g wheel \\
+        server/certs/\$B.chain.pem \"\$D\"/ \\
+    && install -m 0600 -o root -g wheel \\
+        server/private/\$B.key.pem.decrypted \"\$D\"/private/'
+
+    ${prefix}/etc/dovecot/conf.d/10-ssl.conf: ssl_cert, ssl_key, ssl_ca
+    ${prefix}/etc/postfix/main.cf: smtpd_tls_chain_files
+    ${prefix}/var/calendarserver/Library/CalendarServer/etc/nginx.conf:\
+        ssl_certificate, ssl_certificate_key
+    sudo port reload dovecot postfix
+
+Privoxy PKI deployment:
+    sudo bash -c 'cd ${pki_etc_dir} \\
+    && D=${prefix}/etc/privoxy/CA \\
+    && install -m 0644 -o privoxy -g privoxy \\
+        privoxy/certs/privoxy.{cer,cert.pem} \"\$D\"/ \\
+    && install -m 0600 -o privoxy -g privoxy \\
+        privoxy/private/privoxy.key.pem \"\$D\"/'
+    sudo ${prefix}/etc/pki-structure/bin/pki_keychain.py get \\
+        --cert ${pki_etc_dir}/privoxy/certs/privoxy.cert.pem
+    sudo bash -c 'cd ${pki_etc_dir} \\
+    && D=${prefix}/etc/adblock2privoxy/certs \\
+    && CN=adblock2privoxy-nginx \\
+    && V=\$(bin/pki_index.py valid --cn \"\$CN\" \\
+        privoxy/index.txt | sed \"s/^0*//\" | tr a-f A-F) \\
+    && F=\$(for f in \\
+        privoxy/adblock2privoxy/certs/\"\$CN\".*.cert.pem\; do \\
+        s=\$(openssl x509 -noout -serial -in \"\$f\" \\
+            | sed \"s/^serial=0*//\") \\
+    && openssl x509 -checkend 0 -noout -in \"\$f\" >/dev/null \\
+    && grep -qxF \"\$s\" <<<\"\$V\" && \\
+        echo \"\$f\"; done | sed -n 1p) \\
+    && \[ -n \"\$F\" ] && S=\${F##*\"\$CN\".} && S=\${S%.cert.pem} \\
+    && cd privoxy/adblock2privoxy \\
+    && install -m 0644 -o root -g wheel \\
+        certs/\"\$CN\".\$S.chain.pem \"\$D\"/\"\$CN\".chain.pem \\
+    && install -m 0600 -o root -g wheel \\
+        private/\"\$CN\".\$S.key.pem.decrypted \\
+        \"\$D\"/\"\$CN\".key.pem.decrypted'
+
+    ${prefix}/etc/adblock2privoxy/nginx.conf:\
+        ssl_certificate, ssl_certificate_key
+    sudo port reload privoxy adblock2privoxy
+
 Destructive clean of PKI:
     sudo bash -c 'CREATE_PKI_WITHIN_THIS_PKI_DIRECTORY=1 \\
         PKI_ASSUME_YES=1 \\
         ${pki_etc_dir}/bin/clean_everything_and_create_pki.sh \\
             \[--create-pki]'
-     sudo /opt/local/etc/pki-structure/bin/pki_keychain.py init
+     sudo ${pki_etc_dir}/bin/pki_keychain.py init
 
 port load ${name} launches an nginx web server that listens\
     on port 80 in the CRL endpoint directory specified by\

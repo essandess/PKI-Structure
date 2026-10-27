@@ -3,8 +3,15 @@
 Shell tooling for a private PKI: root, intermediate, and privoxy CAs;
 server, code signing, S/MIME, and adblock2privoxy certificates; 
 CRL publication and revocation; signed macOS install scripts and configuration
-profiles (.mobileconfig); KeePassXC password keychain with a root-only master password
-file (login keychain item for other users) and separable keyfile.
+profiles (.mobileconfig); KeePassXC password keychain with a root-only
+master password file (login keychain item for other users) and separable
+keyfile.
+
+Profiles exported to an external KeePass database synced to mobile devices
+(e.g. Syncthing) provide serverless, MDM-style distribution: the device
+opens the attachment and installs it. This is manual: no push, enforcement
+or remote removal, and a root needs enabling under Certificate Trust Settings
+(see iOS trust).
 
 | Tool | Purpose |
 |---|---|
@@ -414,7 +421,7 @@ password fails before anything is stored. `--ca-certs-only` installers are unenc
 * Entry UUIDs derive from title and group, so re-runs update in place.
   The entry is imported into a staging database, previewed with `merge
   --dry-run`, and merged; `--db` is first copied to `DB.bak-<time>` unless
-  `--no-backup`.
+  `--no-backup`. As root, `--db` keeps its owner and group.
 * Secrets never appear in argv or the environment; the decrypted payload and
   XML live in a private temp directory removed on exit. `--xml-out` writes
   plain-text XML (0600) and asks before replacing an existing file.

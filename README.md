@@ -110,7 +110,7 @@ Environment (tool-specific variables are listed with each tool):
 | `PKI_KEYCHAIN_DIR`, `PKI_KEYCHAIN_KEYFILE` | `keepassxc/keychain`, `keepassxc/keyfile/pki-structure.keyx` | Database directory and key file |
 | `PKI_KEYCHAIN_MASTER` | `keepassxc/master/pki-structure.pass` | Master password file; setting it selects the file backend |
 | `PKI_KEYCHAIN_FILE`, `PKI_KEYCHAIN_ITEM` | login keychain, service name | Keychain file and item of the master (tests) |
-| `PKI_KEYCHAIN_KDF_ROUNDS` | `16` | Argon2 rounds of a new database |
+| `PKI_KEYCHAIN_KDF_ROUNDS` | `4` | Argon2 rounds of a new database |
 | `PKI_SITE_DIR`, `PKI_SITE_GROUP` | `<prefix>/var/www/PKI_FQDN`, `_www` else `nobody` | CRL web directory and its group |
 | `CRL_MIN_DAYS_LEFT` | `15` | Regenerate a CRL that expires sooner |
 | `PKI_VERIFY_STRICT` | `1` | `0` drops `-x509_strict`; honored only in a test tree (`.pki_test_tree`) |
@@ -123,7 +123,7 @@ them in the shell. `test/pki_test.sh` unsets them.
 
 Each private key has its own random passphrase in
 `keepassxc/keychain/pki-structure.kdbx` (KeePassXC; KDBX4, Argon2id, 64 MiB,
-4 lanes, 16 rounds; `PKI_KEYCHAIN_KDF_ROUNDS` sets the rounds of a new
+4 lanes, 4 rounds; `PKI_KEYCHAIN_KDF_ROUNDS` sets the rounds of a new
 database), found by SHA-256 of the key's public key, so a same-key renewal
 finds it. Entry `Password/<id16> :: <CN>`: Password = key passphrase,
 UserName = serial, URL = certificate SHA-256; `... :: p12` holds the `.p12`
@@ -531,9 +531,9 @@ Signed profiles show as verified only if the signer's chain is already trusted.
 
 `test/pki_test.sh` rebuilds the PKI in its own tree, then runs positive and
 negative tests: chain, purpose, nameConstraints, revocation, supersession,
-keychain, installers, profiles, permissions. It is destructive: it stops if
-the tree holds keys, CA databases or KeePassXC files, unless `.pki_test_tree`
-exists or `PKI_TEST_DESTROY_PKI=1`. Run it in a scratch tree made by
+keychain, installers, profiles, permissions. It is destructive: it runs only
+if `.pki_test_tree` exists or `PKI_TEST_DESTROY_PKI=1`, and deletes the tree's
+PKI and `bin/create_organization_pki.sh`. Run it in a scratch tree made by
 `replicate_pki_structure.sh`. It needs `keepassxc-cli` and macOS `security`;
 the master goes into a throwaway keychain. `PKI_TEST_VERIFY_FLAGS` overrides
 the `openssl verify` flags, `PKI_TEST_SMIME_NAME` selects the S/MIME identity.

@@ -102,10 +102,15 @@ if [ "${CREATE_PKI}" == "1" ]; then
     if [ -x bin/create_organization_pki.sh ]; then
         bin/create_organization_pki.sh
     else
-        bin/create_privoxy.sh && bin/create_adblock2privoxy.sh
-        bin/create_root.sh && bin/create_intermediate.sh \
-            && bin/create_intermediate_smime.sh && bin/create_server.sh \
-            && bin/create_codesign.sh && bin/create_organization_smime.sh
+        # one command per line: errexit ignores non-final members of an && list
+        bin/create_privoxy.sh
+        bin/create_adblock2privoxy.sh
+        bin/create_root.sh
+        bin/create_intermediate.sh
+        bin/create_intermediate_smime.sh
+        bin/create_server.sh
+        bin/create_codesign.sh
+        bin/create_organization_smime.sh
     fi
 else
     echo "Clean complete. PKI not recreated (use --create-pki to regenerate)."

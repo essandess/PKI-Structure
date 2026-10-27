@@ -1093,15 +1093,6 @@ kc_has_cert() {
 }
 
 
-# kc_has_identity KEYCHAIN SHA1 (certificate with its private key)
-kc_has_identity() {
-    local out
-
-    out=$(security find-identity "$1" 2>/dev/null) || true
-    grep -qi " $2 " <<<"${out}"
-}
-
-
 # login_keychain: path of the user's login keychain
 login_keychain() {
     local k="${HOME}/Library/Keychains/login.keychain-db"

@@ -4,7 +4,7 @@
 Layout    keepassxc/ (0700) holds keychain/, keyfile/ and master/.
 Database  $PKI_KEYCHAIN_DIR (default keepassxc/keychain)/pki-structure.kdbx;
           dir 0700, file 0600. KDBX4, Argon2id, 64 MiB, 4 lanes,
-          $PKI_KEYCHAIN_KDF_ROUNDS (16) rounds; written here because
+          $PKI_KEYCHAIN_KDF_ROUNDS (4) rounds; written here because
           keepassxc-cli db-create makes KDBX3.
 Key file  $PKI_KEYCHAIN_KEYFILE (default keepassxc/keyfile/pki-structure.keyx),
           KeePassXC XML v2, 0600. Required to open the database; keep a copy
@@ -89,7 +89,7 @@ DB_NAME = "pki-structure.kdbx"
 KEYFILE_NAME = "pki-structure.keyx"
 SECURITY = "/usr/bin/security"
 ERR_NOT_FOUND = 44  # security(1) exit status for errSecItemNotFound
-KDF_ROUNDS_MIN = 16  # master is 192 random bits: a slow KDF adds nothing
+KDF_ROUNDS_MIN = 4  # m=64 MiB, p=4; RFC 9106 minimum t=3
 KDF_ROUNDS = int(os.environ.get("PKI_KEYCHAIN_KDF_ROUNDS") or KDF_ROUNDS_MIN)
 KDF_MEM_MIB, KDF_LANES = 64, 4
 ROOT_GROUP = "PKI-Structure"

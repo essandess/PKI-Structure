@@ -403,8 +403,12 @@ pki_issue_leaf() {
     shift 5
     KEY_ID=$(pki_kc genkey --alg "${ALGORITHM}" --curve "${EC_PARAMGEN_CURVE}" \
         --bits "${RSA_KEYGEN_BITS}" --out "${key}" --label "${label}")
-    "${OPENSSL}" req -config "${config}" -new -"${HASH_DIGEST}" -key "${key}" \
-        -passin fd:3 3< <(pki_kc get --id "${KEY_ID}") -out "${csr}" -batch
+    if ! "${OPENSSL}" req -config "${config}" -new -"${HASH_DIGEST}" -key "${key}" \
+            -passin fd:3 3< <(pki_kc get --id "${KEY_ID}") \
+            -out "${csr}" -batch; then
+        rm -f "${key}" "${csr}"
+        exit 1
+    fi
     if ! "${OPENSSL}" ca -config "${config}" -extensions "${ext}" \
             -days "${DAYS}" -notext -md "${HASH_DIGEST}" -in "${csr}" -out "${cert}" \
             -passin fd:3 3< <(pki_kc get --cert "${ISSUERCADIR}/certs/${ISSUERCANAME}.cert.pem") \

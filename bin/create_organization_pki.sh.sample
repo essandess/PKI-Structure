@@ -18,14 +18,16 @@ cd "${PKI_ROOT}" || exit
 
 # PKI chains of trust (with decrypted server and adblock2privoxy keys)
 
-bin/create_privoxy.sh && bin/create_adblock2privoxy.sh --decrypt-key
+# one command per line: errexit ignores non-final members of an && list
+bin/create_privoxy.sh
+bin/create_adblock2privoxy.sh --decrypt-key
 
-bin/create_root.sh \
-    && bin/create_intermediate.sh \
-    && bin/create_intermediate_smime.sh \
-    && bin/create_server.sh --decrypt-key \
-    && bin/create_codesign.sh \
-    && bin/create_organization_smime.sh
+bin/create_root.sh
+bin/create_intermediate.sh
+bin/create_intermediate_smime.sh
+bin/create_server.sh --decrypt-key
+bin/create_codesign.sh
+bin/create_organization_smime.sh
 
 # Do these after PKI created
 # bin/create_organization_credentials.sh

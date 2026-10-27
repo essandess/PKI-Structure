@@ -23,4 +23,4 @@ certificates:
   - root.cer
   - intermediate.cer
   - intermediate_smime.cer
-  - privoxy.cer
+  # privoxy.cer (TLS interception): ship it in its own profile.

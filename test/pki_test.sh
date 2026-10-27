@@ -47,8 +47,9 @@ if [ ! -e "${MARKER_FILE}" ]; then
     LIVE=$(find root intermediate intermediate_smime server codesign smime privoxy keepassxc \
                 -maxdepth 2 \( -name '*.key.pem' -o -name index.txt -o -name '*.kdbx' -o -name '*.keyx' -o -name '*.pass' \) 2>/dev/null \
                | sed -n 1p || true)
-    if [ -n "${LIVE}" ] && [ "${PKI_TEST_DESTROY_PKI:-0}" != 1 ]; then
-        die "existing PKI material (${LIVE}); this test deletes it. Use a scratch tree or PKI_TEST_DESTROY_PKI=1."
+    if [ "${PKI_TEST_DESTROY_PKI:-0}" != 1 ]; then
+        die "not a test tree${LIVE:+ (found ${LIVE})}:" \
+            "touch ${MARKER_FILE} in a scratch tree, or set PKI_TEST_DESTROY_PKI=1."
     fi
     : > "${MARKER_FILE}"
 fi
@@ -79,7 +80,8 @@ set -a
 set +a
 
 TMPD="$(mktemp -d "${TMPDIR:-/tmp}/pki_test.XXXXXX")"
-trap 'rm -rf "${TMPD}"' EXIT
+trap 'security delete-keychain "${PKI_KEYCHAIN_FILE:-/nonexistent}" >/dev/null 2>&1
+      rm -rf "${TMPD}"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
@@ -319,12 +321,12 @@ while val[o]:
 rounds = struct.unpack("<Q", p["I"])[0]
 mem = struct.unpack("<Q", p["M"])[0] >> 20
 lanes = struct.unpack("<I", p["P"])[0]
-assert rounds >= 16 and mem >= 64 and lanes == 4, f"{rounds} rounds, {mem} MiB, {lanes} lanes"
+assert rounds >= 4 and mem >= 64 and lanes == 4, f"{rounds} rounds, {mem} MiB, {lanes} lanes"
 PY
 }
 help_fits() { COLUMNS=80 "${PYTHON}" bin/pki_keychain.py --help | awk 'length($0) > 80 { bad = 1 } END { exit bad }'; }
 MASTER=$(master_pw)
-check  "database KDF: >= 16 rounds, >= 64 MiB, 4 lanes" kdf_rounds_ok
+check  "database KDF: >= 4 rounds, >= 64 MiB, 4 lanes" kdf_rounds_ok
 check  "pki_keychain.py --help fits 80 columns"       help_fits
 groups_ok() {   # Password/ holds the passphrases, Profile/ the profiles
     local out

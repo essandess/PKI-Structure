@@ -80,7 +80,7 @@ USAGE
 # Private temporary directory: holds the decrypted payload and the XML
 TMPD=""
 KP_PASS=""
-DB_OWNER=""   # uid:gid of --db, recorded when run as root
+DB_OWNER=""   # owner:group names of --db, recorded when run as root
 cleanup() {
     KP_PASS=""
     if [ -n "${TMPD}" ]; then rm -rf "${TMPD}"; fi
@@ -709,8 +709,9 @@ if [ ! -f "${DB}" ]; then
 fi
 if [ ! -w "${DB}" ]; then die "cannot write ${DB}"; fi
 # As root, writes to --db change its owner: record it, restore on exit.
+# By name: macOS chown rejects numeric ids above 2147483647 (nobody).
 if [ "$(id -u)" -eq 0 ]; then
-    DB_OWNER=$(stat -c %u:%g "${DB}" 2>/dev/null || stat -f %u:%g "${DB}")
+    DB_OWNER=$(stat -c %U:%G "${DB}" 2>/dev/null || stat -f %Su:%Sg "${DB}")
 fi
 
 if ! confirm "Merge this entry into ${DB##*/}?"; then die "Aborted."; fi

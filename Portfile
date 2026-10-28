@@ -4,15 +4,15 @@ PortSystem          1.0
 PortGroup           github 1.0
 PortGroup           openssl 1.0
 
-# github.setup        essandess PKI-Structure 1.0.0 v
-github.setup        essandess pki-structure 2a0c7c9f4a92acf59b91db1691787ba2c0f4d013
-version             1.0.0-pre
+github.setup        essandess pki-structure 1.0.0 v
+version             1.0.0
 revision            0
 categories          security
 license             MIT
 maintainers         {ieee.org:s.t.smith @essandess}
 supported_archs     noarch
 platforms-append    any
+github.tarball_from archive
 
 description         Private, configurable PKI toolkit with signed profiles, \
                     install scripts.
@@ -26,9 +26,9 @@ long_description    {*}${description}. Shell tooling for a private PKI: \
                     to mobile devices (e.g. Syncthing) provide serverless, \
                     MDM-style distribution.
 
-checksums           rmd160  cf7bbee8f2f3052d5d32144aa6660732a77c450c \
-                    sha256  7ea6e988edf7dbda3d56374910e7c2d268e45a76567e1ed6192a535ddc5a1cea \
-                    size    138521
+checksums           rmd160  974e1f46d2cc509db1348668540ef74096b70e9d \
+                    sha256  25cccc29747555613d98deb0d6c4d41f00dccd2002a88383fe78b843ebc4fa51 \
+                    size    138307
 
 # ${prefix}/var/macports/sources/rsync.macports.org/macports/release/tarballs/ports/_resources/port1.0/group/python-1.0.tcl
 set python_version  314
@@ -164,9 +164,9 @@ destroot {
         "chmod -R o+rX ${destroot}${pki_share_dir}"
 
     # nginx.conf template: same pattern, tracked under ${prefix}/etc
-    xinstall -m 644 \
-        ${worksrcpath}/etc/nginx.conf.sample \
-        ${destroot}${prefix}/etc/nginx-pki.conf.macports
+    # xinstall -m 644 \
+    #     ${worksrcpath}/etc/nginx.conf.sample \
+    #     ${destroot}${prefix}/etc/nginx-pki.conf.macports
 
     xinstall -d ${destroot}${pki_log_dir}
 }
@@ -193,6 +193,7 @@ post-destroot {
 # itself only populates some with replicated scripts/configs
 destroot.keepdirs-append \
                     ${destroot}${pki_etc_dir} \
+                    ${destroot}${pki_etc_dir}/etc \
                     ${destroot}${pki_etc_dir}/${keepass_keychain_dir} \
                     ${destroot}${pki_etc_dir}/${keepass_keyfile_dir} \
                     ${destroot}${pki_etc_dir}/${keepass_master_dir} \
@@ -202,11 +203,11 @@ destroot.keepdirs-append \
                     ${destroot}${prefix}/var/log/nginx
 
 # A dedicated launchd job for the PKI's nginx instance, parallel to the
-# nginx port's own startupitem but pointed at nginx-pki.conf and a
+# nginx port's own startupitem but pointed at etc/nginx.conf and a
 # separate pidfile, so it runs as an independent daemon alongside (not
 # instead of) any other nginx configuration on this system.
 
-# consistent with ${prefix}/etc/nginx-pki.conf
+# consistent with ${prefix}/etc/pki-structure/etc/nginx.conf
 set nginx_pki_pidfile  ${prefix}/var/run/nginx/nginx-pki.pid
 
 # Startup items: the nginx launcher (long-running foreground daemon)
@@ -250,8 +251,10 @@ startupitems-append \
     name            ${name}-nginx \
     init            "pidfile=\"\${prefix}/var/run/nginx/nginx-pki.pid\"" \
     start [list     "\"\${prefix}/sbin/nginx\" \\" \
+                    "\t-e \\" \
+                    "\t\"\${prefix}/var/log/nginx/pki-early-error.log\" \\" \
                     "\t-c \\" \
-                    "\t\"\${prefix}/etc/nginx-pki.conf\" \\" \
+                    "\t\"\${prefix}/etc/pki-structure/etc/nginx.conf\" \\" \
                     "\t-g \"daemon off;\"" \
     ] \
     stop [list      "if \[ -f \"\${pidfile}\" \]; then" \
@@ -378,14 +381,6 @@ post-activate {
                 ${pki_etc_dir}/${personalized}.macports \
                 ${pki_etc_dir}/${personalized}
         }
-    }
-
-    # Same pattern for the CRL-serving nginx-pki.conf, different directory
-    if {![file exists ${prefix}/etc/nginx-pki.conf]} {
-        ui_msg "--->  Seeding ${prefix}/etc/nginx-pki.conf from the baseline template"
-        file copy -force \
-            ${prefix}/etc/nginx-pki.conf.macports \
-            ${prefix}/etc/nginx-pki.conf
     }
 
     pki_lockdown ${pki_etc_dir}
